@@ -1,0 +1,31 @@
+name: Install, types, lint and production build (local tests excluded)
+
+on:
+  pull_request:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source-checks:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [22, 24]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run build
+      - name: State test coverage limitation
+        run: |
+          echo '::warning::client/test, server/test and shared/test are intentionally excluded from Git. This workflow does not run tests or the full npm run check gate.'
+          echo '### Coverage limit' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Install, strict type checking, lint and production build only. Local regression suites are not in this checkout; no test pass is claimed.' >> "$GITHUB_STEP_SUMMARY"

@@ -88,7 +88,7 @@ export function createApp({ db }: CreateAppOptions = {}): express.Express {
 
   if (existsSync(clientIndexFile)) {
     app.use(express.static(clientDistDir));
-    app.get(/^\/(?!api\/|covers\/).*/, (_req, res) => {
+    app.get(/^\/(?!(?:api|covers)(?:\/|$)).*/, (_req, res) => {
       res.sendFile(clientIndexFile);
     });
   }

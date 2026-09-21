@@ -1,329 +1,143 @@
-<div align="center">
-  <img src="./client/public/icon-192.png" width="96" height="96" alt="EPUB Reader 图标">
+# LAN Reader
 
-  # EPUB Reader
+私人 EPUB 书架与阅读器，使用严格 TypeScript、React 19、Express、SQLite 和 epub.js 0.3.93。支持上传、搜索、书架/文件夹整理、分页与目录导航、图片查看、主题字体设置和每本书独立保存阅读位置。
 
-  **为手机阅读和家庭自托管打造的私人 EPUB 书架。**
+这是可独立运行的 TypeScript 重构项目。所有安装、构建与启动命令在 **本项目根目录**执行，使用根 `package-lock.json`；不要到子包内单独安装，不依赖原项目目录或其数据卷。项目没有内置认证，远程使用请自行配置可信网络或有认证的 HTTPS 代理。
 
-  上传、整理并阅读自己的 EPUB 收藏，数据始终保存在你的设备上。
+## 本地启动
 
-  [![Release](https://img.shields.io/github/v/release/natumeAi/epub-reader?display_name=tag)](https://github.com/natumeAi/epub-reader/releases)
-  [![Docker Pulls](https://img.shields.io/docker/pulls/lshym123/epub-reader)](https://hub.docker.com/r/lshym123/epub-reader)
-  [![PWA](https://img.shields.io/badge/PWA-installable-5A0FC8?logo=pwa&logoColor=white)](#安装为-pwa)
-  [![EPUB](https://img.shields.io/badge/format-EPUB-8B5CF6)](#功能)
+开发与质量检查建议使用 **Node 22.13+（22 系列）或 Node 24**。根清单声明的运行时下限为 22.12，但当前 ESLint 10 的 Node 22 工具链下限为 22.13。容器以 Node 22 构建；本次本机实测环境为 Windows / Node 24.19.0 / npm 11.17.0，Docker/Node 22 实机验收仍待完成。
 
-  [快速开始](#快速开始) · [安装为 PWA](#安装为-pwa) · [数据与备份](#数据与备份) · [源码开发](#源码开发)
-</div>
+PowerShell 示例使用新项目独立数据目录和端口：
 
-> [!NOTE]
-> **本仓库正在进行 TypeScript 重构。** 下文的目录结构和开发命令描述的是重构前的形态，
-> 由第 5 步负责更新。当前可用的命令、工程约定和基线数据见
-> [docs/migration/engineering-conventions.md](docs/migration/engineering-conventions.md)
-> 与 [docs/migration/step-01-baseline.md](docs/migration/step-01-baseline.md)。
-
-> [!IMPORTANT]
-> EPUB Reader 面向个人或家庭局域网使用，目前没有账号系统和访问控制。不要将它直接暴露到公网；如需远程访问，请放在可信 VPN、零信任网络或带身份验证的 HTTPS 反向代理之后。
-
-## 功能
-
-- **私人书库**：上传单本或多本 EPUB，自动提取书名、作者、标识符和封面。
-- **书架整理**：搜索、排序、拖动换位、创建文件夹，以及在书架和文件夹之间移动书籍。
-- **沉浸阅读**：分页阅读、目录跳转、章节页码、全书进度与继续阅读。
-- **阅读外观**：字体、字号、页边距、行距、字距，以及白色、暖色、护眼和夜间主题。
-- **自然翻页**：左右点按、横向拖动、键盘方向键，并针对长章节和低性能设备提供可靠降级。
-- **稳定恢复**：自动保存阅读位置；PWA 从后台、锁屏或进程恢复后返回最后稳定页面。
-- **移动优先**：针对手机和平板竖屏设计，可安装为独立窗口运行的 PWA。
-- **本地数据**：SQLite、EPUB 原文件和封面全部存放在挂载的数据目录中。
-- **自动入库**：也可直接把 `.epub` 文件复制到 `data/books/`，目录监控器会自动同步书库。
-
-## 快速开始
-
-### 使用 Docker Compose
-
-准备一台安装了 Docker 与 Docker Compose 的主机，然后创建工作目录：
-
-```bash
-mkdir -p epub-reader
-cd epub-reader
+```powershell
+cd D:\Projects\lan-reader
+npm ci
+npm run build
+$env:HOST = '127.0.0.1'
+$env:PORT = '4081'
+$env:NODE_ENV = 'production'
+$env:EPUB_DATA_DIR = 'D:\Projects\lan-reader\data-lan-reader'
+$env:DATABASE_PATH = 'D:\Projects\lan-reader\data-lan-reader\library.sqlite'
+npm start
 ```
 
-新建 `compose.yaml`：
+打开 `http://localhost:4081`。`npm run build` 依次编译 shared、server、client，复制 SQL 至 `server/dist/db/migrations`，再将全部前端/PWA 产物复制至 `server/public`；`npm start` 运行编译后的 `server/dist/index.js`，同时提供 API 和静态页面。Ctrl+C 关闭本次服务并释放 watcher、HTTP 和数据库。
 
-```yaml
-name: epub-reader
-
-services:
-  epub-reader:
-    image: lshym123/epub-reader:latest
-    container_name: epub-reader
-    restart: unless-stopped
-    environment:
-      NODE_ENV: production
-      HOST: 0.0.0.0
-      PORT: 3000
-    ports:
-      - "4080:3000"
-    volumes:
-      - ./data:/app/server/data
-    healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 15s
-```
-
-启动服务：
+Linux/macOS 在根目录完成 `npm ci`、`npm run build` 后，可用：
 
 ```bash
+HOST=127.0.0.1 PORT=4081 NODE_ENV=production \
+EPUB_DATA_DIR="$PWD/data-lan-reader" DATABASE_PATH="$PWD/data-lan-reader/library.sqlite" npm start
+```
+
+不要把数据放到 `.tmp` 等含点号开头目录段的路径中：Express 默认不下载这些路径中的 EPUB。上传文件名以点号开头也可能导致正文下载 404。
+
+## 开发与检查
+
+```powershell
+npm ci
+$env:HOST = '127.0.0.1'
+$env:PORT = '4081'
+$env:EPUB_API_URL = 'http://127.0.0.1:4081'
+$env:EPUB_DATA_DIR = 'D:\Projects\lan-reader\data-lan-reader'
+$env:DATABASE_PATH = 'D:\Projects\lan-reader\data-lan-reader\library.sqlite'
+npm run dev
+```
+
+访问 Vite 输出的地址（通常为 `http://localhost:5173`）。`dev` 先构建 shared，再同时启动 tsx 后端和 Vite；修改 shared 后需重跑 `npm run build:shared`。分开运行 `dev:server` / `dev:client` 时先构建 shared。Vite 通过 `EPUB_API_URL` 代理 `/api` 和 `/covers`，生产服务无需此变量。
+
+| 根命令 | 用途 |
+|---|---|
+| `npm ci` | 从根 lockfile 干净安装全部 workspaces |
+| `npm run typecheck` | shared、server、client 应用及工具/本地测试严格类型检查 |
+| `npm run lint` | 检查应用、配置及存在的本地测试 |
+| `npm run build` | 生成可由 `npm start` 直接运行的全部产物 |
+| `npm test` | 运行所有本地测试，需下述额外文件 |
+| `npm run check` | typecheck → lint → build → test，完整本地质量门禁 |
+| `npm start` | 启动编译后的服务，需先构建 |
+
+**测试交付边界：** 按用户决定，`client/test`、`server/test`、`shared/test` 仅保留本地且被 Git 忽略，`docs`、`.trellis` 亦不纳入版本库。新克隆不含测试和 `server/test/support/isolateData.mjs`，需另行取得完整目录才能执行 `npm test` / `npm run check`。缺少测试不能解释为通过；不得去掉隔离预载后对真实书库运行测试。
+
+`.github/workflows/quality.yml` 仅做 Node 22/24 的安装、类型、lint 和构建，明确提示没有测试覆盖，不推送镜像、不发布、不部署。CI 配置已写入不代表远程工作流已经运行。npm 11 可能提示原生包安装脚本未获批准；应检查 `better-sqlite3` 与 `sharp` 是否实际可加载，不能把安装退出码 0 当作运行验证。原生模块需在目标系统/架构安装，禁止跨平台复制 `node_modules`。
+
+## Docker Compose（待容器环境实测）
+
+Dockerfile 从根 lockfile 做多阶段 workspace 构建，运行层包含生产依赖、shared 运行时、server dist/SQL、client 静态资源与 CJK 字体，以 `node` 用户运行；健康检查要求 `/api/health` 的 `database` 为 `ok`。不使用原项目发布镜像或容器标识。
+
+Compose 项目/服务为 `lan-reader`，默认端口 **4081**，绑定 **本项目 `./data-lan-reader`** 至 `/app/server/data`，无固定 container_name。本机没有 Docker/Compose/Podman，以下命令是待在适当环境执行的操作说明，未宣称构建、配置解析或容器 smoke 通过。
+
+```bash
+# Linux 宿主机：先为镜像的 node 用户准备本项目的新目录；不要指向原书库。
+mkdir -p data-lan-reader
+sudo chown 1000:1000 data-lan-reader
+docker compose config
+docker compose build
 docker compose up -d
 docker compose ps
+docker compose logs --tail=100 lan-reader
 ```
 
-容器显示为 `running` 或 `healthy` 后，打开：
+访问 `http://localhost:4081`，局域网设备用宿主机 IP。Windows Docker Desktop 的绑定目录权限方式不同；确认容器用户有写入权限。修改端口只需改 `ports` 左侧。不要让另一个实例同时写入相同数据目录，不要使用原实例的 Compose 名称、端口或卷。此配置不会自动发布。
 
-```text
-http://你的设备IP:4080
-```
-
-例如：`http://192.168.1.20:4080`。
-
-> [!TIP]
-> `4080:3000` 左侧是浏览器访问端口，可以改成其他未占用端口；右侧容器端口保持 `3000`。
-
-## 开始使用
-
-1. 点击书架右上角的 **＋**，选择一本或多本 EPUB。
-2. 等待元数据和封面解析完成，书籍会出现在书架上。
-3. 点击封面开始阅读；翻页后阅读位置会自动保存。
-4. 长按并拖动书籍可调整顺序；拖到另一册书的中央可创建文件夹。
-5. 阅读时点击页面中央呼出控制栏，通过“目录”和“Aa 设置”调整阅读体验。
-
-如果你更习惯直接管理文件，也可以把完整的 EPUB 文件复制到宿主机的 `data/books/`。应用会监控该目录并同步新增、更新或删除的书籍。
-
-## 安装为 PWA
-
-EPUB Reader 可以安装到主屏幕，并以独立应用窗口运行：
-
-- **iPhone / iPad**：使用 Safari 打开站点，点击“分享” → “添加到主屏幕”。
-- **Android**：使用 Chrome 打开站点，在菜单中选择“安装应用”或“添加到主屏幕”。
-- **桌面 Chrome / Edge**：打开站点后使用地址栏中的安装按钮。
-
-### HTTPS 要求
-
-Service Worker 只能在安全上下文中运行：
-
-- `localhost` 开发访问可使用 HTTP。
-- 手机或其他电脑通过局域网 IP 访问时，应配置 HTTPS 反向代理。
-- 直接使用 `http://192.168.x.x:4080` 可以在线阅读，但不保证 PWA 安装和缓存能力完整可用。
-
-### 缓存范围
-
-每台设备会独立缓存：
-
-- 应用外壳；
-- 最近成功加载的书架快照；
-- 已访问的封面缩略图。
-
-EPUB 正文默认不进入离线缓存，因此当前版本不是完整的离线阅读器。服务器中的书库仍是唯一持久数据源；浏览器清理站点数据不会删除服务器上的书籍。
+后续代码更新时，在本项目目录执行 `docker compose build`、`docker compose up -d`；更新前先备份新实例。`docker compose stop lan-reader` 只停止这个项目中的新服务。不要使用 `down -v` 删除持久数据。
 
 ## 配置
 
-| 环境变量 | 默认值 | 说明 |
-|---|---:|---|
-| `HOST` | `0.0.0.0` | 服务监听地址 |
-| `PORT` | `3000` | 服务监听端口 |
-| `EPUB_DATA_DIR` | `server/data` | EPUB、封面与临时上传目录的根路径 |
-| `DATABASE_PATH` | `server/data/library.sqlite` | SQLite 数据库路径 |
-| `EPUB_UPLOAD_MAX_MB` | `100` | 单个上传文件的大小上限（MiB） |
+应用读取进程环境变量，不自动加载 `.env`。Compose 的 `.env` 插值也不意味着任意变量会传入容器；需显式添加到 Compose `environment`。路径建议写绝对路径，相对环境路径按进程当前工作目录解析，npm workspace 启动时为 `server`。
 
-容器部署通常只需要配置端口和数据卷。若自定义 `EPUB_DATA_DIR` 或 `DATABASE_PATH`，请确保运行用户对目标目录具有读写权限，并把相应路径持久化挂载到宿主机。
+| 变量 | 默认值 | 说明 |
+|---|---|---|
+| `HOST` | `0.0.0.0` | 监听地址；仅本机访问可设 `127.0.0.1` |
+| `PORT` | `3000` | HTTP 端口；Compose 固定容器 3000、宿主 4081 |
+| `NODE_ENV` | 未设置 | 部署设为 `production` |
+| `EPUB_DATA_DIR` | 项目的 `server/data` | `books`、`covers`、`staging` 的根目录 |
+| `DATABASE_PATH` | 项目的 `server/data/library.sqlite` | SQLite 文件；**不随 EPUB_DATA_DIR 改变** |
+| `EPUB_UPLOAD_MAX_MB` | `100` | 单文件上传上限，单位 MiB；正数转字节后向下取整 |
+| `EPUB_MAX_ENTRIES` | `10000` | EPUB ZIP 最大条目数 |
+| `EPUB_MAX_UNCOMPRESSED_MB` | `500` | EPUB 解压后总大小上限，MiB |
+| `EPUB_MAX_ENTRY_MB` | `100` | EPUB 单条目解压大小上限，MiB |
+| `EPUB_API_URL` | `http://localhost:3000` | 仅 Vite dev/preview 的后端代理目标 |
 
-## 数据与备份
+四项 EPUB 大小/数量限制的无效、非正数值回落默认值；不要依赖错误配置扩大限制。数据库和文件根路径独立，改位置时必须设置两项，并分别持久化。容器默认将两者显式放在 `/app/server/data`。
 
-默认数据目录结构：
+## 数据副本迁移、备份与回退
 
-```text
-data/
-├── library.sqlite
-├── books/
-├── covers/
-│   └── thumbnails/
-└── staging/
-```
-
-- `library.sqlite`：书架、文件夹、阅读进度和阅读设置。
-- `books/`：EPUB 原文件。
-- `covers/`：原始封面和生成的 WebP 缩略图。
-- `staging/`：上传校验期间使用的临时目录；过期文件会自动清理。
-
-### 备份
-
-为了获得一致的数据库备份，先停止写入，再备份整个数据目录：
-
-```bash
-docker compose stop
-tar -czf ../epub-reader-data-$(date +%Y%m%d).tar.gz data
-docker compose start
-```
-
-### 恢复
-
-```bash
-docker compose down
-mv data data.before-restore
-tar -xzf ../epub-reader-data-20260811.tar.gz
-docker compose up -d
-```
-
-请把示例文件名替换成实际备份。确认恢复正常后，再自行处理 `data.before-restore`。
-
-### 更新
-
-更新前建议先备份，然后执行：
-
-```bash
-docker compose pull
-docker compose up -d
-docker compose ps
-```
-
-数据库迁移会在启动时自动执行，不会移动或重命名已有 EPUB 原文件。
-
-### 清理旧版封面
-
-新版会在后台逐本生成 384px 和 768px WebP 缩略图。确认缩略图回填完成、已经备份且不再回滚到旧镜像后，可以先预览可清理内容：
-
-```bash
-docker compose exec epub-reader npm run covers:cleanup-legacy
-```
-
-确认后再显式删除：
-
-```bash
-docker compose exec epub-reader npm run covers:cleanup-legacy -- --apply
-```
-
-> [!WARNING]
-> 旧封面清理不可由应用自动撤销。不执行清理不会影响新版使用。
-
-## 源码开发
-
-### 使用源码构建容器
-
-```bash
-git clone https://github.com/natumeAi/epub-reader.git
-cd epub-reader
-docker compose up -d --build
-```
-
-仓库中的 `docker-compose.yml` 默认使用 `http://localhost:3000`，并把 `./server/data` 挂载到容器中。
-
-### 本地开发
-
-需要 Node.js 22 或更高版本。
-
-终端一：
-
-```bash
-cd server
-npm ci
-npm run dev
-```
-
-终端二：
-
-```bash
-cd client
-npm ci
-npm run dev
-```
-
-打开 `http://localhost:5173`。Vite 会把 `/api` 和 `/covers` 请求代理到 `http://localhost:3000`。
-
-### 测试与构建
-
-```bash
-cd client
-npm test
-npm run build
-
-cd ../server
-npm test
-```
-
-## 健康检查与日志
-
-健康检查地址：
+数据布局如下；当前阅读外观设置保存在浏览器 localStorage，旧 `reader_settings` 数据表保留兼容，不是当前设置来源。
 
 ```text
-http://你的设备IP:4080/api/health
+data-lan-reader/
+  library.sqlite        # 书籍、书架/文件夹、每本书阅读位置及迁移记录
+  books/                # EPUB 原文件
+  covers/               # 原封面及 thumbnails/ 中的 WebP 缩略图
+  staging/              # 临时上传，非书库备份来源
 ```
 
-正常响应示例：
+迁移仅使用**一致性备份的副本**，本次工作不迁移真实数据、不替换原服务、不操作原数据卷。
 
-```json
-{"status":"ok","service":"epub-reader-server","database":"ok"}
-```
+1. 由数据所有者通过原系统既有备份流程取得一致性快照，包含数据库与同期 `books`、`covers`。运行中的 SQLite 可能有 WAL；不要只复制正在写入的 `library.sqlite`。使用 SQLite 备份机制或在确认无写入的离线快照中保留完整文件集。
+2. 保留该备份及原服务不变，将一份可丢弃副本放入新项目 `data-lan-reader`。确保数据库中的相对文件引用与文件树对应。不要配置任何指向原项目的路径或符号链接。
+3. 使用新端口启动新实例。启动会按历史文件名自动应用未执行的 SQL migration，并在后台回填缩略图；旧原封面保留。核对书目数量、文件夹、下载、正文、图片和每本书的阅读位置。
+4. 在独立浏览器 origin 验证后，由数据所有者另行决定是否切换入口。本任务没有执行切换。旧数据库 fixture 通过只能证明所覆盖格式，不能替代对实际书库副本的验收。
+5. 回退时先停止**新实例**，保留新实例数据副本以便提取期间新增的书籍/阅读位置，再将入口恢复到仍保留的原服务。禁止把已升级的新数据库写回原服务；SQL migration 为前向迁移，没有 down 脚本。
+6. 如需恢复新实例备份，停止新实例后把现有数据改名保留，将迁移前一致性备份复制到一个新目录，更新两项环境变量/新实例卷路径后再启动。回退不会自动合并新旧实例期间产生的内容和进度。
 
-查看容器日志：
+浏览器存储按 **协议、主机、端口** 隔离。相同格式不意味着跨 origin 自动迁移：服务器阅读位置随数据库副本保留；阅读主题、活动会话、快照缓存、离线待保存位置留在原浏览器 origin。切换前应在旧 origin 联机完成待保存进度。不要清除其站点数据来“修复”迁移；新 origin 的设置可能需要重设。同 origin 兼容仍需考虑实际浏览器缓存/Service Worker 更新。
 
-```bash
-docker compose logs -f --tail=100
-```
+日常备份新实例时停止新实例写入，复制数据库及整个 `books` / `covers` 文件树，再启动新实例。保留原封面有利于回退；默认不运行 `covers:cleanup-legacy --apply`。确需清理，应在已有备份、确认不回退后由所有者单独操作。
 
-按 `Ctrl+C` 只会退出日志查看，不会停止容器。
+## PWA 与缓存范围
 
-## 常见问题
+应用保留 Service Worker 外壳、IndexedDB 书架快照和封面缓存；EPUB 正文默认不缓存，离线时不能保证新打开一本书。缩略图缓存限制为 **500 个条目**，不是强制 100 MB 容量上限。读完 100% 后继续返回前文会更新当前位置；重复导入是独立 Book，阅读位置不合并。
 
-<details>
-<summary><strong>浏览器无法打开应用</strong></summary>
+PWA 需要安全上下文：本机 localhost 可用 HTTP，手机通过局域网 IP 则需有效 HTTPS。Safari 的“添加到主屏幕”、实际移动触控、系统后台回收后的恢复和 HTTPS 安装式 PWA 需要在目标设备另行验收；桌面 Chromium 或模拟 WebKit 事件不替代这些结果。
 
-运行 `docker compose ps` 确认容器状态，并检查宿主机防火墙是否放行映射端口。若修改过 `4080:3000`，浏览器应使用冒号左侧的端口。
+## 优化与验收边界
 
-</details>
+此次重构集中在可维护性和明确边界：shared DTO/解码器、统一 API transport、数据库行与 HTTP 输出分离、无副作用 app 导入、集中生命周期、EPUB 私有能力的局部类型，以及取消/销毁后不发布迟到结果。步骤 5 补齐生产静态资源复制、workspace 容器布局、保留 API/cover 404 的 SPA 回退和不发布 CI。
 
-<details>
-<summary><strong>重建容器后书籍不见了</strong></summary>
+快照 ETag/304、gzip、可见封面渐进加载与 ReaderView 独立 chunk 继续保留。**没有同环境前后对照，就不宣称更快、节省多少内存或达到手机 500ms/800ms 指标。** Docker/Linux Node22、真实移动 Safari 和 HTTPS PWA 尚未实测，CI 文件尚不能当作远程运行证据。
 
-确认 Compose 仍把原来的数据目录挂载到 `/app/server/data`。相对路径取决于执行 `docker compose` 时所在的目录，从其他目录启动可能会创建一份新的空数据卷。
+本地完整记录位于被忽略的 `docs/migration/` 与 `.trellis/tasks/archive/2026-09/09-21-ts-05-delivery/verification.md`（新克隆不含这些记录）。最终完成项与未验收项以实际 verification 记录为准。本 README 保留独立安装、配置及迁移回退所需说明，不要求新克隆取得本地记录才能启动。
 
-</details>
-
-<details>
-<summary><strong>复制 EPUB 后没有立即出现</strong></summary>
-
-确认扩展名为 `.epub`，文件已经完整复制到 `data/books/`，然后稍等片刻。若仍未出现，请检查容器日志中的解析或权限错误。
-
-</details>
-
-<details>
-<summary><strong>手机可以访问但不能安装 PWA</strong></summary>
-
-局域网 IP 上的普通 HTTP 不属于安全上下文。请通过带有效证书的 HTTPS 反向代理访问，并确认 `manifest.webmanifest` 与 `sw.js` 没有被代理规则拦截。
-
-</details>
-
-<details>
-<summary><strong>可以直接暴露到公网吗？</strong></summary>
-
-不建议。当前应用没有内置登录、权限或多用户隔离。请使用 VPN、零信任访问或带身份验证的反向代理。
-
-</details>
-
-## 技术栈
-
-| 层级 | 技术 |
-|---|---|
-| 客户端 | React 19、Vite、epub.js、dnd-kit |
-| PWA | vite-plugin-pwa、Workbox |
-| 服务端 | Node.js、Express |
-| 数据 | SQLite、宿主机文件系统 |
-| 图像 | Sharp、WebP 缩略图 |
-| 部署 | Docker、Docker Compose |
-
-## 版本
-
-当前版本：**v0.9.5**
-
-完整变更记录与发布说明请查看 [GitHub Releases](https://github.com/natumeAi/epub-reader/releases)。
+2026-09-21 本机最终 `npm run check` 通过，232 项测试、零失败/跳过；生产依赖副本及无测试的新克隆副本分别通过其对应检查。桌面浏览器完成上传、文件夹、阅读、保存刷新和删除路径。本轮手动夹内重排没有成功触发；主测试页出现一次无堆栈的 `MutationObserver.observe` 异常，新 origin 复查未复现，来源尚未确定。用户已确认按现有成果完成本次交付并归档；上述剩余项和未测环境作为后续验证保留，不表示所有平台交付通过。

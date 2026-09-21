@@ -9,6 +9,12 @@ const proxy: Record<string, string | ProxyOptions> = {
   '/covers': apiTarget,
 };
 
+// Workbox matches pathname + search, unlike Express's pathname-only matcher.
+export const navigationFallbackDenylist = [
+  /^\/api(?:[/?]|$)/,
+  /^\/covers(?:[/?]|$)/,
+];
+
 export default defineConfig({
   plugins: [
     react(),
@@ -29,10 +35,7 @@ export default defineConfig({
         clientsClaim: true,
         globPatterns: ['**/*.{css,html,js,png,svg,webmanifest}'],
         navigateFallback: '/index.html',
-        navigateFallbackDenylist: [
-          /^\/api\//,
-          /^\/covers\//,
-        ],
+        navigateFallbackDenylist: navigationFallbackDenylist,
         runtimeCaching: [
           {
             urlPattern: /\/covers\/thumbnails\/.+\.webp(?:\?.*)?$/,

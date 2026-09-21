@@ -4,6 +4,8 @@ node_modules/
 # spelled out because it is the artefact `npm start` runs.
 dist/
 server/dist/
+server/public/
+/data-lan-reader/
 
 *.log
 .env

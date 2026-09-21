@@ -1,19 +1,17 @@
+name: lan-reader
+
 services:
-  epub-reader:
+  lan-reader:
     build: .
-    container_name: epub-reader
     restart: unless-stopped
+    init: true
     environment:
       NODE_ENV: production
       HOST: 0.0.0.0
       PORT: 3000
+      EPUB_DATA_DIR: /app/server/data
+      DATABASE_PATH: /app/server/data/library.sqlite
     ports:
-      - "3000:3000"
+      - "4081:3000"
     volumes:
-      - ./server/data:/app/server/data
-    healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 15s
+      - ./data-lan-reader:/app/server/data

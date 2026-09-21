@@ -17,6 +17,7 @@ export default tseslint.config(
       '.tmp/**',
       '.trellis/**',
       'client/public/**',
+      'server/public/**',
     ],
   },
   js.configs.recommended,
