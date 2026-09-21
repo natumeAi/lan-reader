@@ -1,0 +1,31 @@
+{
+  "name": "epub-reader-server",
+  "version": "0.9.5",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json && node scripts/copyMigrations.mjs",
+    "covers:cleanup-legacy": "node dist/scripts/cleanupLegacyCovers.js",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "node --import tsx --import ./test/support/isolateData.mjs --test \"test/**/*.test.ts\""
+  },
+  "dependencies": {
+    "@lan-reader/shared": "*",
+    "adm-zip": "^0.6.0",
+    "better-sqlite3": "^12.11.1",
+    "chokidar": "^5.0.0",
+    "compression": "^1.8.1",
+    "epub2": "^3.0.2",
+    "express": "^5.1.0",
+    "multer": "^2.2.0",
+    "sharp": "^0.35.3"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/compression": "^1.8.1",
+    "@types/express": "^5.0.6",
+    "@types/multer": "^2.2.0"
+  }
+}

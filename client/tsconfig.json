@@ -1,0 +1,28 @@
+{
+  // Broad tooling configuration: this is the file editors and the tsx loader
+  // discover, so it has to match every source, test and config file. The gate
+  // that actually runs in `npm run typecheck` is the pair of narrow projects
+  // tsconfig.app.json (browser-only) and tsconfig.node.json (tests + config).
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "types": ["node"],
+    "jsx": "react-jsx",
+    "noEmit": true,
+    "allowJs": true,
+    "checkJs": false
+  },
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "src/**/*.js",
+    "src/**/*.jsx",
+    "test/**/*.ts",
+    "test/**/*.tsx",
+    "test/**/*.js",
+    "test/**/*.jsx",
+    "vite.config.ts"
+  ]
+}

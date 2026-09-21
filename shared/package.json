@@ -1,0 +1,23 @@
+{
+  "name": "@lan-reader/shared",
+  "version": "0.9.5",
+  "private": true,
+  "type": "module",
+  "description": "Browser-safe wire contracts shared by the client and the server.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "node --import tsx --test \"test/**/*.test.ts\""
+  }
+}

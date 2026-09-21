@@ -1,0 +1,30 @@
+node_modules/
+
+# Build output. `dist/` already matches at any depth; the compiled server is
+# spelled out because it is the artefact `npm start` runs.
+dist/
+server/dist/
+
+*.log
+.env
+.env.*
+
+# Local verification scratch (isolated test data, never the source library)
+.tmp/
+
+# Runtime library data (uploaded books & extracted covers)
+server/data/books/
+server/data/covers/
+server/data/staging/
+server/data/*.sqlite*
+
+# Local editor / tooling config
+.superpowers/
+.worktrees/
+.agents/
+.claude/
+.codex/
+.trellis/
+docs/
+AGENTS.md
+CONTEXT.md

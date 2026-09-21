@@ -1,0 +1,17 @@
+{
+  // Files that run in Node rather than in the browser: the Vite config and
+  // the test suite. Kept separate from tsconfig.app.json so Node globals stay
+  // out of the client bundle.
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "types": ["node"],
+    "jsx": "react-jsx",
+    "noEmit": true,
+    "allowJs": true,
+    "checkJs": false
+  },
+  "include": ["vite.config.ts", "test/**/*.ts", "test/**/*.tsx", "test/**/*.js", "test/**/*.jsx"]
+}

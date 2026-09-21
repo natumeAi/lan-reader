@@ -1,0 +1,83 @@
+@media (display-mode: standalone) {
+  body {
+    background: var(--shelf-wood-background);
+  }
+}
+
+.reader-restore-fallback {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  overflow: hidden;
+  background: #fff;
+  color: var(--text-secondary);
+  font-size: 15px;
+  overscroll-behavior: none;
+}
+
+.reader-restore-fallback .reader-loading-spinner {
+  display: block;
+  width: 28px;
+  height: 28px;
+  border: 2.5px solid rgba(0, 0, 0, 0.1);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.75s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reader-overlay,
+  .reader-overlay *:not(.reader-loading-spinner),
+  .folder-overlay,
+  .folder-overlay *:not(.folder-loading-spinner),
+  .library-home *,
+  .delete-confirm-overlay,
+  .delete-confirm-overlay * {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+
+  .reader-loading-spinner {
+    animation: spin 0.75s linear infinite;
+  }
+
+  .folder-loading-spinner {
+    animation: folder-loading-spin 0.82s linear infinite;
+  }
+
+  .folder-overlay .folder-backdrop,
+  .folder-overlay .folder-panel,
+  .folder-overlay .folder-panel-header,
+  .folder-overlay .folder-panel-content {
+    animation-delay: 0ms !important;
+    animation-duration: 100ms !important;
+  }
+
+  .folder-overlay .folder-panel,
+  .folder-overlay .folder-panel[data-origin-motion="true"],
+  .folder-overlay .folder-panel-header,
+  .folder-overlay .folder-panel-content {
+    animation-name: folder-reduced-fade-in !important;
+  }
+
+  .folder-overlay.is-closing .folder-backdrop,
+  .folder-overlay.is-closing .folder-panel,
+  .folder-overlay.is-closing .folder-panel[data-origin-motion="true"],
+  .folder-overlay.is-closing .folder-panel-header,
+  .folder-overlay.is-closing .folder-panel-content {
+    animation-name: folder-reduced-fade-out !important;
+  }
+}

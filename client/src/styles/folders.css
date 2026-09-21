@@ -1,0 +1,541 @@
+.folder-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: max(14px, env(safe-area-inset-top)) 12px
+    max(14px, env(safe-area-inset-bottom));
+  isolation: isolate;
+}
+
+.folder-backdrop {
+  position: fixed;
+  inset: 0;
+  border: 0;
+  background: rgba(18, 18, 22, 0.25);
+  -webkit-backdrop-filter: blur(8px) saturate(1.06);
+  backdrop-filter: blur(8px) saturate(1.06);
+  cursor: default;
+  animation: folder-fade-in 240ms ease-out both;
+}
+
+.folder-overlay.is-closing .folder-backdrop {
+  animation: folder-fade-out 200ms ease-in forwards;
+}
+
+.folder-panel {
+  --folder-origin-x: 0px;
+  --folder-origin-y: 12px;
+  --folder-origin-scale-x: 0.96;
+  --folder-origin-scale-y: 0.96;
+  position: relative;
+  display: flex;
+  width: min(100%, 680px);
+  max-height: min(86svh, 820px);
+  min-height: min(76svh, 680px);
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 24px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(247, 247, 250, 0.95));
+  box-shadow:
+    0 38px 86px rgba(21, 21, 25, 0.3),
+    0 10px 28px rgba(29, 29, 31, 0.16),
+    inset 0 1px 0 rgba(255, 255, 255, 0.88),
+    inset 0 0 0 1px rgba(29, 29, 31, 0.035);
+  transform-origin: center;
+  animation: folder-panel-in 260ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  backface-visibility: hidden;
+  contain: paint;
+}
+
+.folder-panel[data-origin-motion="true"] {
+  animation-name: folder-panel-origin-in;
+}
+
+.folder-overlay.is-closing .folder-panel {
+  animation: folder-panel-out 200ms cubic-bezier(0.4, 0, 0.7, 0.2) forwards;
+}
+
+.folder-overlay.is-closing .folder-panel[data-origin-motion="true"] {
+  animation-name: folder-panel-origin-out;
+}
+
+.folder-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 20px 20px 16px;
+  border-bottom: 1px solid rgba(29, 29, 31, 0.075);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.48), rgba(255, 255, 255, 0));
+  animation: folder-content-in 200ms cubic-bezier(0.22, 1, 0.36, 1) 75ms both;
+}
+
+.folder-panel-header h2 {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  font-size: 26px;
+  font-weight: 800;
+  line-height: 1.12;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.folder-panel-content {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  padding-top: 20px;
+  animation: folder-content-in 210ms cubic-bezier(0.22, 1, 0.36, 1) 105ms both;
+}
+
+.folder-overlay.is-closing .folder-panel-header,
+.folder-overlay.is-closing .folder-panel-content {
+  animation: folder-content-out 100ms ease-in both;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  clip-path: inset(50%);
+}
+
+.folder-title-button {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.folder-title-button:active {
+  opacity: 0.58;
+}
+
+.folder-title-button:focus-visible {
+  outline: 3px solid rgba(0, 122, 255, 0.24);
+  outline-offset: 4px;
+  border-radius: 8px;
+}
+
+.folder-title-editor {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.folder-rename-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 34px 34px;
+  align-items: center;
+  gap: 8px;
+}
+
+.folder-rename-input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  border-radius: 10px;
+  background: rgba(118, 118, 128, 0.13);
+  color: rgba(29, 29, 31, 0.92);
+  font-size: 24px;
+  font-weight: 800;
+  line-height: 1.1;
+  padding: 8px 10px;
+  outline: none;
+}
+
+.folder-rename-input:focus {
+  box-shadow: 0 0 0 3px rgba(0, 122, 255, 0.2);
+}
+
+.folder-rename-action {
+  position: relative;
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(118, 118, 128, 0.14);
+  color: rgba(29, 29, 31, 0.68);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.folder-rename-action:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.folder-rename-action span {
+  position: relative;
+  display: block;
+  width: 15px;
+  height: 15px;
+}
+
+.folder-rename-action.is-confirm {
+  background: rgba(52, 199, 89, 0.16);
+  color: rgb(31, 134, 61);
+}
+
+.folder-rename-action.is-confirm span::before {
+  position: absolute;
+  left: 2px;
+  top: 7px;
+  width: 11px;
+  height: 6px;
+  border-bottom: 2px solid currentColor;
+  border-left: 2px solid currentColor;
+  content: "";
+  transform: rotate(-45deg);
+}
+
+.folder-rename-action.is-cancel span::before,
+.folder-rename-action.is-cancel span::after {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 15px;
+  height: 2px;
+  border-radius: 999px;
+  background: currentColor;
+  content: "";
+}
+
+.folder-rename-action.is-cancel span::before {
+  transform: translate(-50%, -50%) rotate(45deg);
+}
+
+.folder-rename-action.is-cancel span::after {
+  transform: translate(-50%, -50%) rotate(-45deg);
+}
+
+.folder-close-button {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(118, 118, 128, 0.14);
+  color: rgba(29, 29, 31, 0.68);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.folder-close-button span {
+  position: relative;
+  display: block;
+  width: 14px;
+  height: 14px;
+}
+
+.folder-close-button span::before,
+.folder-close-button span::after {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 15px;
+  height: 2px;
+  border-radius: 999px;
+  background: currentColor;
+  content: "";
+}
+
+.folder-close-button span::before {
+  transform: translate(-50%, -50%) rotate(45deg);
+}
+
+.folder-close-button span::after {
+  transform: translate(-50%, -50%) rotate(-45deg);
+}
+
+.folder-close-button:active {
+  transform: scale(0.94);
+}
+
+.folder-close-button:focus-visible {
+  outline: 3px solid rgba(0, 122, 255, 0.24);
+  outline-offset: 3px;
+}
+
+.folder-status {
+  margin: -8px 18px 12px;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.folder-loading-state {
+  display: grid;
+  min-height: 300px;
+  flex: 1;
+  align-content: center;
+  justify-items: center;
+  gap: 14px;
+  padding: 22px 18px 46px;
+  color: rgba(29, 29, 31, 0.52);
+  text-align: center;
+}
+
+.folder-loading-state p {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.folder-loading-spinner {
+  width: 30px;
+  height: 30px;
+  border: 3px solid rgba(29, 29, 31, 0.1);
+  border-top-color: rgba(0, 122, 255, 0.68);
+  border-radius: 999px;
+  animation: folder-loading-spin 0.82s linear infinite;
+}
+
+.folder-book-grid {
+  display: grid;
+  min-height: 0;
+  flex: 1;
+  grid-template-columns: repeat(auto-fill, var(--book-cover-width));
+  justify-content: space-between;
+  gap: var(--shelf-row-gap) var(--shelf-column-gap);
+  align-items: start;
+  overflow: auto;
+  padding: 0 20px 28px;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.folder-book-shell {
+  position: relative;
+  display: grid;
+  align-content: start;
+  justify-items: center;
+  width: var(--book-cover-width);
+  height: var(--shelf-item-height);
+}
+
+.folder-book-cover-button {
+  display: grid;
+  align-content: start;
+  justify-items: center;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: grab;
+  outline: 0;
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.folder-book-shell.is-dragging {
+  z-index: 2;
+  opacity: 0.28;
+}
+
+.folder-book-shell.is-dragging .folder-book-cover-button {
+  cursor: grabbing;
+}
+
+.folder-book-cover-button:active .book-cover {
+  transform: translateY(2px) scale(0.985);
+}
+
+.folder-book-shell.is-dragging .book-cover {
+  box-shadow:
+    0 24px 38px rgba(38, 31, 24, 0.26),
+    0 8px 14px rgba(38, 31, 24, 0.16),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.24);
+  transform: scale(1.04);
+}
+
+.folder-book-cover-button:focus-visible .book-cover {
+  outline: 3px solid rgba(0, 122, 255, 0.3);
+  outline-offset: 5px;
+}
+
+.folder-empty-state {
+  display: grid;
+  flex: 1;
+  align-content: center;
+  justify-items: center;
+  gap: 16px;
+  padding: 22px 18px 46px;
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+.folder-empty-state p {
+  max-width: 240px;
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.55;
+}
+
+@media (hover: hover) {
+  .folder-book-shell:hover .book-cover {
+    box-shadow:
+      0 22px 34px rgba(38, 31, 24, 0.22),
+      0 5px 10px rgba(38, 31, 24, 0.14),
+      inset 0 0 0 1px rgba(255, 255, 255, 0.22);
+    transform: translateY(-2px);
+  }
+
+  .folder-book-shell.is-dragging:hover .book-cover {
+    box-shadow:
+      0 24px 38px rgba(38, 31, 24, 0.26),
+      0 8px 14px rgba(38, 31, 24, 0.16),
+      inset 0 0 0 1px rgba(255, 255, 255, 0.24);
+    transform: scale(1.04);
+  }
+}
+
+@keyframes folder-loading-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 374px) {
+  :root {
+    --book-cover-width: 104px;
+    --book-cover-height: 156px;
+    --shelf-item-height: 200px;
+    --shelf-column-gap: 8px;
+  }
+
+  .app-shell {
+    padding-right: 14px;
+    padding-left: 14px;
+  }
+
+  .folder-panel {
+    border-radius: 22px;
+  }
+
+  .folder-book-grid {
+    padding-right: 16px;
+    padding-left: 16px;
+  }
+}
+
+@media (max-width: 720px) {
+  .folder-backdrop {
+    background: rgba(20, 20, 24, 0.26);
+    -webkit-backdrop-filter: blur(5px) saturate(1.04);
+    backdrop-filter: blur(5px) saturate(1.04);
+  }
+}
+
+@keyframes folder-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes folder-fade-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+@keyframes folder-panel-in {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 12px, 0) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+@keyframes folder-panel-out {
+  from {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translate3d(0, 12px, 0) scale(0.96);
+  }
+}
+
+@keyframes folder-panel-origin-in {
+  from {
+    opacity: 0.72;
+    transform:
+      translate3d(var(--folder-origin-x), var(--folder-origin-y), 0)
+      scale(var(--folder-origin-scale-x), var(--folder-origin-scale-y));
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1, 1);
+  }
+}
+
+@keyframes folder-panel-origin-out {
+  from {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1, 1);
+  }
+  to {
+    opacity: 0;
+    transform:
+      translate3d(var(--folder-origin-x), var(--folder-origin-y), 0)
+      scale(var(--folder-origin-scale-x), var(--folder-origin-scale-y));
+  }
+}
+
+@keyframes folder-content-in {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 7px, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes folder-content-out {
+  from {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+  to {
+    opacity: 0;
+    transform: translate3d(0, 4px, 0);
+  }
+}
+
+@keyframes folder-reduced-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes folder-reduced-fade-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
