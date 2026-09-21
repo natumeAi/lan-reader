@@ -9,7 +9,6 @@ export type {
   BookDto,
   CatalogBookDto,
   SnapshotBookDto,
-  UploadedBookRecord,
 } from './book.js';
 export type { FolderDto, SnapshotFolderDto } from './folder.js';
 export { MAX_FOLDER_NAME_LENGTH } from './folder.js';
@@ -41,7 +40,6 @@ export type {
   ReadingPositionResponse,
   RecentReadingResponse,
   ShelfItemsResponse,
-  UploadBookResponse,
 } from './api.js';
 export {
   WireDecodeError,

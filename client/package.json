@@ -9,7 +9,7 @@
     "preview": "vite preview --host 0.0.0.0",
     "typecheck": "tsc -p tsconfig.app.json && tsc -p tsconfig.node.json",
     "test": "npm run test:legacy && npm run test:ts",
-    "test:legacy": "node --test \"test/**/*.test.{js,jsx}\"",
+    "test:legacy": "node --import tsx --test \"test/**/*.test.{js,jsx}\"",
     "test:ts": "node --import tsx --test \"test/**/*.test.{ts,tsx}\""
   },
   "dependencies": {
@@ -22,6 +22,7 @@
     "react-dom": "^19.1.0"
   },
   "devDependencies": {
+    "@types/jsdom": "^30.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^5.0.0",

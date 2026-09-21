@@ -37,44 +37,6 @@ export interface BookDto {
 }
 
 /**
- * Raw `books` row echoed by `POST /api/books` (201).
- *
- * The upload route serialises the inserted SQLite row straight into its
- * response, so that one body is snake_case and exposes columns `BookDto`
- * deliberately withholds (`file_path`, `file_mtime_ms`) while omitting the
- * derived `coverUrl` / `coverThumbnailUrl` / `coverThumbnail2xUrl` fields. It
- * is a legacy shape and is **not** interchangeable with `BookDto`: a client
- * that needs the Book contract has to read it back through
- * `GET /api/books/:id`.
- *
- * Described here rather than corrected: aligning the upload response with
- * `BookDto` changes the API, so whether to unify the two is left to a later
- * step. The fields mirror `server/src/db/rows.ts`'s `BookRow` column for
- * column.
- */
-export interface UploadedBookRecord {
-  readonly id: number;
-  readonly folder_id: number | null;
-  readonly title: string;
-  readonly author: string | null;
-  readonly description: string | null;
-  readonly publisher: string | null;
-  readonly language: string | null;
-  readonly identifier: string | null;
-  readonly file_name: string;
-  readonly file_path: string;
-  readonly file_size: number;
-  readonly cover_path: string | null;
-  readonly sort_order: number;
-  readonly created_at: string;
-  readonly updated_at: string;
-  readonly file_mtime_ms: number | null;
-  readonly cover_thumbnail_small_path: string | null;
-  readonly cover_thumbnail_large_path: string | null;
-  readonly cover_thumbnail_version: string | null;
-}
-
-/**
  * Catalog Book payload returned by `GET /api/books/catalog`.
  *
  * The Catalog is the flat list of every Book, Bookshelf or Folder alike, so it

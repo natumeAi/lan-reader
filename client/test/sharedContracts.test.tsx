@@ -28,11 +28,11 @@ test('the shared workspace resolves from the client at runtime', () => {
   assert.equal(typeof MAX_FOLDER_NAME_LENGTH, 'number');
 });
 
-test('shared contracts still agree with the values the client enforces', () => {
+test('the client re-exports the shared snapshot version', () => {
   assert.equal(
     LIBRARY_SNAPSHOT_SCHEMA_VERSION,
     clientSnapshotVersion,
-    'snapshot schema version drifted between shared/ and client/',
+    'client snapshot version must remain the shared re-export',
   );
 });
 

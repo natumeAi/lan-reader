@@ -14,7 +14,6 @@ import type {
   BookResponse,
   BooksResponse,
   CatalogBooksResponse,
-  UploadBookResponse,
 } from '@lan-reader/shared';
 import { badRequest, notFound } from '../http/httpError.js';
 import {
@@ -27,6 +26,7 @@ import {
 import {
   addBookFileToLibrary,
   deleteBookById,
+  formatBook,
   getBookById,
   getBookFilePath,
   inspectEpubFile,
@@ -152,11 +152,7 @@ router.patch('/order', (req, res: Response<BooksResponse>, next) => {
   }
 });
 
-// The 201 body is the raw `books` row, not a `BookDto`; `UploadBookResponse` in
-// `@lan-reader/shared` describes that legacy shape, including the `null` the
-// import helper can answer. Binding the response to it is what makes a column
-// added to `BookRow` a compile error here instead of silent contract drift.
-router.post('/', handleUpload, async (req, res: Response<UploadBookResponse>, next) => {
+router.post('/', handleUpload, async (req, res: Response<BookResponse>, next) => {
   const uploadedFile = req.file;
   const stagedPath = uploadedFile?.path;
   let finalPath: string | null = null;
@@ -178,8 +174,11 @@ router.post('/', handleUpload, async (req, res: Response<UploadBookResponse>, ne
       fileName: displayFileName,
       title: titleFromUpload(uploadedFile),
     });
+    if (!book) {
+      throw new Error('Uploaded EPUB was not added to the library');
+    }
     committed = true;
-    res.status(201).json({ book });
+    res.status(201).json({ book: formatBook(book) });
   } catch (error) {
     if (!committed) {
       for (const filePath of [stagedPath, finalPath]) {

@@ -1073,7 +1073,7 @@ test('completes a backward turn when the real epub.js queue settles after its ti
 
   try {
     const queueModule = await import('epubjs/lib/utils/queue.js');
-    const EpubQueue = queueModule.default.default;
+    const EpubQueue = queueModule.default.default ?? queueModule.default;
     const illustrationSection = { index: 37 };
     const textSection = {
       index: 38,

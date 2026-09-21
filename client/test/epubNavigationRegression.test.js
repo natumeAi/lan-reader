@@ -251,7 +251,7 @@ test('moves backward across a publication document boundary through the public c
   let harness;
   try {
     const queueModule = await import('epubjs/lib/utils/queue.js');
-    const EpubQueue = queueModule.default.default;
+    const EpubQueue = queueModule.default.default ?? queueModule.default;
     const illustrationSection = { index: 37 };
     const textSection = {
       index: 38,

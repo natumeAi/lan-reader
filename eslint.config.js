@@ -119,10 +119,8 @@ export default tseslint.config(
     // docs/migration/js-coexistence.md, and the exception is removed there.
     // Nothing may be added to this list — new code is linted without exceptions.
     files: [
-      'client/src/hooks/useLibraryDrag.js', // step 3 · unused assignment to `book`
       'client/src/hooks/usePageTurnController.js', // step 4 · unused assignment to `restored`
       'client/src/utils/epubNavigation.js', // step 4 · dead `isSameDisplayedPage`
-      'client/test/libraryView.test.js', // step 3 · unused assignment to `preferences`
     ],
     rules: {
       'no-unused-vars': 'off',

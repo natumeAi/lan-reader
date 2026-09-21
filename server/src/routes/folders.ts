@@ -16,7 +16,7 @@ import type {
   MoveFolderBookToShelfResponse,
   ShelfItemsResponse,
 } from '@lan-reader/shared';
-import { notFound } from '../http/httpError.js';
+import { badRequest, notFound } from '../http/httpError.js';
 import {
   parseBookIds,
   parsePositiveInteger,
@@ -106,7 +106,11 @@ router.patch('/:id', (req, res: Response<FolderResponse>, next) => {
   try {
     const db = requireDatabase(req);
     const folderId = parsePositiveInteger(req.params.id, 'folder id');
-    const folder = renameFolder(db, folderId, readRequestBody(req).name);
+    const body = readRequestBody(req);
+    if (!Object.hasOwn(body, 'name')) {
+      throw badRequest('name is required');
+    }
+    const folder = renameFolder(db, folderId, body.name);
 
     if (!folder) {
       throw notFound('Folder not found');

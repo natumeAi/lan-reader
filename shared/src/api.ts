@@ -4,7 +4,7 @@
  * Every entry mirrors a `res.json(...)` call in `server/src/routes/`. Envelope
  * property names are part of the compatibility surface and must not be renamed.
  */
-import type { BookDto, CatalogBookDto, UploadedBookRecord } from './book.js';
+import type { BookDto, CatalogBookDto } from './book.js';
 import type { FolderDto } from './folder.js';
 import type { ShelfItemDto } from './shelf.js';
 import type { LibrarySnapshot } from './librarySnapshot.js';
@@ -25,25 +25,9 @@ export interface CatalogBooksResponse {
   readonly books: CatalogBookDto[];
 }
 
-/** `GET /api/books/:id`, `DELETE /api/books/:id`. */
+/** `GET /api/books/:id`, `POST /api/books` (201), `DELETE /api/books/:id`. */
 export interface BookResponse {
   readonly book: BookDto;
-}
-
-/**
- * `POST /api/books` (201).
- *
- * Same envelope property as `BookResponse`, but the value is the raw snake_case
- * row the upload route echoes back, not a `BookDto` — see `UploadedBookRecord`.
- *
- * `book` is nullable because the import helper the route calls answers `null`
- * for a path it will not take (a stored file that is not a readable EPUB), and
- * the route serialises that answer without checking it. No upload observed so
- * far reaches it, but the envelope describes what the route can emit rather
- * than what it usually emits.
- */
-export interface UploadBookResponse {
-  readonly book: UploadedBookRecord | null;
 }
 
 /** `GET /api/folders`. */

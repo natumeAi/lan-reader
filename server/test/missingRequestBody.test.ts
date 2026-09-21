@@ -82,26 +82,46 @@ test('routes that read a body answer 400 whether the body is missing or empty', 
   db.close();
 });
 
-test('renaming a Folder without a body reports the missing Folder, not a 400', async () => {
+test('renaming requires a name key and never resets a Folder on a missing body', async () => {
   const db = createLibrary();
 
   await withServer(createApp({ db }), async (baseUrl) => {
-    // No body means "no name was sent", which normalises to the default name —
-    // so this route reaches the database and answers 404 for an absent Folder.
+    // Validate the patch before any mutation, even when the Folder is absent.
     const missingFolder = await fetch(`${baseUrl}/api/folders/1`, { method: 'PATCH' });
-    assert.equal(missingFolder.status, 404);
-    assert.deepEqual(await missingFolder.json(), { error: 'Folder not found' });
+    assert.equal(missingFolder.status, 400);
+    assert.deepEqual(await missingFolder.json(), { error: 'name is required' });
 
     db.prepare<[string, number]>(
       'INSERT INTO folders (id, name, sort_order) VALUES (1, ?, ?)',
     ).run('技术', 1000);
 
-    const existingFolder = await fetch(`${baseUrl}/api/folders/1`, { method: 'PATCH' });
+    for (const body of [undefined, {}]) {
+      const rejected = await fetch(`${baseUrl}/api/folders/1`, {
+        method: 'PATCH',
+        ...(body === undefined ? {} : jsonRequest(body)),
+      });
+      assert.equal(rejected.status, 400);
+      assert.deepEqual(await rejected.json(), { error: 'name is required' });
+      const unchanged = await readJsonRecord(await fetch(`${baseUrl}/api/folders/1`));
+      assert.equal(readRecord(unchanged['folder'], 'folder')['name'], '技术');
+    }
+
+    const existingFolder = await fetch(`${baseUrl}/api/folders/1`, {
+      method: 'PATCH',
+      ...jsonRequest({ name: '' }),
+    });
     assert.equal(existingFolder.status, 200);
     assert.equal(
       readRecord((await readJsonRecord(existingFolder))['folder'], 'folder')['name'],
       '新建文件夹',
     );
+
+    const namedMissing = await fetch(`${baseUrl}/api/folders/99`, {
+      method: 'PATCH',
+      ...jsonRequest({ name: '有效名称' }),
+    });
+    assert.equal(namedMissing.status, 404);
+    assert.deepEqual(await namedMissing.json(), { error: 'Folder not found' });
   });
 
   db.close();
