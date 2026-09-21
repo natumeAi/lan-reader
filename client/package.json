@@ -8,9 +8,7 @@
     "build": "vite build",
     "preview": "vite preview --host 0.0.0.0",
     "typecheck": "tsc -p tsconfig.app.json && tsc -p tsconfig.node.json",
-    "test": "npm run test:legacy && npm run test:ts",
-    "test:legacy": "node --import tsx --test \"test/**/*.test.{js,jsx}\"",
-    "test:ts": "node --import tsx --test \"test/**/*.test.{ts,tsx}\""
+    "test": "node --import tsx --test \"test/**/*.test.{ts,tsx}\""
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

@@ -5,9 +5,8 @@ import tseslint from 'typescript-eslint';
 /**
  * Flat config for the whole workspace.
  *
- * Legacy `.js`/`.jsx` application files are still present while the migration
- * runs (see docs/migration/js-coexistence.md); they are linted with the plain
- * JavaScript rules. TypeScript files get the typescript-eslint rules on top.
+ * Application and test modules use TypeScript. Plain JavaScript rules remain
+ * for build/configuration scripts; TypeScript gets its recommended rules on top.
  */
 export default tseslint.config(
   {
@@ -46,7 +45,7 @@ export default tseslint.config(
     },
   },
   {
-    files: ['client/src/**/*.{js,jsx,ts,tsx}'],
+    files: ['client/src/**/*.{ts,tsx}'],
     languageOptions: {
       globals: { ...globals.browser },
     },
@@ -60,7 +59,7 @@ export default tseslint.config(
   {
     // Express recognises an error handler by its four-parameter signature, so
     // `next` has to be declared even when the handler never calls it.
-    files: ['server/src/**/*.{js,ts}'],
+    files: ['server/src/**/*.ts'],
     rules: {
       'no-unused-vars': [
         'error',
@@ -77,14 +76,14 @@ export default tseslint.config(
   {
     // Upload file names are sanitised by stripping C0 control characters, which
     // is exactly what this rule flags.
-    files: ['server/src/services/fileStorage.{js,ts}'],
+    files: ['server/src/services/fileStorage.ts'],
     rules: {
       'no-control-regex': 'off',
     },
   },
   {
     // Client tests drive a jsdom document and install it on the global scope.
-    files: ['client/test/**/*.{js,jsx,ts,tsx}'],
+    files: ['client/test/**/*.{ts,tsx}'],
     languageOptions: {
       globals: { ...globals.node, ...globals.browser },
     },
@@ -111,20 +110,6 @@ export default tseslint.config(
           varsIgnorePattern: '^_',
         },
       ],
-    },
-  },
-  {
-    // Findings inherited from the pre-migration sources, kept visible instead of
-    // silently fixed: each file is converted by the step listed in
-    // docs/migration/js-coexistence.md, and the exception is removed there.
-    // Nothing may be added to this list — new code is linted without exceptions.
-    files: [
-      'client/src/hooks/usePageTurnController.js', // step 4 · unused assignment to `restored`
-      'client/src/utils/epubNavigation.js', // step 4 · dead `isSameDisplayedPage`
-    ],
-    rules: {
-      'no-unused-vars': 'off',
-      'no-useless-assignment': 'off',
     },
   },
 );

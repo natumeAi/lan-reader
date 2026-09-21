@@ -5,9 +5,7 @@
     "moduleResolution": "NodeNext",
     "lib": ["ES2023"],
     "types": ["node"],
-    "noEmit": true,
-    "allowJs": true,
-    "checkJs": false
+    "noEmit": true
   },
-  "include": ["src/**/*.ts", "src/**/*.js", "test/**/*.ts", "test/**/*.js"]
+  "include": ["src/**/*.ts", "test/**/*.ts"]
 }

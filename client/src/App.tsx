@@ -17,7 +17,7 @@ import { useReaderSession } from './hooks/useReaderSession.js';
 import { useShelfData } from './hooks/useShelfData.js';
 import { rectIntersectsViewport } from './utils/folderMotion.js';
 
-const ReaderView = lazy(() => import('./components/reader/ReaderView.jsx'));
+const ReaderView = lazy(() => import('./components/reader/ReaderView.js'));
 
 function ReaderRestoreFallback() {
   return (

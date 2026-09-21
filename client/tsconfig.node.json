@@ -9,9 +9,7 @@
     "lib": ["ES2023", "DOM", "DOM.Iterable"],
     "types": ["node"],
     "jsx": "react-jsx",
-    "noEmit": true,
-    "allowJs": true,
-    "checkJs": false
+    "noEmit": true
   },
-  "include": ["vite.config.ts", "test/**/*.ts", "test/**/*.tsx", "test/**/*.js", "test/**/*.jsx"]
+  "include": ["vite.config.ts", "test/**/*.ts", "test/**/*.tsx"]
 }
