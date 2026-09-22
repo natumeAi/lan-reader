@@ -4,6 +4,7 @@ type Backend = 'scroll' | 'compositor';
 export interface TurnResult { status: 'completed' | 'cancelled' | 'unavailable'; backend: Backend; reason?: string }
 interface Unavailable { available: false; reason: string }
 interface ScrollCoordinates { maxScroll: number; direction: string; rtlScrollType?: string }
+interface ScrollGeometry { contentWidth: number; maxScroll: number; scrollLeft: number }
 type StyledElement = EpubElement & { style: EpubStyle };
 interface ScrollCapability extends ScrollCoordinates {
   available: true; reason: null; manager: EpubManager; scroller: EpubScroller & { style: EpubStyle };
@@ -51,6 +52,8 @@ const DEFAULT_PAGE_TURN_BACKEND = 'compositor';
 // GPU layer even when only one page is visible.
 const MAX_COMPOSITOR_VIEWPORT_AREAS = 4;
 const SUPPORTED_RTL_SCROLL_TYPES = new Set(['default', 'negative']);
+const TRANSIENT_COMPOSITOR_REASONS = new Set(['geometry', 'views', 'view-disconnected']);
+const EASE_OUT_CUBIC_SAMPLES = sampleEaseOutCubicKeyframes();
 
 function unavailable(reason: string): Unavailable {
   return { available: false, reason };
@@ -179,6 +182,11 @@ export function createEpubPageTurnAdapter(rendition: ReaderRendition, environmen
 
   function forcedBackend() {
     return debugConfig.enabled ? debugConfig.forceBackend : null;
+  }
+
+  function compositorFailureBlocksRetry() {
+    return compositorDisabledReason !== null &&
+      !TRANSIENT_COMPOSITOR_REASONS.has(compositorDisabledReason);
   }
 
   function inspectScrollCapability(): ScrollCapability | Unavailable {
@@ -480,7 +488,7 @@ export function createEpubPageTurnAdapter(rendition: ReaderRendition, environmen
     const capability = inspectScrollCapability();
     if (!capability.available) return capability;
     if (forcedBackend() === 'compositor') {
-      if (compositorDisabledReason) return unavailable(compositorDisabledReason);
+      if (compositorFailureBlocksRetry()) return unavailable(compositorDisabledReason!);
       const compositor = inspectCompositor(capability, null, {
         ignoreSurfaceBudget: true,
       });
@@ -489,25 +497,33 @@ export function createEpubPageTurnAdapter(rendition: ReaderRendition, environmen
     return capability;
   }
 
-  function readLogical(activeSession = session) {
-    if (!activeSession) return Number.NaN;
+  // A snapshot belongs to one synchronous update only. Read again on the next
+  // frame so epub.js prepend/trim and reflow can rebase the retained anchor.
+  function readScrollGeometry(activeSession: AdapterSession): ScrollGeometry {
+    const scroller = activeSession.scroller;
+    const contentWidth = Number(scroller.scrollWidth);
+    const viewportWidth = Number(scroller.clientWidth || scroller.offsetWidth);
+    return {
+      contentWidth,
+      maxScroll: Math.max(0, contentWidth - viewportWidth),
+      scrollLeft: Number(scroller.scrollLeft),
+    };
+  }
+
+  function readLogical(activeSession = session, geometry = activeSession && readScrollGeometry(activeSession)) {
+    if (!activeSession || !geometry) return Number.NaN;
     return toLogicalScroll({
-      scrollLeft: Number(activeSession.scroller.scrollLeft),
-      maxScroll: liveMaxScroll(activeSession),
+      scrollLeft: geometry.scrollLeft,
+      maxScroll: geometry.maxScroll,
       direction: activeSession.direction,
       rtlScrollType: activeSession.rtlScrollType,
     });
   }
 
-  function liveMaxScroll(activeSession: AdapterSession) {
-    const scroller = activeSession.scroller;
-    return Math.max(0, Number(scroller.scrollWidth) - Number(scroller.clientWidth || scroller.offsetWidth));
-  }
-
-  function liveOrigin(activeSession: AdapterSession): number | null {
+  function liveOrigin(activeSession: AdapterSession, geometry = readScrollGeometry(activeSession)): number | null {
     const currentWidth = Number(activeSession.manager.layout?.pageWidth) * Number(activeSession.manager.layout?.divisor || 1);
     if (Math.abs(currentWidth - activeSession.pageWidth) > ALIGNMENT_EPSILON_PX) return null;
-    const contentUnchanged = Math.abs(Number(activeSession.scroller.scrollWidth) - activeSession.contentWidth) <= ALIGNMENT_EPSILON_PX;
+    const contentUnchanged = Math.abs(geometry.contentWidth - activeSession.contentWidth) <= ALIGNMENT_EPSILON_PX;
     const views = activeSession.manager.views?.all?.() || activeSession.manager.views?.displayed?.();
     const anchor = activeSession.layoutAnchors.find(({ element }) => (
       element.isConnected !== false && (!views || views.some((view) => view.element === element))
@@ -520,12 +536,12 @@ export function createEpubPageTurnAdapter(rendition: ReaderRendition, environmen
       physicalOrigin = originPhysical + offsetLeft - anchor.offsetLeft;
     } else {
       if (contentUnchanged) return activeSession.origin;
-      const geometry = readViewGeometry(anchor.element);
-      if (!geometry) return null;
-      physicalOrigin = Number(activeSession.scroller.scrollLeft) + geometry.left - anchor.left -
+      const anchorGeometry = readViewGeometry(anchor.element);
+      if (!anchorGeometry) return null;
+      physicalOrigin = geometry.scrollLeft + anchorGeometry.left - anchor.left -
         (activeSession.backend === 'compositor' ? activeSession.visualOffset : activeSession.boundaryOffset);
     }
-    return toLogicalScroll({ ...activeSession, maxScroll: liveMaxScroll(activeSession), scrollLeft: physicalOrigin });
+    return toLogicalScroll({ ...activeSession, maxScroll: geometry.maxScroll, scrollLeft: physicalOrigin });
   }
 
   function restoreContentPosition(activeSession: AdapterSession) {
@@ -534,15 +550,16 @@ export function createEpubPageTurnAdapter(rendition: ReaderRendition, environmen
     restoreSessionStyles(activeSession);
     activeSession.visualOffset = 0;
     activeSession.boundaryOffset = 0;
-    const origin = liveOrigin(activeSession);
+    const geometry = readScrollGeometry(activeSession);
+    const origin = liveOrigin(activeSession, geometry);
     if (origin === null) return false;
-    writeLogical(origin + (activeSession.committedDelta ?? 0) * activeSession.pageWidth, activeSession);
+    writeLogical(origin + (activeSession.committedDelta ?? 0) * activeSession.pageWidth, activeSession, geometry);
     return true;
   }
 
-  function writeLogical(logicalScroll: number, activeSession = session) {
-    if (!activeSession) return;
-    const maxScroll = liveMaxScroll(activeSession);
+  function writeLogical(logicalScroll: number, activeSession = session, geometry = activeSession && readScrollGeometry(activeSession)) {
+    if (!activeSession || !geometry) return;
+    const { maxScroll } = geometry;
     const clamped = Math.min(maxScroll, Math.max(0, logicalScroll));
     activeSession.scroller.scrollLeft = toPhysicalScroll({
       logicalScroll: clamped,
@@ -777,7 +794,7 @@ export function createEpubPageTurnAdapter(rendition: ReaderRendition, environmen
   }
 
   function createTransformKeyframes(from: number, to: number, pageWidth = 0) {
-    return sampleEaseOutCubicKeyframes().map(({ offset, value }) => ({
+    return EASE_OUT_CUBIC_SAMPLES.map(({ offset, value }) => ({
       offset,
       transform: transformForOffset(
         pageWidth + from + ((to - from) * value),
@@ -859,14 +876,17 @@ export function createEpubPageTurnAdapter(rendition: ReaderRendition, environmen
       forceBackend !== 'scroll' && DEFAULT_PAGE_TURN_BACKEND === 'compositor'
     );
     const compositor = shouldInspectCompositor
-      ? compositorDisabledReason
-        ? unavailable(compositorDisabledReason)
+      ? compositorFailureBlocksRetry()
+        ? unavailable(compositorDisabledReason!)
         : inspectCompositor(capability, edgeElement, {
             ignoreSurfaceBudget: forceBackend === 'compositor',
           })
       : unavailable('not-selected');
     const backend = selectBackend({ compositor, forceBackend });
     if (!backend) return null;
+    // Geometry invalidates the old turn, not the capability of later turns.
+    // Only a fresh begin/inspection may retry; animation failures stay disabled.
+    if (compositor.available) compositorDisabledReason = null;
 
     let resolveCancellation!: (result: TurnResult) => void;
     const cancellationPromise = new Promise<TurnResult>((resolve) => {
@@ -926,9 +946,11 @@ export function createEpubPageTurnAdapter(rendition: ReaderRendition, environmen
   }
 
   function dragBy(pointerDistanceX: number) {
-    if (!session || !activateSessionStyles(session)) return null;
-    const origin = liveOrigin(session);
+    if (!session) return null;
+    const geometry = readScrollGeometry(session);
+    const origin = liveOrigin(session, geometry);
     if (origin === null) return null;
+    if (!activateSessionStyles(session)) return null;
     let effectiveDistanceX = clampDragDistance(pointerDistanceX, session.pageWidth);
     const direction = effectiveDistanceX < 0 ? 'next' : 'prev';
     const missingNeighbor =
@@ -945,11 +967,11 @@ export function createEpubPageTurnAdapter(rendition: ReaderRendition, environmen
     } else {
       if (missingNeighbor) {
         effectiveDistanceX = dampBoundaryDistance(pointerDistanceX);
-        writeLogical(origin);
+        writeLogical(origin, session, geometry);
         setBoundaryOffset(effectiveDistanceX);
       } else {
         setBoundaryOffset(0);
-        writeLogical(origin - effectiveDistanceX);
+        writeLogical(origin - effectiveDistanceX, session, geometry);
       }
       setEdgeOffset(effectiveDistanceX);
     }
@@ -957,7 +979,7 @@ export function createEpubPageTurnAdapter(rendition: ReaderRendition, environmen
     const frameTime = now();
     diagnostics.markAnimationStart(session.diagnosticRecordId, frameTime);
     diagnostics.markVisualUpdate(session.diagnosticRecordId, frameTime);
-    diagnostics.frame(session.diagnosticRecordId, frameTime);
+    diagnostics.frame(session.diagnosticRecordId, frameTime, 'visual-update');
 
     return {
       boundary: missingNeighbor,
@@ -969,14 +991,15 @@ export function createEpubPageTurnAdapter(rendition: ReaderRendition, environmen
 
   function isStableAt(pageDelta: number) {
     if (!session || ![-1, 0, 1].includes(pageDelta)) return false;
-    const origin = liveOrigin(session);
+    const geometry = readScrollGeometry(session);
+    const origin = liveOrigin(session, geometry);
     if (origin === null) return false;
     const target = origin + pageDelta * session.pageWidth;
     const visualsSettled =
       Math.abs(session.boundaryOffset) <= ALIGNMENT_EPSILON_PX &&
       Math.abs(session.visualOffset) <= ALIGNMENT_EPSILON_PX;
     return visualsSettled && (
-      Math.abs(readLogical() - target) <= ALIGNMENT_EPSILON_PX ||
+      Math.abs(readLogical(session, geometry) - target) <= ALIGNMENT_EPSILON_PX ||
       isStableAtVisualPage(session, pageDelta)
     );
   }
@@ -1084,7 +1107,8 @@ export function createEpubPageTurnAdapter(rendition: ReaderRendition, environmen
         if (activeSession.manager?.ignore === true) {
           activeSession.manager.ignore = false;
         }
-        const origin = liveOrigin(activeSession);
+        const geometry = readScrollGeometry(activeSession);
+        const origin = liveOrigin(activeSession, geometry);
         if (origin === null) {
           resolve(invalidateCompositorSession(activeSession, 'geometry'));
           return;
@@ -1092,6 +1116,7 @@ export function createEpubPageTurnAdapter(rendition: ReaderRendition, environmen
         writeLogical(
           origin + pageDelta * activeSession.pageWidth,
           activeSession,
+          geometry,
         );
         restoreCompositorVisual(activeSession);
         activeSession.committedDelta = pageDelta;
@@ -1201,8 +1226,9 @@ export function createEpubPageTurnAdapter(rendition: ReaderRendition, environmen
     stopAnimation();
     const duration = Math.max(0, Number(options.duration) || 0);
     const startTime = now();
-    const startLogical = readLogical();
-    const origin = liveOrigin(session);
+    const startGeometry = readScrollGeometry(session);
+    const startLogical = readLogical(session, startGeometry);
+    const origin = liveOrigin(session, startGeometry);
     if (origin === null) return Promise.resolve(result('unavailable'));
     const startBoundaryOffset = session.boundaryOffset;
     const destination = origin + pageDelta * session.pageWidth;
@@ -1227,7 +1253,8 @@ export function createEpubPageTurnAdapter(rendition: ReaderRendition, environmen
         const elapsed = now() - startTime;
         const linearProgress = duration === 0 ? 1 : Math.min(1, elapsed / duration);
         const easedProgress = easeOutCubic(linearProgress);
-        const currentOrigin = liveOrigin(session);
+        const geometry = readScrollGeometry(session);
+        const currentOrigin = liveOrigin(session, geometry);
         if (currentOrigin === null) {
           animation = null;
           cancelDiagnostic(diagnosticRecordId, 'geometry', frameTime);
@@ -1237,7 +1264,7 @@ export function createEpubPageTurnAdapter(rendition: ReaderRendition, environmen
         const logical = currentOrigin + startLogical - origin + (destination - startLogical) * easedProgress;
         const boundaryOffset = startBoundaryOffset * (1 - easedProgress);
 
-        writeLogical(logical);
+        writeLogical(logical, session, geometry);
         setBoundaryOffset(boundaryOffset);
         setEdgeOffset(currentOrigin - logical + boundaryOffset);
         diagnostics.markVisualUpdate(diagnosticRecordId, frameTime);

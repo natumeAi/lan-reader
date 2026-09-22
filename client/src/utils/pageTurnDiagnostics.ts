@@ -1,10 +1,12 @@
 export interface DebugConfig { enabled: boolean; forceBackend: 'scroll' | 'compositor' | null }
+type FrameSampleSource = 'animation-frame' | 'visual-update';
 interface DiagnosticRecord {
   action: string | null; backend: string | null; inputTime: number;
   firstVisualTime: number | null; animationStartTime: number | null; endTime: number | null;
   frameTimestamps: number[]; cancelReason: string | null; samplerFrameId: number | null;
+  frameSampleSource: FrameSampleSource | 'mixed' | null;
 }
-type TerminalRecord = Omit<DiagnosticRecord, 'samplerFrameId' | 'frameTimestamps'> & Omit<ReturnType<typeof summarizePageTurnFrames>, 'frameIntervalsMs'> & { frameTimestamps: readonly number[]; frameIntervalsMs: readonly number[] };
+type TerminalRecord = Omit<DiagnosticRecord, 'samplerFrameId' | 'frameTimestamps' | 'frameSampleSource'> & Omit<ReturnType<typeof summarizePageTurnFrames>, 'frameIntervalsMs'> & { frameTimestamps: readonly number[]; frameIntervalsMs: readonly number[] };
 type DiagnosticFacade = { getRecords: () => ReturnType<typeof copyRecord>[]; clear: () => void };
 interface DiagnosticsEnvironment {
   cancelAnimationFrame?: typeof cancelAnimationFrame; enabled?: boolean;
@@ -15,6 +17,10 @@ export const PAGE_TURN_DEBUG_STORAGE_KEY = 'epub-reader:page-turn-debug';
 
 const DIAGNOSTICS_FACADE_NAME = '__EPUB_READER_PAGE_TURN_DIAGNOSTICS__';
 const MAX_COMPLETED_RECORDS = 200;
+const TARGET_REFRESH_RATE_HZ = 120;
+// Accommodate sub-millisecond scheduler jitter without hiding a missed 120 Hz
+// interval. This is an explicit comparison target, not a detected display rate.
+const FRAME_BUDGET_TOLERANCE_MS = 0.5;
 
 function roundToTwo(value: number) {
   return Math.round(value * 100) / 100;
@@ -56,7 +62,7 @@ export function readPageTurnDebugConfig(storage?: Pick<Storage, 'getItem'> | nul
   }
 }
 
-export function summarizePageTurnFrames(record: Partial<Pick<DiagnosticRecord, 'inputTime' | 'firstVisualTime'>> & { frameTimestamps?: readonly number[] } = {}) {
+export function summarizePageTurnFrames(record: Partial<Pick<DiagnosticRecord, 'inputTime' | 'firstVisualTime' | 'frameSampleSource'>> & { frameTimestamps?: readonly number[] } = {}) {
   const frameTimestamps = Array.isArray(record.frameTimestamps)
     ? record.frameTimestamps
     : [];
@@ -93,6 +99,21 @@ export function summarizePageTurnFrames(record: Partial<Pick<DiagnosticRecord, '
     && Number.isFinite(record.firstVisualTime);
 
   return {
+    // Retain averageFps for existing consumers, but label what it measures:
+    // rAF/visual-update callbacks cannot measure compositor presentation.
+    frameRateMeasurement: 'main-thread-sample-cadence' as const,
+    frameSampleSource: record.frameSampleSource ?? 'unspecified' as const,
+    frameSampleCount: frameTimestamps.filter(Number.isFinite).length,
+    frameIntervalCount: intervals.length,
+    maxFrameIntervalMs: sortedIntervals.length > 0
+      ? roundToTwo(sortedIntervals[sortedIntervals.length - 1]!)
+      : 0,
+    targetRefreshRateHz: TARGET_REFRESH_RATE_HZ,
+    targetFrameIntervalMs: roundToTwo(1000 / TARGET_REFRESH_RATE_HZ),
+    frameBudgetToleranceMs: FRAME_BUDGET_TOLERANCE_MS,
+    intervalsOverTargetBudget: intervals.filter((interval) => (
+      interval > 1000 / TARGET_REFRESH_RATE_HZ + FRAME_BUDGET_TOLERANCE_MS
+    )).length,
     averageFps: elapsed > 0 ? roundToTwo((intervals.length * 1000) / elapsed) : 0,
     inputLatencyMs: hasInputLatency
       ? roundToTwo(record.firstVisualTime! - record.inputTime!)
@@ -165,6 +186,7 @@ export function createPageTurnDiagnostics({
       animationStartTime: null,
       endTime: null,
       frameTimestamps: [],
+      frameSampleSource: null,
       cancelReason: null,
       samplerFrameId: null,
     });
@@ -187,9 +209,12 @@ export function createPageTurnDiagnostics({
     if (options?.sampleFrames === true) scheduleSample(recordId!, record);
   }
 
-  function frame(recordId: number | null | undefined, timestamp: number) {
+  function frame(recordId: number | null | undefined, timestamp: number, source: FrameSampleSource = 'animation-frame') {
     const record = getActiveRecord(recordId);
     if (!record || !Number.isFinite(timestamp)) return;
+    record.frameSampleSource = record.frameSampleSource === null
+      ? source
+      : record.frameSampleSource === source ? source : 'mixed';
     record.frameTimestamps.push(timestamp);
   }
 
