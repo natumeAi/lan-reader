@@ -1,6 +1,5 @@
 import type { ChangeEvent, RefObject } from 'react';
 import { isRecord } from '@lan-reader/shared';
-import type { ReaderContents } from '../types/epub.js';
 import type { SessionRendition } from '../types/readerSession.js';
 
 export interface ReaderSettings { fontSize: number; fontFamilyId: string; horizontalMargin: number; verticalMargin: number; lineHeight: number; letterSpacing: number; themeId: string }
@@ -16,7 +15,6 @@ export interface ReaderSettingsOptions {
   renditionRef: RefObject<SessionRendition | null>;
 }
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { configureEpubPageGap } from '../utils/epubPageTurnAdapter.js';
 
 const SETTINGS_SAVE_DEBOUNCE_MS = 500;
 const SETTINGS_STORAGE_KEY = 'epub-reader:reader-settings';
@@ -42,8 +40,6 @@ const DEFAULT_LETTER_SPACING = 0;
 const LETTER_SPACING_MIN = 0;
 const LETTER_SPACING_MAX = 0.12;
 const LETTER_SPACING_STEP = 0.02;
-const READER_LAYOUT_STYLE_ID = 'reader-layout-settings';
-const READER_THEME_STYLE_ID = 'reader-theme-settings';
 const DEFAULT_FONT_FAMILY_ID = 'system';
 const DEFAULT_THEME_ID = 'light';
 const FONT_FAMILY_OPTIONS: [FontOption, ...FontOption[]] = [
@@ -252,13 +248,9 @@ function saveReaderSettingsToStorage(settings: ReaderSettings) {
 function getReaderLayoutCss({
   fontFamilyId,
   fontSize,
-  horizontalMargin,
-  verticalMargin,
   lineHeight,
   letterSpacing,
 }: ReaderSettings) {
-  const effectiveVerticalMargin = getEffectiveVerticalMargin(verticalMargin);
-  const effectiveHorizontalMargin = getEffectiveHorizontalMargin(horizontalMargin);
   const fontFamily = getReaderFontFamily(fontFamilyId);
 
   return `
@@ -272,10 +264,10 @@ function getReaderLayoutCss({
       box-sizing: border-box !important;
       font-family: ${fontFamily} !important;
       font-size: ${fontSize}px !important;
-      padding-left: ${effectiveHorizontalMargin}px !important;
-      padding-right: ${effectiveHorizontalMargin}px !important;
-      padding-top: ${effectiveVerticalMargin}px !important;
-      padding-bottom: ${effectiveVerticalMargin}px !important;
+      padding-left: 0 !important;
+      padding-right: 0 !important;
+      padding-top: 0 !important;
+      padding-bottom: 0 !important;
       line-height: ${lineHeight} !important;
       letter-spacing: ${letterSpacing}em !important;
       overflow-wrap: anywhere !important;
@@ -317,138 +309,12 @@ function getReaderThemeCss(theme: ThemeOption) {
   `;
 }
 
-function applyReaderLayoutStylesToContents(contents: ReaderContents | null, settings: ReaderSettings) {
-  if (!contents) return;
-
-  contents.addStylesheetCss?.(getReaderLayoutCss(settings), READER_LAYOUT_STYLE_ID);
-
-  const fontSize = `${settings.fontSize}px`;
-  const fontFamily = getReaderFontFamily(settings.fontFamilyId);
-  const horizontalMargin = `${getEffectiveHorizontalMargin(settings.horizontalMargin)}px`;
-  const verticalMargin = `${getEffectiveVerticalMargin(settings.verticalMargin)}px`;
-  const lineHeight = String(settings.lineHeight);
-  const letterSpacing = `${settings.letterSpacing}em`;
-
-  contents.css?.('box-sizing', 'border-box', true);
-  contents.css?.('font-size', fontSize, true);
-  contents.css?.('font-family', fontFamily, true);
-  contents.css?.('padding-left', horizontalMargin, true);
-  contents.css?.('padding-right', horizontalMargin, true);
-  contents.css?.('padding-top', verticalMargin, true);
-  contents.css?.('padding-bottom', verticalMargin, true);
-  contents.css?.('line-height', lineHeight, true);
-  contents.css?.('letter-spacing', letterSpacing, true);
-  contents.css?.('overflow-wrap', 'anywhere', true);
-}
-
-function applyReaderThemeStylesToContents(contents: ReaderContents | null, theme: ThemeOption) {
-  if (!contents) return;
-
-  contents.addStylesheetCss?.(getReaderThemeCss(theme), READER_THEME_STYLE_ID);
-  contents.css?.('background', theme.background, true);
-  contents.css?.('color', theme.text, true);
-}
-
-function applyReaderLayoutStylesToFrames(container: HTMLElement | null, settings: ReaderSettings) {
-  if (!container) return;
-
-  const fontSize = `${settings.fontSize}px`;
-  const fontFamily = getReaderFontFamily(settings.fontFamilyId);
-  const horizontalMargin = `${getEffectiveHorizontalMargin(settings.horizontalMargin)}px`;
-  const verticalMargin = `${getEffectiveVerticalMargin(settings.verticalMargin)}px`;
-
-  container.querySelectorAll('iframe').forEach((iframe) => {
-    const body = iframe.contentDocument?.body;
-    if (!body) return;
-
-    body.style.setProperty('box-sizing', 'border-box', 'important');
-    body.style.setProperty('font-size', fontSize, 'important');
-    body.style.setProperty('font-family', fontFamily, 'important');
-    body.style.setProperty('padding-left', horizontalMargin, 'important');
-    body.style.setProperty('padding-right', horizontalMargin, 'important');
-    body.style.setProperty('padding-top', verticalMargin, 'important');
-    body.style.setProperty('padding-bottom', verticalMargin, 'important');
-    body.style.setProperty('overflow-wrap', 'anywhere', 'important');
-  });
-}
-
-export function applyReaderSettingsToRendition(rendition: Pick<SessionRendition, 'themes' | 'getContents'> | null, settings: ReaderSettings) {
-  if (!rendition?.themes) return;
-  const theme = getReaderTheme(settings.themeId);
-  const horizontalMargin = `${getEffectiveHorizontalMargin(settings.horizontalMargin)}px`;
-  const verticalMargin = `${getEffectiveVerticalMargin(settings.verticalMargin)}px`;
-  const lineHeight = String(settings.lineHeight);
-  const letterSpacing = `${settings.letterSpacing}em`;
-
-  try {
-    rendition.themes.register(settings.themeId, {
-      body: {
-        background: `${theme.background} !important`,
-        color: `${theme.text} !important`,
-      },
-      a: {
-        color: 'inherit !important',
-      },
-      '::selection': {
-        background: `${theme.selection} !important`,
-      },
-    });
-    rendition.themes.select(settings.themeId);
-  } catch {
-    // Content CSS below is the compatibility path for epub.js theme quirks.
-  }
-
-  rendition.getContents?.().forEach((contents) => {
-    applyReaderLayoutStylesToContents(contents, settings);
-    applyReaderThemeStylesToContents(contents, theme);
-  });
-  rendition.themes.override('box-sizing', 'border-box', true);
-  rendition.themes.override('padding-left', horizontalMargin, true);
-  rendition.themes.override('padding-right', horizontalMargin, true);
-  rendition.themes.override('padding-top', verticalMargin, true);
-  rendition.themes.override('padding-bottom', verticalMargin, true);
-  rendition.themes.override('line-height', lineHeight, true);
-  rendition.themes.override('letter-spacing', letterSpacing, true);
-  rendition.themes.override('overflow-wrap', 'anywhere', true);
-  rendition.themes.override('background', theme.background, true);
-  rendition.themes.override('color', theme.text, true);
-  rendition.themes.fontSize(`${settings.fontSize}px`);
-  rendition.themes.font(getReaderFontFamily(settings.fontFamilyId));
-}
-
-function applyReaderHorizontalMarginStylesToRendition(rendition: SessionRendition | null, horizontalMargin: number) {
-  if (!rendition?.themes) return;
-
-  const effectiveHorizontalMargin = `${getEffectiveHorizontalMargin(horizontalMargin)}px`;
-
-  rendition.getContents?.().forEach((contents) => {
-    contents.css?.('box-sizing', 'border-box', true);
-    contents.css?.('padding-left', effectiveHorizontalMargin, true);
-    contents.css?.('padding-right', effectiveHorizontalMargin, true);
-  });
-  rendition.themes.override('box-sizing', 'border-box', true);
-  rendition.themes.override('padding-left', effectiveHorizontalMargin, true);
-  rendition.themes.override('padding-right', effectiveHorizontalMargin, true);
-}
-
-async function applyReaderHorizontalMarginToRendition(rendition: SessionRendition | null, horizontalMargin: number, cfi: string | null, isCurrent: () => boolean) {
-  if (!rendition || !isCurrent()) return;
-
-  configureEpubPageGap(rendition, getReaderPageGap(horizontalMargin));
-  rendition.resize?.();
-  applyReaderHorizontalMarginStylesToRendition(rendition, horizontalMargin);
-
-  if (cfi) {
-    await rendition.display(cfi);
-    if (!isCurrent()) return;
-    applyReaderHorizontalMarginStylesToRendition(rendition, horizontalMargin);
-  }
+export function getFoliateStyles(settings: ReaderSettings, fixed = false) {
+  return (fixed ? '' : getReaderLayoutCss(settings)) + getReaderThemeCss(getReaderTheme(settings.themeId));
 }
 
 export function useReaderSettings({
   beforeRenditionMutation,
-  containerRef,
-  currentCfiRef,
   isReaderReady,
   onSettingsReflow,
   renditionRef,
@@ -550,104 +416,15 @@ export function useReaderSettings({
     };
   }, [flushPendingReaderSettings]);
 
-  const syncReaderFrameLayout = useCallback(() => {
-    const container = containerRef.current;
-    const applyLatestLayout = () => {
-      if (containerRef.current !== container) return;
-      applyReaderLayoutStylesToFrames(container, readerSettingsRef.current);
-    };
-    const scheduleTimer = (delay: number) => {
-      const timer = setTimeout(() => {
-        layoutTimersRef.current.delete(timer);
-        applyLatestLayout();
-      }, delay);
-      layoutTimersRef.current.add(timer);
-    };
-
-    applyLatestLayout();
-
-    if (typeof requestAnimationFrame === 'function') {
-      const frame = requestAnimationFrame(() => {
-        layoutFramesRef.current.delete(frame);
-        applyLatestLayout();
-      });
-      layoutFramesRef.current.add(frame);
-    } else {
-      scheduleTimer(0);
-    }
-
-    scheduleTimer(120);
-  }, [containerRef]);
-
-  const applyReaderSettings = useCallback((rendition: SessionRendition | null, settings = readerSettingsRef.current) => {
-    applyReaderSettingsToRendition(rendition, settings);
-    syncReaderFrameLayout();
-  }, [syncReaderFrameLayout]);
-
-  const applyReaderSettingsToContents = useCallback((contents: ReaderContents, settings = readerSettingsRef.current) => {
-    const theme = getReaderTheme(settings.themeId);
-    applyReaderLayoutStylesToContents(contents, settings);
-    applyReaderThemeStylesToContents(contents, theme);
-  }, []);
-
-  const applyReaderHorizontalMargin = useCallback((
-    rendition: SessionRendition | null,
-    horizontalMarginValue = readerSettingsRef.current.horizontalMargin,
-    cfi = currentCfiRef.current,
-  ) => (
-    applyReaderHorizontalMarginToRendition(rendition, horizontalMarginValue, cfi, () => settingsActiveRef.current && renditionRef.current === rendition)
-      .then((result) => {
-        if (settingsActiveRef.current && renditionRef.current === rendition) syncReaderFrameLayout();
-        return result;
-      })
-  ), [currentCfiRef, renditionRef, syncReaderFrameLayout]);
-
-  useEffect(() => {
-    if (!isReaderReady) return undefined;
-    const rendition = renditionRef.current;
-    beforeRenditionMutation?.();
-    if (!rendition || renditionRef.current !== rendition) return undefined;
-    applyReaderSettings(rendition, readerSettingsRef.current);
-
-    const timer = setTimeout(() => {
-      onSettingsReflow?.(rendition);
-    }, 80);
-
-    return () => clearTimeout(timer);
-  }, [
-    applyReaderSettings,
-    beforeRenditionMutation,
-    isReaderReady,
-    onSettingsReflow,
-    readerSettings,
-    renditionRef,
-  ]);
-
   useEffect(() => {
     if (!isReaderReady) return;
     const rendition = renditionRef.current;
+    if (!rendition) return;
     beforeRenditionMutation?.();
-    if (!rendition || renditionRef.current !== rendition) return;
-    let cancelled = false;
-    applyReaderHorizontalMargin(
-      rendition,
-      horizontalMargin,
-      currentCfiRef.current,
-    )
-      .then(() => {
-        if (!cancelled && renditionRef.current === rendition) onSettingsReflow?.(rendition);
-      })
-      .catch(() => {});
-    return () => { cancelled = true; };
-  }, [
-    applyReaderHorizontalMargin,
-    beforeRenditionMutation,
-    currentCfiRef,
-    horizontalMargin,
-    isReaderReady,
-    onSettingsReflow,
-    renditionRef,
-  ]);
+    void rendition.applySettings(readerSettingsRef.current).then(() => {
+      if (renditionRef.current === rendition) onSettingsReflow?.(rendition);
+    });
+  }, [isReaderReady, readerSettings, renditionRef, beforeRenditionMutation, onSettingsReflow]);
 
   useEffect(() => {
     if (!hasLoadedReaderSettings) return;
@@ -745,9 +522,6 @@ export function useReaderSettings({
   ]);
 
   return {
-    applyReaderHorizontalMargin,
-    applyReaderSettings,
-    applyReaderSettingsToContents,
     decreaseFontSize,
     flushPendingReaderSettings,
     fontFamilyId,

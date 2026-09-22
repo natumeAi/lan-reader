@@ -4,7 +4,7 @@
 
 <h1 align="center">LAN Reader</h1>
 
-<p align="center">自托管的 EPUB 书架与阅读器 · 1.0.0</p>
+<p align="center">自托管的 EPUB 书架与阅读器 · v1.5</p>
 
 LAN Reader 是一款为个人与可信局域网设计的 EPUB 书架和阅读器。把它部署在自己的设备或服务器上，就能在浏览器中管理 EPUB、安静地阅读，并将书库保留在自己掌控的实例中。
 

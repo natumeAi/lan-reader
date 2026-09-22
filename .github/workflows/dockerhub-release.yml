@@ -39,15 +39,20 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::Stable releases must use a vX.Y.Z tag; received $RELEASE_TAG."
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+            echo "::error::Stable releases must use a vX.Y or vX.Y.Z tag; received $RELEASE_TAG."
             exit 1
           fi
 
           release_version="${RELEASE_TAG#v}"
+          # npm requires three components; v1.5 names package version 1.5.0.
+          package_tag_version="$release_version"
+          if [[ "$release_version" =~ ^[0-9]+\.[0-9]+$ ]]; then
+            package_tag_version="${release_version}.0"
+          fi
           package_version="$(node --input-type=module -e 'import { readFileSync } from "node:fs"; const pkg = JSON.parse(readFileSync("package.json", "utf8")); if (typeof pkg.version !== "string") throw new Error("package.json version must be a string"); process.stdout.write(pkg.version);')"
 
-          if [[ "$package_version" != "$release_version" ]]; then
+          if [[ "$package_version" != "$package_tag_version" ]]; then
             echo "::error::Release tag $RELEASE_TAG does not match package.json version $package_version."
             exit 1
           fi
@@ -96,8 +101,8 @@ jobs:
             exit 0
           fi
 
-          if [[ ! "$prior_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::Prior stable release must use a vX.Y.Z tag; found $prior_tag."
+          if [[ ! "$prior_tag" =~ ^v[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+            echo "::error::Prior stable release must use a vX.Y or vX.Y.Z tag; found $prior_tag."
             exit 1
           fi
 

@@ -1,10 +1,10 @@
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react';
 import type { ReaderBook } from '../../types/library.js';
-import type { SessionBook, SessionRendition } from '../../types/readerSession.js';
+import type { SessionRendition } from '../../types/readerSession.js';
 interface ReaderViewProps { book: ReaderBook; originRect?: Pick<DOMRect, 'left' | 'top' | 'width' | 'height'> | null; onBookUnavailable?: (id: number) => void; onClose: () => void; onOriginConsumed?: () => void; onProgressSettled?: () => void }
 import { useCallback, useEffect, useRef, useState } from 'react';
 import '../../styles/reader.css';
-import { useEpubRendition } from '../../hooks/useEpubRendition.js';
+import { useFoliateReader } from '../../hooks/useFoliateReader.js';
 import { useImageViewerSession } from '../../hooks/useImageViewerSession.js';
 import { useModalDialog } from '../../hooks/useModalDialog.js';
 import { usePageTurnController } from '../../hooks/usePageTurnController.js';
@@ -23,6 +23,8 @@ import { ReaderBottomBar } from './ReaderBottomBar.js';
 import { ReaderSettingsPanel } from './ReaderSettingsPanel.js';
 import { ReaderTopBar } from './ReaderTopBar.js';
 import { TocPanel } from './TocPanel.js';
+import { exportReaderDiagnostics } from '../../reader/diagnostics';
+import { PAGE_TURN_DEBUG_STORAGE_KEY, readPageTurnDebugConfig } from '../../utils/pageTurnDiagnostics';
 
 // Open/close FLIP animation: overlay scales between the shelf cover rect and full screen.
 // Same duration/easing both directions to keep open/close symmetric.
@@ -60,7 +62,6 @@ export function ReaderView({
 }: ReaderViewProps) {
   const reducedMotion = useReducedMotion();
   const containerRef = useRef<(HTMLDivElement) | null>(null);
-  const bookRef = useRef<(SessionBook) | null>(null);
   const renditionRef = useRef<(SessionRendition) | null>(null);
   const readerInitialFocusRef = useRef<(HTMLDivElement) | null>(null);
   const currentCfiRef = useRef<(string) | null>(null);
@@ -80,6 +81,7 @@ export function ReaderView({
   }, []);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
+  const [diagnosticsEnabled, setDiagnosticsEnabled] = useState(() => readPageTurnDebugConfig().enabled);
   const [chromeVisible, setChromeVisible] = useState(false);
   // Bottom-bar panel: null | 'toc' | 'settings'
   const [activePanel, setActivePanel] = useState<'toc' | 'settings' | null>(null);
@@ -164,11 +166,7 @@ export function ReaderView({
   }, [refreshCurrentPageProgress]);
 
   const {
-    applyReaderHorizontalMargin,
-    applyReaderSettings,
-    applyReaderSettingsToContents,
     decreaseFontSize,
-    flushPendingReaderSettings,
     fontFamilyId,
     fontFamilyOptions,
     fontSize,
@@ -234,25 +232,19 @@ export function ReaderView({
     captureCurrentProgress,
     currentChapter,
     currentHref,
-    pageTurnAdapter,
+    engine,
+    retry,
+    startChapter,
+    canFallback,
     progress,
     requestBookPagination,
-    recoverNavigationSession,
     toc,
-  } = useEpubRendition({
-    applyReaderHorizontalMargin,
-    applyReaderSettings,
-    applyReaderSettingsToContents,
+  } = useFoliateReader({
     book,
-    bookRef,
     containerRef,
     currentCfiRef,
     enqueueProgress,
-    error,
-    flushPendingReaderSettings,
-    isClosingRef,
     isLayoutReady: isReaderLayoutReady,
-    isLoading,
     loadReaderSettings,
     markReaderSettingsLoaded,
     onBookUnavailable,
@@ -265,6 +257,13 @@ export function ReaderView({
   });
   bookPaginationRequestRef.current = requestBookPagination;
   captureCurrentProgressRef.current = captureCurrentProgress;
+  const handleExportDiagnostics = () => exportReaderDiagnostics(engine, readerSettingsRef.current);
+  const handleStartDiagnostics = () => {
+    try { sessionStorage.setItem(PAGE_TURN_DEBUG_STORAGE_KEY, JSON.stringify({ enabled: true })); } catch { return; }
+    setDiagnosticsEnabled(true);
+    setActivePanel(null);
+    retry();
+  };
 
   useEffect(() => {
     const handleHistoryNavigation = (event: PopStateEvent) => {
@@ -288,7 +287,7 @@ export function ReaderView({
 
   const handleReaderTap = useCallback(({ clientX, clientY }: { clientX: number; clientY: number }) => {
     const image = findContentImageAtViewportPoint(
-      containerRef.current,
+      renditionRef.current?.getContents() ?? [],
       clientX,
       clientY,
     );
@@ -299,6 +298,7 @@ export function ReaderView({
     cancelPageTurn,
     direction: pageTurnDirection,
     handlePointerCancel,
+    handleLostPointerCapture,
     handlePointerDown,
     handlePointerMove: handlePagePointerMove,
     handlePointerUp,
@@ -306,13 +306,12 @@ export function ReaderView({
     phase: pageTurnPhase,
     turnPage,
   } = usePageTurnController({
-    adapter: pageTurnAdapter,
+    engine,
     currentCfiRef,
     disabled: Boolean(activePanel) || isImageViewerOpen || isLoading || Boolean(error),
     edgeRef: pageEdgeRef,
     onCenterTap: handleCenterTap,
     onNavigationSettled: captureCurrentProgress,
-    onNavigationStalled: recoverNavigationSession,
     onPageTurnCommitted: refreshCurrentPageProgress,
     onTap: handleReaderTap,
     reducedMotion,
@@ -323,7 +322,7 @@ export function ReaderView({
     handlePagePointerMove(event);
     if (event.pointerType !== 'mouse' || event.buttons) return;
     const cursor = contentImageCursorAtViewportPoint(
-      containerRef.current,
+      renditionRef.current?.getContents() ?? [],
       event.clientX,
       event.clientY,
     );
@@ -544,7 +543,7 @@ export function ReaderView({
           </div>
         )}
         {error && (
-          <p className="reader-error error-message" role="alert">{error}</p>
+          <div className="reader-error error-message" role="alert"><p>{error}</p><button onClick={retry}>重试</button>{canFallback && <button onClick={startChapter}>从本章开头继续</button>}<button onClick={handleExportDiagnostics}>导出阅读诊断</button></div>
         )}
         <div
           ref={containerRef}
@@ -563,7 +562,9 @@ export function ReaderView({
       {/* Gesture layer: tap thirds (prev / toggle chrome / next) + horizontal swipe */}
       <div
         className="reader-gesture-layer"
+        style={isLoading || error ? { pointerEvents: 'none' } : undefined}
         onPointerCancel={handlePointerCancel}
+        onLostPointerCapture={handleLostPointerCapture}
         onPointerDown={handlePointerDown}
         onPointerLeave={clearGestureCursor}
         onPointerMove={handleGesturePointerMove}
@@ -607,6 +608,9 @@ export function ReaderView({
       )}
       {activePanel === 'settings' && (
         <ReaderSettingsPanel
+          diagnosticsEnabled={diagnosticsEnabled}
+          onStartDiagnostics={handleStartDiagnostics}
+          onExportDiagnostics={handleExportDiagnostics}
           fontFamilyId={fontFamilyId}
           fontFamilyOptions={fontFamilyOptions}
           fontSize={fontSize}
