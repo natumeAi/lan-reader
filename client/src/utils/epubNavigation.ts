@@ -1,6 +1,11 @@
 import type { EpubManager, EpubSection, EpubView, EpubObserver, ReaderRendition } from '../types/epub.js';
 interface Anchor { relativeLeft: number; view: EpubView }
-interface NavigationOptions { managerQueueTimeoutMs?: number; shouldContinue?: () => boolean }
+interface NavigationOptions {
+  managerQueueTimeoutMs?: number;
+  shouldContinue?: () => boolean;
+  waitForCompletion?: boolean;
+  onEnginePendingChange?: (pending: boolean) => void;
+}
 interface LayoutEnvironment {
   requestAnimationFrame?: typeof requestAnimationFrame;
   cancelAnimationFrame?: typeof cancelAnimationFrame;
@@ -536,8 +541,34 @@ export async function navigateBasicRenditionPage(rendition: ReaderRendition | nu
   const firstSectionIndex = canLoadPreviousView
     ? Number(firstView?.section?.index)
     : Number.NaN;
+  const originLeft = Number(firstView?.element?.offsetLeft);
+  const originRelativeLeft = originLeft - scrollLeft;
+  const pageWidth = Number(manager?.layout?.pageWidth) * Number(manager?.layout?.divisor || 1) ||
+    Number(manager?.layout?.delta);
 
-  const result = await Promise.resolve(navigate?.call(rendition));
+  const navigateIfCurrent = async (canMove = shouldContinue) => {
+    if (!shouldContinue()) return;
+    options.onEnginePendingChange?.(true);
+    try {
+      const managerNavigate = direction === 'next' ? manager?.next : manager?.prev;
+      if (rendition?.q && managerNavigate) {
+        // Rendition.prev/next binds an unguarded manager method before enqueueing.
+        // Check ownership inside that queue so cancellation also covers waiting
+        // behind an earlier display, not just the time the input was accepted.
+        await rendition.q.enqueue(() => {
+          if (shouldContinue() && canMove()) return managerNavigate.call(manager);
+          return undefined;
+        });
+        if (shouldContinue()) void Promise.resolve(rendition.reportLocation?.()).catch(() => {});
+        return;
+      }
+      if (canMove()) return await navigate?.call(rendition);
+    } finally {
+      options.onEnginePendingChange?.(false);
+    }
+  };
+
+  const result = await navigateIfCurrent();
   let queueBarrier = null;
   let queueSettled = false;
   if (shouldSettleContinuousPrevious) {
@@ -550,34 +581,56 @@ export async function navigateBasicRenditionPage(rendition: ReaderRendition | nu
 
   const completePreviousTurn = async () => {
     if (!shouldContinue()) return { completed: false, result: undefined };
-    const nextFirstSectionIndex = Number(manager?.views?.first?.()?.section?.index);
-    if (
-      !shouldContinue() ||
-      !Number.isInteger(nextFirstSectionIndex) ||
-      nextFirstSectionIndex >= firstSectionIndex
-    ) {
-      return { completed: false, result: undefined };
-    }
+    const canComplete = () => {
+      if (!shouldContinue()) return false;
+      const predecessor = manager?.views?.first?.();
+      const nextFirstSectionIndex = Number(predecessor?.section?.index);
+      if (!Number.isInteger(nextFirstSectionIndex) || nextFirstSectionIndex >= firstSectionIndex) return false;
+      // Insertion precedes iframe display. A zero-width predecessor is neither
+      // usable nor evidence that the requested movement has happened.
+      if (predecessor?.displayed === false || (predecessor?.element && !(Number(predecessor.element.offsetWidth) > 0))) return false;
+      const liveScroll = Number(manager?.container?.scrollLeft);
+      if (!(liveScroll > 1)) return false;
+      if (Number.isFinite(originRelativeLeft)) {
+        if (!readManagerViews(manager)?.includes(firstView!)) return false;
+        const livePageWidth = Number(manager?.layout?.pageWidth) * Number(manager?.layout?.divisor || 1) ||
+          Number(manager?.layout?.delta);
+        if (Number.isFinite(pageWidth) && livePageWidth !== pageWidth) return false;
+        const movement = Number(firstView?.element?.offsetLeft) - liveScroll - originRelativeLeft;
+        // A preload can finish before the first queued prev executes. Only an
+        // unchanged content-relative origin permits the supplementary turn.
+        return Number.isFinite(movement) && Math.abs(movement) <= 1;
+      }
+      return true;
+    };
+    if (!canComplete()) return { completed: false, result: undefined };
 
     // At the left edge epub.js uses the first prev() call to prepend a view,
     // then reports the unchanged page. Complete the requested turn now that
     // the predecessor is present instead of requiring a second key press.
-    const nextResult = await Promise.resolve(navigate?.call(rendition));
+    const nextResult = await navigateIfCurrent(canComplete);
     await waitForContinuousManagerQueue(manager, managerQueueTimeoutMs);
     return { completed: true, result: nextResult };
   };
 
   const completion = await completePreviousTurn();
-  if (completion.completed) return completion.result;
 
-  if (!queueSettled && queueBarrier) {
+  if (!completion.completed && !queueSettled && queueBarrier) {
     // A timeout keeps input responsive, but the queued prepend may still be
     // valid. Finish this same turn when it settles, provided the reader has
     // not moved in the meantime.
-    void queueBarrier.then((settled) => (
+    const lateCompletion = queueBarrier.then((settled) => (
       settled ? completePreviousTurn() : null
-    )).catch(() => {});
+    )).catch(() => null);
+    // The controller holds exclusive input ownership until completion or its
+    // session-recovery deadline. Standalone callers retain the bounded barrier.
+    if (options.waitForCompletion) await lateCompletion;
   }
 
-  return result;
+  if (options.waitForCompletion && Number.isFinite(originRelativeLeft) && Number.isFinite(pageWidth)) {
+    const movement = Number(firstView?.element?.offsetLeft) - Number(manager?.container?.scrollLeft) - originRelativeLeft;
+    if (Math.abs(movement - pageWidth) > 1) return false;
+  }
+
+  return completion.completed ? completion.result : result;
 }

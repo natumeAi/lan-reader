@@ -26,18 +26,18 @@ type TurnSession = Pick<NonNullable<ReturnType<ConcreteAdapter['begin']>>, 'canN
 /** The controller owns interactions; the adapter owns renderer internals. */
 export interface PageTurnAdapter {
   begin(...args: Parameters<ConcreteAdapter['begin']>): TurnSession | null;
-  cancel: ConcreteAdapter['cancel'];
+  cancel(...args: Parameters<ConcreteAdapter['cancel']>): boolean | void;
   dragBy(distanceX: number): Pick<NonNullable<ReturnType<ConcreteAdapter['dragBy']>>, 'effectiveDistanceX' | 'progress'> | null;
   end: ConcreteAdapter['end'];
   inspect(): { available: boolean; pageWidth?: number };
   isStableAt: ConcreteAdapter['isStableAt'];
   animateTo(...args: Parameters<ConcreteAdapter['animateTo']>): PromiseLike<Pick<Awaited<ReturnType<ConcreteAdapter['animateTo']>>, 'status'>>;
-  recover(): boolean | PromiseLike<boolean>;
+  recover(stableCfi?: string | null): boolean | PromiseLike<boolean>;
 }
 type PointerCoordinates = Pick<ReactPointerEvent<HTMLElement>, 'clientX' | 'clientY' | 'currentTarget' | 'pointerId' | 'timeStamp'>;
 type PointerDown = PointerCoordinates & Pick<ReactPointerEvent<HTMLElement>, 'pointerType'> & { isPrimary?: boolean };
 type PointerMove = PointerCoordinates & Pick<ReactPointerEvent<HTMLElement>, 'cancelable' | 'preventDefault'>;
-interface TurnInteraction { action?: string; inputTime?: number }
+interface TurnInteraction { action?: string; inputTime?: number; duration?: number }
 interface RelocationWait {
   cancel(): void;
   isSettled(): boolean;
@@ -65,6 +65,8 @@ export interface PageTurnControllerOptions {
   edgeRef: RefObject<HTMLElement | null>;
   onCenterTap?: () => void;
   onNavigationSettled?: () => unknown;
+  /** Detach the failed session and preserve an explicitly superseding display target. */
+  onNavigationStalled?: (rendition: ReaderRendition, stableCfi: string | null, target?: string) => void;
   onPageTurnCommitted?: () => unknown;
   onTap?: (input: { clientX: number; clientY: number; inputTime: number; pointerType: string }) => unknown;
   reducedMotion?: boolean;
@@ -72,6 +74,22 @@ export interface PageTurnControllerOptions {
 }
 
 const SYSTEM_NAVIGATION_EDGE_PX = 32;
+
+async function settleWithin<T>(value: T | PromiseLike<T>, timeoutMs = PAGE_TURN_RULES.relocatedTimeoutMs) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<{ status: 'timeout' }>((resolve) => {
+    timer = setTimeout(() => resolve({ status: 'timeout' }), timeoutMs);
+  });
+  try {
+    return await Promise.race([
+      Promise.resolve(value).then(
+        (result) => ({ status: 'completed' as const, value: result }),
+        () => ({ status: 'failed' as const }),
+      ),
+      timeout,
+    ]);
+  } finally { clearTimeout(timer); }
+}
 
 function pageDelta(direction: PageDirection) {
   return direction === 'next' ? 1 : -1;
@@ -137,6 +155,7 @@ export function usePageTurnController({
   edgeRef,
   onCenterTap,
   onNavigationSettled,
+  onNavigationStalled,
   onPageTurnCommitted,
   onTap,
   reducedMotion = false,
@@ -151,6 +170,8 @@ export function usePageTurnController({
   const dragFrameRef = useRef<number | null>(null);
   const pendingDragDistanceRef = useRef(0);
   const cancellationVersionRef = useRef(0);
+  const pendingEngineRef = useRef<{ rendition: ReaderRendition; version: number; recovery?: boolean } | null>(null);
+  const retiredRenditionsRef = useRef(new WeakSet<ReaderRendition>());
 
   const setPhase = useCallback((nextPhase: TurnPhase) => {
     phaseRef.current = nextPhase;
@@ -158,7 +179,7 @@ export function usePageTurnController({
   }, []);
 
   const publishCurrentProgress = useCallback(() => (
-    Promise.resolve(onNavigationSettled?.()).catch(() => false)
+    settleWithin(Promise.resolve().then(() => onNavigationSettled?.()))
   ), [onNavigationSettled]);
 
   const syncCommittedPage = useCallback(() => (
@@ -243,30 +264,120 @@ export function usePageTurnController({
     pointerRef.current = null;
   }, [clearDragFrame, releasePointer]);
 
+  const rememberCurrentCfi = useCallback((rendition = renditionRef.current) => {
+    try {
+      const location = rendition?.currentLocation?.();
+      if (location && !('then' in location) && location.start?.cfi) {
+        currentCfiRef.current = location.start.cfi;
+      } else if (location && 'then' in location) {
+        void Promise.resolve(location).catch(() => {});
+      }
+    } catch {
+      // Keep the last verified content anchor if layout is unavailable.
+    }
+  }, [currentCfiRef, renditionRef]);
+
+  const retireSession = useCallback((rendition: ReaderRendition, version: number, rememberPosition = true, target?: string) => {
+    if (!isCurrentOperation(version)) return;
+    retiredRenditionsRef.current.add(rendition);
+    pendingEngineRef.current = null;
+    cancellationVersionRef.current += 1;
+    relocationWaitRef.current?.cancel();
+    relocationWaitRef.current = null;
+    finishPointer();
+    adapter?.cancel({ reason: 'navigation-timeout', restoreOrigin: true });
+    if (rememberPosition) rememberCurrentCfi(rendition);
+    // Book disposal alone does not cancel Rendition.q in epub.js 0.3.93. The
+    // integration detaches this session synchronously; queued page turns also
+    // check the now-invalid operation before touching their old manager.
+    onNavigationStalled?.(rendition, currentCfiRef.current, target);
+    restoreReadyPhase();
+  }, [adapter, currentCfiRef, finishPointer, isCurrentOperation, onNavigationStalled, rememberCurrentCfi, restoreReadyPhase]);
+
+  const recoverToReady = useCallback(async (operationVersion: number, stableCfi = currentCfiRef.current) => {
+    let restored: boolean;
+    const rendition = renditionRef.current;
+    try {
+      if (rendition) pendingEngineRef.current = { rendition, version: operationVersion, recovery: true };
+      const recovery = await settleWithin(adapter?.recover?.(stableCfi));
+      if (recovery.status === 'timeout' && rendition) {
+        retireSession(rendition, operationVersion, false);
+        return false;
+      }
+      restored = recovery.status === 'completed' && Boolean(recovery.value);
+    } catch {
+      restored = false;
+    } finally {
+      if (pendingEngineRef.current?.version === operationVersion) pendingEngineRef.current = null;
+    }
+    if (!isCurrentOperation(operationVersion)) return false;
+    if (!restored && rendition) {
+      retireSession(rendition, operationVersion, false);
+      return false;
+    }
+    const capability = restored ? adapter?.inspect?.() : null;
+    clearEdge();
+    basicRef.current = reducedMotion || !capability?.available;
+    setPhase(basicRef.current ? 'basic' : 'idle');
+    void syncCommittedPage();
+    return restored;
+  }, [adapter, clearEdge, currentCfiRef, isCurrentOperation, reducedMotion, renditionRef, retireSession, setPhase, syncCommittedPage]);
+
   const cancelPageTurn = useCallback((reason = 'cancelled') => {
+    const pending = pendingEngineRef.current;
+    // Repeated resize events belong to the same reflow and restore anchor.
+    // Keep exclusive ownership until its bounded recovery has settled.
+    if (pending?.recovery && reason === 'viewport') return;
+    if (pending && !['unmount', 'history'].includes(reason)) {
+      retireSession(pending.rendition, pending.version);
+    }
     releaseContinuousManagerLayoutAnchor(renditionRef.current);
     cancellationVersionRef.current += 1;
     relocationWaitRef.current?.cancel();
     relocationWaitRef.current = null;
     finishPointer();
-    adapter?.cancel({ reason, restoreOrigin: true });
+    const restored = adapter?.cancel({ reason, restoreOrigin: true });
+    if (restored === false && renditionRef.current && !['unmount', 'history'].includes(reason)) {
+      if (['viewport', 'settings'].includes(reason)) {
+        // A resized page cannot reuse its pixel origin. The verified CFI is
+        // still valid: restore it in this rendition before considering a reload.
+        setPhase('settling');
+        void recoverToReady(cancellationVersionRef.current);
+        return;
+      }
+      retireSession(renditionRef.current, cancellationVersionRef.current, false);
+    } else if (restored !== false) rememberCurrentCfi();
     void syncCommittedPage();
     restoreReadyPhase();
-  }, [adapter, finishPointer, renditionRef, restoreReadyPhase, syncCommittedPage]);
+  }, [adapter, finishPointer, rememberCurrentCfi, recoverToReady, renditionRef, restoreReadyPhase, retireSession, setPhase, syncCommittedPage]);
 
   const navigateTo = useCallback(async (target: string) => {
     if (!target || !renditionRef.current) return 'failed';
 
+    const pending = pendingEngineRef.current;
+    if (pending && isCurrentOperation(pending.version) && onNavigationStalled) {
+      // Replacement detaches renditionRef synchronously and initializes later.
+      // Hand the user's target to that session instead of dropping it in the gap.
+      retireSession(pending.rendition, pending.version, false, target);
+      return 'recovering';
+    }
     cancelPageTurn('display');
     const operationVersion = cancellationVersionRef.current;
     const rendition = renditionRef.current;
+    if (!rendition || retiredRenditionsRef.current.has(rendition)) return 'failed';
     setPhase('settling');
     try {
-      const displayed = await displayRenditionTarget(rendition, target, {
+      pendingEngineRef.current = { rendition, version: operationVersion };
+      const display = await settleWithin(displayRenditionTarget(rendition, target, {
         shouldContinue: () => isCurrentOperation(operationVersion),
-      });
+      }));
       if (!isCurrentOperation(operationVersion)) return 'ignored';
-      if (!displayed) return 'failed';
+      if (display.status === 'timeout') {
+        retireSession(rendition, operationVersion);
+        return 'failed';
+      }
+      if (display.status !== 'completed' || !display.value) return 'failed';
+      pendingEngineRef.current = null;
 
       void syncCommittedPage();
       await publishCurrentProgress();
@@ -274,13 +385,16 @@ export function usePageTurnController({
     } catch {
       return isCurrentOperation(operationVersion) ? 'failed' : 'ignored';
     } finally {
+      if (pendingEngineRef.current?.version === operationVersion) pendingEngineRef.current = null;
       if (isCurrentOperation(operationVersion)) restoreReadyPhase();
     }
   }, [
     cancelPageTurn,
     isCurrentOperation,
+    onNavigationStalled,
     publishCurrentProgress,
     renditionRef,
+    retireSession,
     restoreReadyPhase,
     setPhase,
     syncCommittedPage,
@@ -322,6 +436,8 @@ export function usePageTurnController({
     operationVersion = cancellationVersionRef.current,
   ) => {
     const rendition = renditionRef.current;
+    if (!rendition || retiredRenditionsRef.current.has(rendition)) return 'failed';
+    let navigationActive = true;
     const waiter = createRelocationWait(
       rendition,
       () => true,
@@ -330,45 +446,47 @@ export function usePageTurnController({
     relocationWaitRef.current = waiter;
     try {
       const navigation = navigateBasicRenditionPage(rendition, nextDirection, {
-        shouldContinue: () => isCurrentOperation(operationVersion),
+        shouldContinue: () => navigationActive && isCurrentOperation(operationVersion),
+        waitForCompletion: true,
+        onEnginePendingChange: (pending) => {
+          if (!navigationActive || !isCurrentOperation(operationVersion)) return;
+          pendingEngineRef.current = pending ? { rendition, version: operationVersion } : null;
+        },
       });
       // Continuous navigation moves the viewport synchronously, while its
       // preload/check queue can take much longer. Publish the visual page now
       // so the label cannot lag one turn behind the content.
       void syncCommittedPage();
-      await navigation;
+      const completion = await settleWithin(navigation);
+      if (!isCurrentOperation(operationVersion)) return 'ignored';
+      if (completion.status !== 'completed') {
+        if (pendingEngineRef.current) retireSession(rendition, operationVersion);
+        return 'failed';
+      }
+      if (completion.value === false) return 'failed';
       void syncCommittedPage();
-      const location = await waiter.promise;
-      if (!location) {
+      const currentLocation = await settleWithin(readRenditionLocation(rendition));
+      const location = currentLocation.status === 'completed' && currentLocation.value?.start?.cfi
+        ? currentLocation.value
+        : await waiter.promise;
+      if (!isCurrentOperation(operationVersion)) return 'ignored';
+      if (!location?.start?.cfi) {
         void syncCommittedPage();
         return 'failed';
       }
       await publishCurrentProgress();
-      return 'completed';
+      return isCurrentOperation(operationVersion) ? 'completed' : 'ignored';
     } catch {
       waiter.cancel();
       void syncCommittedPage();
       return 'failed';
     } finally {
+      navigationActive = false;
+      waiter.cancel();
+      if (pendingEngineRef.current?.version === operationVersion) pendingEngineRef.current = null;
       if (relocationWaitRef.current === waiter) relocationWaitRef.current = null;
     }
-  }, [isCurrentOperation, publishCurrentProgress, renditionRef, syncCommittedPage]);
-
-  const recoverToReady = useCallback(async (operationVersion: number) => {
-    let restored: boolean;
-    try {
-      restored = Boolean(await adapter?.recover?.());
-    } catch {
-      restored = false;
-    }
-    if (!isCurrentOperation(operationVersion)) return false;
-    const capability = restored ? adapter?.inspect?.() : null;
-    clearEdge();
-    basicRef.current = !capability?.available;
-    setPhase(basicRef.current ? 'basic' : 'idle');
-    void syncCommittedPage();
-    return restored;
-  }, [adapter, clearEdge, isCurrentOperation, setPhase, syncCommittedPage]);
+  }, [isCurrentOperation, publishCurrentProgress, renditionRef, retireSession, syncCommittedPage]);
 
   const runEnhancedNavigation = useCallback(async (
     nextDirection: PageDirection,
@@ -384,17 +502,23 @@ export function usePageTurnController({
       PAGE_TURN_RULES.relocatedTimeoutMs,
     );
     relocationWaitRef.current = waiter;
-    const animation = await adapter.animateTo(delta, {
+    const animationResult = await settleWithin(Promise.resolve().then(() => adapter.animateTo(delta, {
       action: interaction.action,
-      duration: PAGE_TURN_RULES.tapDurationMs,
+      duration: interaction.duration ?? PAGE_TURN_RULES.tapDurationMs,
       inputTime: interaction.inputTime,
-    });
+    })));
 
     if (!isCurrentOperation(operationVersion)) {
       waiter.cancel();
       return 'ignored';
     }
     hideEdge();
+    if (animationResult.status !== 'completed') {
+      waiter.cancel();
+      await recoverToReady(operationVersion);
+      return isCurrentOperation(operationVersion) ? 'failed' : 'ignored';
+    }
+    const animation = animationResult.value;
     if (animation.status !== 'completed') {
       waiter.cancel();
       if (animation.status === 'unavailable') {
@@ -408,33 +532,40 @@ export function usePageTurnController({
     // publish its relocated event until a later frame. Refresh the page label
     // directly from the manager geometry so it changes with the visual page.
     void syncCommittedPage();
+    if (adapter.isStableAt(delta)) rememberCurrentCfi(rendition);
     requestCommittedLocation(rendition, waiter);
-    const location = await waiter.promise;
+    await waitForContinuousManagerQueue(rendition?.manager);
+    const currentLocation = await settleWithin(readRenditionLocation(rendition));
+    const location = currentLocation.status === 'completed' && currentLocation.value?.start?.cfi
+      ? currentLocation.value
+      : await waiter.promise;
+    waiter.cancel();
+    if (relocationWaitRef.current === waiter) relocationWaitRef.current = null;
     if (!isCurrentOperation(operationVersion)) return 'ignored';
     if (!location || !adapter.isStableAt(delta)) {
       await recoverToReady(operationVersion);
       return isCurrentOperation(operationVersion) ? 'failed' : 'ignored';
     }
 
-    await waitForContinuousManagerQueue(rendition?.manager);
-    if (!isCurrentOperation(operationVersion)) return 'ignored';
     adapter.end();
     await publishCurrentProgress();
-    return 'completed';
+    return isCurrentOperation(operationVersion) ? 'completed' : 'ignored';
   }, [
     adapter,
     hideEdge,
     isCurrentOperation,
     publishCurrentProgress,
     recoverToReady,
+    rememberCurrentCfi,
     renditionRef,
     syncCommittedPage,
   ]);
 
   const turnPage = useCallback(async (nextDirection: PageDirection, interaction: TurnInteraction = {}) => {
-    if (!['idle', 'basic'].includes(phaseRef.current)) return 'ignored';
+    if (disabled || !['idle', 'basic'].includes(phaseRef.current)) return 'ignored';
     const rendition = renditionRef.current;
     if (!rendition || !['prev', 'next'].includes(nextDirection)) return 'ignored';
+    if (retiredRenditionsRef.current.has(rendition)) return 'failed';
     const inputTime = Number.isFinite(interaction.inputTime)
       ? interaction.inputTime
       : performance.now();
@@ -443,7 +574,8 @@ export function usePageTurnController({
     const operationVersion = beginOperation();
     setPhase('settling');
     try {
-      const location = await readRenditionLocation(rendition).catch(() => null);
+      const locationRead = await settleWithin(readRenditionLocation(rendition));
+      const location = locationRead.status === 'completed' ? locationRead.value : null;
       if (!isCurrentOperation(operationVersion)) return 'ignored';
       if (isBoundary(location, nextDirection)) return 'blocked';
 
@@ -480,6 +612,7 @@ export function usePageTurnController({
     adapter,
     beginOperation,
     currentCfiRef,
+    disabled,
     edgeRef,
     enterBasic,
     isCurrentOperation,
@@ -647,12 +780,17 @@ export function usePageTurnController({
             Math.abs(dragResult?.effectiveDistanceX || 0),
             pointer.session.pageWidth,
           );
-          const animation = await adapter.animateTo(0, {
+          const animationResult = await settleWithin(adapter.animateTo(0, {
             action: 'rollback',
             duration,
             inputTime: event.timeStamp,
-          });
+          }));
           if (!isCurrentOperation(operationVersion)) return;
+          if (animationResult.status !== 'completed') {
+            await recoverToReady(operationVersion);
+            return;
+          }
+          const animation = animationResult.value;
           if (animation.status !== 'completed') {
             if (animation.status === 'unavailable') {
               await recoverToReady(operationVersion);
@@ -667,12 +805,17 @@ export function usePageTurnController({
         const neighborReady =
           delta === 1 ? pointer.session.canNext : pointer.session.canPrevious;
         if (!neighborReady) {
-          const animation = await adapter.animateTo(0, {
+          const animationResult = await settleWithin(adapter.animateTo(0, {
             action: 'rollback',
             duration: PAGE_TURN_RULES.settleDurationMinMs,
             inputTime: event.timeStamp,
-          });
+          }));
           if (!isCurrentOperation(operationVersion)) return;
+          if (animationResult.status !== 'completed') {
+            await recoverToReady(operationVersion);
+            return;
+          }
+          const animation = animationResult.value;
           if (animation.status !== 'completed') {
             if (animation.status === 'unavailable') {
               await recoverToReady(operationVersion);
@@ -681,7 +824,8 @@ export function usePageTurnController({
           }
           hideEdge();
           adapter.end();
-          const location = await readRenditionLocation(renditionRef.current).catch(() => null);
+          const locationRead = await settleWithin(readRenditionLocation(renditionRef.current));
+          const location = locationRead.status === 'completed' ? locationRead.value : null;
           if (!isCurrentOperation(operationVersion)) return;
           if (!isBoundary(location, nextDirection)) {
             await runBasicNavigation(nextDirection, operationVersion);
@@ -694,43 +838,11 @@ export function usePageTurnController({
           0,
           pointer.session.pageWidth - Math.abs(dragResult?.effectiveDistanceX || 0),
         );
-        const waiter = createRelocationWait(
-          renditionRef.current,
-          () => adapter.isStableAt(delta),
-          PAGE_TURN_RULES.relocatedTimeoutMs,
-        );
-        relocationWaitRef.current = waiter;
-        const animation = await adapter.animateTo(delta, {
+        await runEnhancedNavigation(nextDirection, operationVersion, {
           action: 'commit',
           duration: getSettleDuration(remaining, pointer.session.pageWidth),
           inputTime: event.timeStamp,
         });
-        if (!isCurrentOperation(operationVersion)) {
-          waiter.cancel();
-          return;
-        }
-        hideEdge();
-        if (animation.status !== 'completed') {
-          waiter.cancel();
-          if (animation.status === 'unavailable') {
-            await recoverToReady(operationVersion);
-          }
-          return;
-        }
-        void syncCommittedPage();
-        requestCommittedLocation(renditionRef.current, waiter);
-        const location = await waiter.promise;
-        if (!isCurrentOperation(operationVersion)) return;
-        if (!location || !adapter.isStableAt(delta)) {
-          waiter.cancel();
-          await recoverToReady(operationVersion);
-        } else {
-          await waitForContinuousManagerQueue(renditionRef.current?.manager);
-          if (!isCurrentOperation(operationVersion)) return;
-          adapter.end();
-          await publishCurrentProgress();
-        }
-        if (relocationWaitRef.current === waiter) relocationWaitRef.current = null;
       } finally {
         if (isCurrentOperation(operationVersion)) restoreReadyPhase();
       }
@@ -746,13 +858,12 @@ export function usePageTurnController({
     isCurrentOperation,
     onCenterTap,
     onTap,
-    publishCurrentProgress,
     renditionRef,
     recoverToReady,
     restoreReadyPhase,
     runBasicNavigation,
+    runEnhancedNavigation,
     setPhase,
-    syncCommittedPage,
     turnPage,
     writeDragFrame,
   ]);

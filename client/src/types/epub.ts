@@ -50,6 +50,7 @@ export interface EpubScroller extends EpubElement { scrollLeft: number }
 export interface EpubObserver { disconnect: () => void; observe: (element: EpubElement) => void }
 /** Private manager members inspected against epubjs 0.3.93 sources. */
 export interface EpubView {
+  displayed?: boolean;
   element?: EpubElement;
   section?: EpubSection;
   display?: (...args: unknown[]) => unknown;
@@ -71,7 +72,7 @@ export interface EpubManager {
     container?: EpubScroller;
   };
   visible?: () => EpubView[];
-  q?: { enqueue: (task: () => unknown) => unknown };
+  q?: { enqueue: (task: () => unknown) => unknown; stop?: () => void };
   snapper?: object;
   scrollLeft?: number;
   scrollTo?: (left: number, top: number, silent?: boolean) => void;
@@ -85,6 +86,8 @@ export interface EpubManager {
 }
 export interface ReaderRendition {
   manager?: EpubManager;
+  /** Pinned rendition queue, distinct from the continuous manager queue. */
+  q?: { enqueue: (task: () => unknown) => unknown; stop?: () => void };
   currentLocation?: () => Awaitable<ReaderLocation | null | undefined>;
   display?: (target?: string | number) => unknown;
   next?: () => unknown;

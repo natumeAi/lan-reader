@@ -1,6 +1,6 @@
 import type { RefObject } from 'react';
 import { isRecord } from '@lan-reader/shared';
-import type { EpubView, ReaderLocation, TocItem } from '../types/epub.js';
+import type { EpubView, ReaderLocation, ReaderRendition, TocItem } from '../types/epub.js';
 import type { SessionBook, SessionRendition } from '../types/readerSession.js';
 import { sessionBook } from '../types/readerSession.js';
 import type { ProgressRecord } from '../utils/readingProgress.js';
@@ -41,6 +41,7 @@ import {
 } from '../utils/epubToc.js';
 import { readProgressOutbox, selectProgressForRelocation } from '../utils/readingProgress.js';
 import { getReaderPageGap } from './useReaderSettings.js';
+import { PAGE_TURN_RULES } from '../utils/pageTurnGesture.js';
 
 const createSessionEpub = (data: ArrayBuffer) => sessionBook(Epub(data));
 
@@ -191,7 +192,7 @@ function createVisiblePageAnchorCfi(rendition: SessionRendition) {
 }
 
 function createInteriorRestoreCfi(rendition: SessionRendition, cfi: string) {
-  if (!cfi || typeof EpubCFI !== 'function') return cfi;
+  if (!cfi.startsWith('epubcfi(') || typeof EpubCFI !== 'function') return cfi;
 
   try {
     const parsedCfi = new EpubCFI(cfi);
@@ -298,6 +299,7 @@ export function useEpubRendition({
   const resumeLifecycleActiveRef = useRef(true);
   const locationCaptureRef = useRef<(() => Promise<boolean | undefined>) | null>(null);
   const bookPaginationRequestRef = useRef<(() => void) | null>(null);
+  const disposeSessionRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     if (!isLayoutReady || !containerRef.current || !book?.id) return undefined;
@@ -334,6 +336,8 @@ export function useEpubRendition({
     let latestHref: string | null = null;
     let latestSectionIndex: number | null = null;
     let isInitializing = true;
+    let captureVersion = 0;
+    let initializationTimer: ReturnType<typeof setTimeout> | undefined;
     loadStartedAtRef.current = Date.now();
     loadingStateRef.current = true;
     errorStateRef.current = '';
@@ -354,6 +358,41 @@ export function useEpubRendition({
       });
     };
     bookPaginationRequestRef.current = requestBookPagination;
+
+    const disposeSession = () => {
+      if (destroyed) return;
+      destroyed = true;
+      clearTimeout(initializationTimer);
+      abortController.abort();
+      // Rendition.destroy does not stop its queue in 0.3.93. Retire both
+      // queues before disposal, including tasks enqueued by a late iframe.
+      for (const queue of [ownedRendition?.q, ownedRendition?.manager?.q]) {
+        if (!queue) continue;
+        queue.enqueue = () => Promise.resolve();
+        queue.stop?.();
+      }
+      epubPagination?.destroy();
+      if (bookPaginationRequestRef.current === requestBookPagination) bookPaginationRequestRef.current = null;
+      flushPendingReaderSettings();
+      adapter?.destroy();
+      if (pageTurnAdapterRef.current === adapter) pageTurnAdapterRef.current = null;
+      disposeOwnedResources();
+      currentCfiRef.current = null;
+      locationCaptureRef.current = null;
+      if (disposeSessionRef.current === disposeSession) disposeSessionRef.current = null;
+    };
+    disposeSessionRef.current = disposeSession;
+    if (readerReloadKey > 0) {
+      initializationTimer = setTimeout(() => {
+        if (destroyed || !isInitializing) return;
+        disposeSession();
+        fullReloadPendingRef.current = false;
+        loadingStateRef.current = false;
+        errorStateRef.current = '阅读器恢复超时，请重新打开这本书';
+        setError(errorStateRef.current);
+        setIsLoading(false);
+      }, READER_LOADING_STALL_MS);
+    }
 
     (async () => {
       try {
@@ -507,6 +546,7 @@ export function useEpubRendition({
 
         const captureLatestLocation = async () => {
           if (destroyed || renditionRef.current !== rendition) return false;
+          const version = ++captureVersion;
 
           let captured = false;
           let reportResult;
@@ -528,15 +568,13 @@ export function useEpubRendition({
             // The reported location below remains the compatibility path.
           }
 
-          try {
-            await Promise.resolve(reportResult);
-          } catch {
-            // currentLocation below can still provide the stable visible page.
-          }
+          const reportCompleted = settlesWithin(reportResult, PAGE_TURN_RULES.relocatedTimeoutMs);
+          if (captured) return true;
+          await reportCompleted;
 
-          if (destroyed || renditionRef.current !== rendition) return captured;
+          if (destroyed || renditionRef.current !== rendition || version !== captureVersion) return captured;
           const location = await Promise.resolve(rendition.currentLocation?.());
-          if (destroyed || renditionRef.current !== rendition || !location?.start?.cfi) {
+          if (destroyed || renditionRef.current !== rendition || version !== captureVersion || !location?.start?.cfi) {
             return captured;
           }
 
@@ -546,7 +584,20 @@ export function useEpubRendition({
           });
         };
 
-        handleRelocated = updateFromLocation;
+        handleRelocated = (location) => {
+          if (destroyed || renditionRef.current !== rendition) return;
+          // Notifications can trail a later turn. Prefer current geometry to
+          // an event snapshot so neither progress nor settings restore an old CFI.
+          try {
+            const current = rendition.currentLocation?.();
+            if (current && 'then' in current) {
+              void Promise.resolve(current).catch(() => {});
+            }
+            updateFromLocation(current && !('then' in current) ? current : location);
+          } catch {
+            // A provisional layout must not replace the last verified CFI.
+          }
+        };
         rendition.on('relocated', handleRelocated);
         applyReaderSettings(rendition, loadedReaderSettings);
         await rendition.display(startCfi);
@@ -574,6 +625,7 @@ export function useEpubRendition({
 
         if (destroyed) return;
         isInitializing = false;
+        clearTimeout(initializationTimer);
         const initialLocation = await Promise.resolve(rendition.currentLocation?.());
         if (destroyed) return;
         updateFromLocation(initialLocation, {
@@ -642,6 +694,7 @@ export function useEpubRendition({
           })
           .catch(() => {});
       } catch (openError) {
+        clearTimeout(initializationTimer);
         if (!destroyed) {
           if (isRecord(openError) && openError.code === 'BOOK_NOT_FOUND') {
             errorStateRef.current = '书籍不存在';
@@ -660,22 +713,7 @@ export function useEpubRendition({
     })();
 
     return () => {
-      destroyed = true;
-      abortController.abort();
-      epubPagination?.destroy();
-      if (bookPaginationRequestRef.current === requestBookPagination) {
-        bookPaginationRequestRef.current = null;
-      }
-      flushPendingReaderSettings();
-
-      adapter?.destroy();
-      if (pageTurnAdapterRef.current === adapter) {
-        pageTurnAdapterRef.current = null;
-      }
-      disposeOwnedResources();
-      currentCfiRef.current = null;
-      locationCaptureRef.current = null;
-
+      disposeSession();
     };
   }, [
     applyReaderHorizontalMargin,
@@ -735,6 +773,7 @@ export function useEpubRendition({
     errorStateRef.current = '';
     loadingStateRef.current = true;
     pageTurnAdapterRef.current?.cancel({ reason: 'resume-reload', restoreOrigin: true });
+    disposeSessionRef.current?.();
     setError('');
     setIsLoading(true);
     resetReaderSettingsLoad();
@@ -747,6 +786,11 @@ export function useEpubRendition({
     setError,
     setIsLoading,
   ]);
+
+  const recoverNavigationSession = useCallback((rendition: ReaderRendition, stableCfi: string | null, target?: string) => {
+    if (renditionRef.current !== rendition) return;
+    requestFullReaderReload(target || stableCfi, progressRef.current);
+  }, [renditionRef, requestFullReaderReload]);
 
   const runResumeRecovery = useCallback(async () => {
     if (
@@ -1008,6 +1052,7 @@ export function useEpubRendition({
     pageTurnAdapter,
     progress,
     requestBookPagination,
+    recoverNavigationSession,
     toc,
   };
 }

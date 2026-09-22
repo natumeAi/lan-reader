@@ -237,6 +237,7 @@ export function ReaderView({
     pageTurnAdapter,
     progress,
     requestBookPagination,
+    recoverNavigationSession,
     toc,
   } = useEpubRendition({
     applyReaderHorizontalMargin,
@@ -311,6 +312,7 @@ export function ReaderView({
     edgeRef: pageEdgeRef,
     onCenterTap: handleCenterTap,
     onNavigationSettled: captureCurrentProgress,
+    onNavigationStalled: recoverNavigationSession,
     onPageTurnCommitted: refreshCurrentPageProgress,
     onTap: handleReaderTap,
     reducedMotion,

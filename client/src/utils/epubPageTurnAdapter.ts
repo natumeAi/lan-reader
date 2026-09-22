@@ -20,7 +20,8 @@ interface AdapterSession extends ScrollCapability {
   contentWidth: number; stableCfi: string | null; edgeElement: StyledElement | null;
   edgeDirection: 'next' | 'prev' | null; edgeOffset: number | null; edgeSnapshot: ElementSnapshot | null;
   boundaryOffset: number; commitFrameId: number | null; diagnosticAction: string; diagnosticRecordId: number | null;
-  generation: number; layoutAnchors: { element: StyledElement; left: number }[];
+  generation: number; layoutAnchors: { element: StyledElement; left: number; offsetLeft: number }[];
+  committedDelta: number | null;
   physicalScroll: number; previousEdgeTransform: string; previousEdgeWillChange: string; previousTransform: string;
   resolveCancellation: (result: TurnResult) => void; resolveCommit: ((result: TurnResult) => void) | null;
   stylesPrepared: boolean; views: ViewSnapshot[]; viewportWidth: number; visualOffset: number;
@@ -271,12 +272,16 @@ export function createEpubPageTurnAdapter(rendition: ReaderRendition, environmen
       return [];
     }
     if (!Array.isArray(displayedViews)) return [];
+    const viewportLeft = Number(manager.container?.getBoundingClientRect?.().left) || 0;
 
     return displayedViews.flatMap((view) => {
       const element = view?.element;
       const geometry = readViewGeometry(element);
-      return geometry && element?.style ? [{ element: element as StyledElement, left: geometry.left }] : [];
-    });
+      return geometry && element?.style ? [{
+        element: element as StyledElement, left: geometry.left, offsetLeft: Number(element.offsetLeft),
+        visible: geometry.left <= viewportLeft + 1 && geometry.right > viewportLeft + 1,
+      }] : [];
+    }).sort((first, second) => Number(second.visible) - Number(first.visible));
   }
 
   function isStableAtVisualPage(activeSession: AdapterSession, pageDelta: number) {
@@ -488,18 +493,60 @@ export function createEpubPageTurnAdapter(rendition: ReaderRendition, environmen
     if (!activeSession) return Number.NaN;
     return toLogicalScroll({
       scrollLeft: Number(activeSession.scroller.scrollLeft),
-      maxScroll: activeSession.maxScroll,
+      maxScroll: liveMaxScroll(activeSession),
       direction: activeSession.direction,
       rtlScrollType: activeSession.rtlScrollType,
     });
   }
 
+  function liveMaxScroll(activeSession: AdapterSession) {
+    const scroller = activeSession.scroller;
+    return Math.max(0, Number(scroller.scrollWidth) - Number(scroller.clientWidth || scroller.offsetWidth));
+  }
+
+  function liveOrigin(activeSession: AdapterSession): number | null {
+    const currentWidth = Number(activeSession.manager.layout?.pageWidth) * Number(activeSession.manager.layout?.divisor || 1);
+    if (Math.abs(currentWidth - activeSession.pageWidth) > ALIGNMENT_EPSILON_PX) return null;
+    const contentUnchanged = Math.abs(Number(activeSession.scroller.scrollWidth) - activeSession.contentWidth) <= ALIGNMENT_EPSILON_PX;
+    const views = activeSession.manager.views?.all?.() || activeSession.manager.views?.displayed?.();
+    const anchor = activeSession.layoutAnchors.find(({ element }) => (
+      element.isConnected !== false && (!views || views.some((view) => view.element === element))
+    ));
+    if (!anchor) return !activeSession.layoutAnchors.length && contentUnchanged ? activeSession.origin : null;
+    const originPhysical = toPhysicalScroll({ ...activeSession, logicalScroll: activeSession.origin });
+    const offsetLeft = Number(anchor.element.offsetLeft);
+    let physicalOrigin: number;
+    if (Number.isFinite(offsetLeft) && Number.isFinite(anchor.offsetLeft)) {
+      physicalOrigin = originPhysical + offsetLeft - anchor.offsetLeft;
+    } else {
+      if (contentUnchanged) return activeSession.origin;
+      const geometry = readViewGeometry(anchor.element);
+      if (!geometry) return null;
+      physicalOrigin = Number(activeSession.scroller.scrollLeft) + geometry.left - anchor.left -
+        (activeSession.backend === 'compositor' ? activeSession.visualOffset : activeSession.boundaryOffset);
+    }
+    return toLogicalScroll({ ...activeSession, maxScroll: liveMaxScroll(activeSession), scrollLeft: physicalOrigin });
+  }
+
+  function restoreContentPosition(activeSession: AdapterSession) {
+    // Remove compositor transforms before measuring a viewport-relative anchor.
+    cancelAnimationGroup(activeSession.animations);
+    restoreSessionStyles(activeSession);
+    activeSession.visualOffset = 0;
+    activeSession.boundaryOffset = 0;
+    const origin = liveOrigin(activeSession);
+    if (origin === null) return false;
+    writeLogical(origin + (activeSession.committedDelta ?? 0) * activeSession.pageWidth, activeSession);
+    return true;
+  }
+
   function writeLogical(logicalScroll: number, activeSession = session) {
     if (!activeSession) return;
-    const clamped = Math.min(activeSession.maxScroll, Math.max(0, logicalScroll));
+    const maxScroll = liveMaxScroll(activeSession);
+    const clamped = Math.min(maxScroll, Math.max(0, logicalScroll));
     activeSession.scroller.scrollLeft = toPhysicalScroll({
       logicalScroll: clamped,
-      maxScroll: activeSession.maxScroll,
+      maxScroll,
       direction: activeSession.direction,
       rtlScrollType: activeSession.rtlScrollType,
     });
@@ -651,7 +698,7 @@ export function createEpubPageTurnAdapter(rendition: ReaderRendition, environmen
     cancelPendingCompositor(activeSession, outcome);
     cancelDiagnostic(activeSession.diagnosticRecordId, reason);
     try {
-      writeLogical(activeSession.origin, activeSession);
+      restoreContentPosition(activeSession);
     } finally {
       releaseSession(activeSession);
       session = null;
@@ -845,6 +892,7 @@ export function createEpubPageTurnAdapter(rendition: ReaderRendition, environmen
       diagnosticAction: action,
       diagnosticRecordId: null,
       generation: ++sessionGeneration,
+      committedDelta: null,
       layoutAnchors: captureLayoutAnchors(capability.manager),
       physicalScroll: Number(capability.scroller.scrollLeft),
       previousEdgeTransform: edgeElement?.style.transform || '',
@@ -879,6 +927,8 @@ export function createEpubPageTurnAdapter(rendition: ReaderRendition, environmen
 
   function dragBy(pointerDistanceX: number) {
     if (!session || !activateSessionStyles(session)) return null;
+    const origin = liveOrigin(session);
+    if (origin === null) return null;
     let effectiveDistanceX = clampDragDistance(pointerDistanceX, session.pageWidth);
     const direction = effectiveDistanceX < 0 ? 'next' : 'prev';
     const missingNeighbor =
@@ -895,11 +945,11 @@ export function createEpubPageTurnAdapter(rendition: ReaderRendition, environmen
     } else {
       if (missingNeighbor) {
         effectiveDistanceX = dampBoundaryDistance(pointerDistanceX);
-        writeLogical(session.origin);
+        writeLogical(origin);
         setBoundaryOffset(effectiveDistanceX);
       } else {
         setBoundaryOffset(0);
-        writeLogical(session.origin - effectiveDistanceX);
+        writeLogical(origin - effectiveDistanceX);
       }
       setEdgeOffset(effectiveDistanceX);
     }
@@ -919,7 +969,9 @@ export function createEpubPageTurnAdapter(rendition: ReaderRendition, environmen
 
   function isStableAt(pageDelta: number) {
     if (!session || ![-1, 0, 1].includes(pageDelta)) return false;
-    const target = session.origin + pageDelta * session.pageWidth;
+    const origin = liveOrigin(session);
+    if (origin === null) return false;
+    const target = origin + pageDelta * session.pageWidth;
     const visualsSettled =
       Math.abs(session.boundaryOffset) <= ALIGNMENT_EPSILON_PX &&
       Math.abs(session.visualOffset) <= ALIGNMENT_EPSILON_PX;
@@ -1032,11 +1084,17 @@ export function createEpubPageTurnAdapter(rendition: ReaderRendition, environmen
         if (activeSession.manager?.ignore === true) {
           activeSession.manager.ignore = false;
         }
+        const origin = liveOrigin(activeSession);
+        if (origin === null) {
+          resolve(invalidateCompositorSession(activeSession, 'geometry'));
+          return;
+        }
         writeLogical(
-          activeSession.origin + pageDelta * activeSession.pageWidth,
+          origin + pageDelta * activeSession.pageWidth,
           activeSession,
         );
         restoreCompositorVisual(activeSession);
+        activeSession.committedDelta = pageDelta;
         finishDiagnostic(diagnosticRecordId, frameTime);
         resolve(result('completed', 'compositor'));
       });
@@ -1144,15 +1202,17 @@ export function createEpubPageTurnAdapter(rendition: ReaderRendition, environmen
     const duration = Math.max(0, Number(options.duration) || 0);
     const startTime = now();
     const startLogical = readLogical();
+    const origin = liveOrigin(session);
+    if (origin === null) return Promise.resolve(result('unavailable'));
     const startBoundaryOffset = session.boundaryOffset;
-    const destination = session.origin + pageDelta * session.pageWidth;
+    const destination = origin + pageDelta * session.pageWidth;
     const startsAtDestination = pageDelta !== 0 &&
       Math.abs(startLogical - destination) <= ALIGNMENT_EPSILON_PX;
     const diagnosticRecordId = beginAnimationDiagnostics(pageDelta, options, startTime);
     setEdgeDirection(pageDelta === 0
       ? session.edgeDirection
       : pageDelta > 0 ? 'next' : 'prev');
-    setEdgeOffset(session.origin - startLogical + startBoundaryOffset);
+    setEdgeOffset(origin - startLogical + startBoundaryOffset);
 
     return new Promise<TurnResult>((resolve) => {
       const tick = (timestamp: number) => {
@@ -1167,13 +1227,19 @@ export function createEpubPageTurnAdapter(rendition: ReaderRendition, environmen
         const elapsed = now() - startTime;
         const linearProgress = duration === 0 ? 1 : Math.min(1, elapsed / duration);
         const easedProgress = easeOutCubic(linearProgress);
-        const logical =
-          startLogical + (destination - startLogical) * easedProgress;
+        const currentOrigin = liveOrigin(session);
+        if (currentOrigin === null) {
+          animation = null;
+          cancelDiagnostic(diagnosticRecordId, 'geometry', frameTime);
+          resolve(result('unavailable'));
+          return;
+        }
+        const logical = currentOrigin + startLogical - origin + (destination - startLogical) * easedProgress;
         const boundaryOffset = startBoundaryOffset * (1 - easedProgress);
 
         writeLogical(logical);
         setBoundaryOffset(boundaryOffset);
-        setEdgeOffset(session.origin - logical + boundaryOffset);
+        setEdgeOffset(currentOrigin - logical + boundaryOffset);
         diagnostics.markVisualUpdate(diagnosticRecordId, frameTime);
         diagnostics.frame(diagnosticRecordId, frameTime);
 
@@ -1181,6 +1247,7 @@ export function createEpubPageTurnAdapter(rendition: ReaderRendition, environmen
           animation!.frameId = requestFrame(tick);
           return;
         }
+        if (pageDelta !== 0 && isStableAt(pageDelta)) session.committedDelta = pageDelta;
 
         if (startsAtDestination) {
           const reportLocation = rendition?.reportLocation;
@@ -1224,8 +1291,20 @@ export function createEpubPageTurnAdapter(rendition: ReaderRendition, environmen
     });
   }
 
-  async function recover() {
-    const stableCfi = session?.stableCfi || recoveryCfi;
+  async function recover(stableTarget?: string | null) {
+    if (session?.committedDelta !== null && session?.committedDelta !== undefined) {
+      const delta = session.committedDelta;
+      if (restoreContentPosition(session) && isStableAt(delta)) {
+        end();
+        return true;
+      }
+      if (!stableTarget) {
+        cancel({ reason: 'recover', restoreOrigin: false });
+        enhancedDisabledReason = 'recovery';
+        return false;
+      }
+    }
+    const stableCfi = stableTarget || session?.stableCfi || recoveryCfi;
     cancel({ reason: 'recover', restoreOrigin: true });
     if (!stableCfi || typeof rendition?.display !== 'function') {
       enhancedDisabledReason = 'recovery';
@@ -1245,6 +1324,7 @@ export function createEpubPageTurnAdapter(rendition: ReaderRendition, environmen
     const reason = options.reason || 'cancelled';
     stopAnimation(reason);
     const activeSession = session;
+    let restored = true;
     if (activeSession) {
       recoveryCfi = activeSession.stableCfi || recoveryCfi;
       sessionGeneration += 1;
@@ -1254,16 +1334,17 @@ export function createEpubPageTurnAdapter(rendition: ReaderRendition, environmen
       );
       try {
         if (options.restoreOrigin !== false) {
-          writeLogical(activeSession.origin, activeSession);
+          restored = restoreContentPosition(activeSession);
         }
       } finally {
         cancelDiagnostic(activeSession.diagnosticRecordId, reason);
         releaseSession(activeSession);
         session = null;
       }
-      return;
+      return restored;
     }
     session = null;
+    return restored;
   }
 
   function destroy() {

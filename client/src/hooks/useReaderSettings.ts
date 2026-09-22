@@ -426,7 +426,7 @@ function applyReaderHorizontalMarginStylesToRendition(rendition: SessionRenditio
 }
 
 async function applyReaderHorizontalMarginToRendition(rendition: SessionRendition | null, horizontalMargin: number, cfi: string | null, isCurrent: () => boolean) {
-  if (!rendition) return;
+  if (!rendition || !isCurrent()) return;
 
   configureEpubPageGap(rendition, getReaderPageGap(horizontalMargin));
   rendition.resize?.();
@@ -600,6 +600,7 @@ export function useReaderSettings({
     if (!isReaderReady) return undefined;
     const rendition = renditionRef.current;
     beforeRenditionMutation?.();
+    if (!rendition || renditionRef.current !== rendition) return undefined;
     applyReaderSettings(rendition, readerSettingsRef.current);
 
     const timer = setTimeout(() => {
@@ -620,6 +621,7 @@ export function useReaderSettings({
     if (!isReaderReady) return;
     const rendition = renditionRef.current;
     beforeRenditionMutation?.();
+    if (!rendition || renditionRef.current !== rendition) return;
     let cancelled = false;
     applyReaderHorizontalMargin(
       rendition,
