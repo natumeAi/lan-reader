@@ -1,6 +1,6 @@
 {
   "name": "lan-reader",
-  "version": "0.9.5",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "description": "TypeScript migration of the EPUB reader. Source project D:/Projects/epub-reader is read-only.",

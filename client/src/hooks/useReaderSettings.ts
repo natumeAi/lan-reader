@@ -286,6 +286,12 @@ function getReaderLayoutCss({
       letter-spacing: ${letterSpacing}em !important;
       overflow-wrap: anywhere !important;
     }
+
+    /* Keep the full illustration visible instead of rounding or cropping it. */
+    img {
+      border-radius: 0 !important;
+      object-fit: contain !important;
+    }
   `;
 }
 

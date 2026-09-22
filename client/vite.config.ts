@@ -23,10 +23,7 @@ export default defineConfig({
       manifest: false,
       registerType: 'autoUpdate',
       includeAssets: [
-        'apple-touch-icon.png',
-        'icon.svg',
-        'icon-192.png',
-        'icon-512.png',
+        'app-icon.png',
         'manifest.webmanifest',
       ],
       workbox: {
