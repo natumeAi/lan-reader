@@ -601,10 +601,15 @@ h1 {
 
 .fixed-drag-preview {
   position: fixed;
+  /* The drag position is supplied by a frame-coalesced translate3d written directly on
+     this element; the trailing translate keeps the cover centred on the pointer point. */
+  left: 0;
+  top: 0;
   z-index: 100;
   width: var(--book-cover-width);
   pointer-events: none;
   transform: translate(-50%, -50%);
+  will-change: transform;
 }
 
 .delete-drop-zone {
@@ -646,6 +651,18 @@ h1 {
     inset 0 0 0 1px rgba(255, 255, 255, 0.22);
   color: #fff;
   transform: translateX(-50%) scale(1.06);
+}
+
+/* Armed means "release now and this book is deleted", which must not look like the
+   merely visible zone. */
+.delete-drop-zone.is-armed {
+  background: rgba(255, 59, 48, 0.96);
+  box-shadow:
+    0 18px 38px rgba(190, 31, 24, 0.32),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.28);
+  color: #fff;
+  font-weight: 800;
+  animation: delete-zone-armed 900ms ease-in-out infinite;
 }
 
 .delete-drop-zone-icon {
@@ -808,6 +825,45 @@ h1 {
     0 0 0 4px rgba(0, 122, 255, 0.16),
     inset 0 0 0 1px rgba(255, 255, 255, 0.28);
   transform: scale(0.94);
+}
+
+/* --- Drag intent and persistence feedback -------------------------------------------
+   Four intents must read differently: sorting opens a gap before its target, absorbing
+   presses the target Folder, merging rings the target cover, and deleting arms the drop
+   zone. Persistence is separate: an affected card stays visibly pending until the server
+   confirms, and a failure marks the same cards briefly. The Folder panel shares this
+   vocabulary, so its cards use the same class names and keyframes.
+   Every animation below has a static reduced-motion equivalent in pwa.css. */
+
+.book-shell.is-sort-target .book-cover,
+.book-shell.is-sort-target .folder-cover {
+  box-shadow:
+    0 12px 22px rgba(38, 31, 24, 0.16),
+    inset 5px 0 0 rgba(0, 122, 255, 0.34),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.24);
+  transform: translateX(6px) scale(0.99);
+}
+
+.book-shell.is-pending-save .book-cover,
+.book-shell.is-pending-save .folder-cover,
+.folder-book-shell.is-pending-save .book-cover {
+  opacity: 0.66;
+  animation: shelf-pending-save 1200ms ease-in-out infinite;
+}
+
+.book-shell.is-save-failed .book-cover,
+.book-shell.is-save-failed .folder-cover,
+.folder-book-shell.is-save-failed .book-cover {
+  box-shadow:
+    0 12px 22px rgba(190, 31, 24, 0.22),
+    0 0 0 3px rgba(255, 59, 48, 0.34),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.24);
+  animation: shelf-save-failed 420ms ease-in-out 1;
+}
+
+.book-shell.is-landing .book-cover,
+.book-shell.is-landing .folder-cover {
+  animation: shelf-landing-settle 320ms cubic-bezier(0.22, 1, 0.36, 1) 1;
 }
 
 .book-cover {
@@ -1168,5 +1224,54 @@ h1 {
 
   to {
     background-position: -80% 0, 0 0;
+  }
+}
+
+@keyframes shelf-pending-save {
+  0%,
+  100% {
+    opacity: 0.66;
+  }
+
+  50% {
+    opacity: 0.94;
+  }
+}
+
+@keyframes shelf-save-failed {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+
+  25% {
+    transform: translateX(-2px);
+  }
+
+  75% {
+    transform: translateX(2px);
+  }
+}
+
+@keyframes shelf-landing-settle {
+  from {
+    opacity: 0.62;
+    transform: scale(1.035);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes delete-zone-armed {
+  0%,
+  100% {
+    transform: translateX(-50%) scale(1.06);
+  }
+
+  50% {
+    transform: translateX(-50%) scale(1.11);
   }
 }

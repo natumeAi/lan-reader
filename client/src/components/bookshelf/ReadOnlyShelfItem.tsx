@@ -1,5 +1,6 @@
 import type { MouseEvent } from 'react';
 import type { Book, Folder, ShelfItem } from '../../types/library.js';
+import { memo } from 'react';
 import { ShelfItemCover } from './ShelfItemCover.js';
 import { formatBookCardAriaLabel } from '../../utils/readingProgress.js';
 
@@ -13,7 +14,8 @@ interface ReadOnlyShelfItemProps extends ShelfItemActions {
 }
 
 
-export function ReadOnlyShelfItem({ item, onOpenBook, onOpenFolder, priority = false }: ReadOnlyShelfItemProps) {
+/** Read-only cards never subscribe to dnd-kit, so stable props keep them out of drag renders. */
+export const ReadOnlyShelfItem = memo(function ReadOnlyShelfItem({ item, onOpenBook, onOpenFolder, priority = false }: ReadOnlyShelfItemProps) {
   const name = item.type === 'folder'
     ? item.folder?.name || '文件夹'
     : item.book?.title || '未命名书籍';
@@ -52,4 +54,4 @@ export function ReadOnlyShelfItem({ item, onOpenBook, onOpenFolder, priority = f
       ) : null}
     </button>
   );
-}
+});

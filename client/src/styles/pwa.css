@@ -80,4 +80,40 @@
   .folder-overlay.is-closing .folder-panel-content {
     animation-name: folder-reduced-fade-out !important;
   }
+
+  /* Drag intent and persistence feedback.
+     The generic overrides above only shorten a duration, which turns a repeating pulse or
+     a shake into a flash. Each of these states instead gets a static equivalent that still
+     says what it means. The delete drop zone sits outside .library-home, so it needs its
+     own entry here rather than inheriting one. */
+  .book-shell.is-sort-target .book-cover,
+  .book-shell.is-sort-target .folder-cover,
+  .book-shell.is-pending-save .book-cover,
+  .book-shell.is-pending-save .folder-cover,
+  .folder-book-shell.is-pending-save .book-cover,
+  .book-shell.is-save-failed .book-cover,
+  .book-shell.is-save-failed .folder-cover,
+  .folder-book-shell.is-save-failed .book-cover,
+  .book-shell.is-landing .book-cover,
+  .book-shell.is-landing .folder-cover,
+  .delete-drop-zone.is-armed {
+    animation: none !important;
+    transition: none !important;
+  }
+
+  .book-shell.is-pending-save .book-cover,
+  .book-shell.is-pending-save .folder-cover,
+  .folder-book-shell.is-pending-save .book-cover {
+    opacity: 0.66;
+  }
+
+  .book-shell.is-landing .book-cover,
+  .book-shell.is-landing .folder-cover {
+    opacity: 1;
+    transform: none;
+  }
+
+  .delete-drop-zone.is-armed {
+    transform: translateX(-50%) scale(1.06);
+  }
 }

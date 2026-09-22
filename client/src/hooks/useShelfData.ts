@@ -3,7 +3,18 @@ import type { CachedSnapshotRecord, CatalogBook, Folder, FolderBook, HydratedLib
 import { errorMessage, isAbortError } from '../api/transport.js';
 
 export interface LoadShelfOptions { background?: boolean; allowCached?: boolean }
+/**
+ * Ownership of the visible shelf/folder lists while a drag or its mutation is in flight.
+ * A background snapshot decodes and stays retained, but it may not reorder a live projection.
+ */
+export interface ShelfProjection {
+  /** Invalidate in-flight and queued snapshots that predate a committing mutation. */
+  discardPendingSnapshots(): void;
+  /** Stop owning the visible list; adopt a still-valid queued snapshot. */
+  release(): void;
+}
 interface SnapshotRequest { controller: AbortController | null; requestId: number }
+interface DeferredSnapshot { epoch: number; hydrated: HydratedLibrarySnapshot }
 interface ShelfDataOptions { restoreReaderBook?: (shelf: HydratedLibrarySnapshot['shelfData'], recent: HydratedLibrarySnapshot['recentData']) => unknown }
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -40,6 +51,15 @@ export function useShelfData({ restoreReaderBook }: ShelfDataOptions = {}) {
   const latestHydratedStateRef = useRef<HydratedLibrarySnapshot | null>(null);
   const hasAppliedSnapshotRef = useRef(false);
   const lastRevalidateAtRef = useRef(0);
+  const projectionRef = useRef<number | null>(null);
+  const projectionIdRef = useRef(0);
+  const deferredSnapshotRef = useRef<DeferredSnapshot | null>(null);
+  const snapshotEpochRef = useRef(0);
+
+  const publishShelfProjection = useCallback((hydrated: HydratedLibrarySnapshot) => {
+    setShelfItems(hydrated.shelfData.items);
+    setFolderBooksByFolderId(hydrated.folderBooksByFolderId);
+  }, []);
 
   const applySnapshot = useCallback((snapshot: LibrarySnapshot) => {
     const hydrated = hydrateDecodedLibrarySnapshot(snapshot, {
@@ -49,10 +69,16 @@ export function useShelfData({ restoreReaderBook }: ShelfDataOptions = {}) {
 
     hasAppliedSnapshotRef.current = true;
     latestHydratedStateRef.current = hydrated;
-    setShelfItems(hydrated.shelfData.items);
+
+    if (projectionRef.current === null) {
+      publishShelfProjection(hydrated);
+    } else {
+      // A drag or its mutation owns the visible arrangement; retain this result instead.
+      deferredSnapshotRef.current = { epoch: snapshotEpochRef.current, hydrated };
+    }
+
     setCatalogBooks(hydrated.catalogData.books);
     setRecentReadingItems(hydrated.recentData.items);
-    setFolderBooksByFolderId(hydrated.folderBooksByFolderId);
     setHasLoadedShelf(true);
     setHasLoadedCatalog(true);
     setShelfError('');
@@ -63,7 +89,33 @@ export function useShelfData({ restoreReaderBook }: ShelfDataOptions = {}) {
     }
 
     return hydrated;
-  }, [restoreReaderBook]);
+  }, [publishShelfProjection, restoreReaderBook]);
+
+  const beginShelfProjection = useCallback((): ShelfProjection => {
+    const id = projectionIdRef.current + 1;
+    projectionIdRef.current = id;
+    projectionRef.current = id;
+
+    return {
+      discardPendingSnapshots() {
+        snapshotEpochRef.current += 1;
+        deferredSnapshotRef.current = null;
+      },
+      release() {
+        if (projectionRef.current !== id) {
+          return;
+        }
+
+        projectionRef.current = null;
+        const deferred = deferredSnapshotRef.current;
+        deferredSnapshotRef.current = null;
+
+        if (deferred && deferred.epoch === snapshotEpochRef.current) {
+          publishShelfProjection(deferred.hydrated);
+        }
+      },
+    };
+  }, [publishShelfProjection]);
 
   const beginSnapshotRequest = useCallback(() => {
     snapshotRequestRef.current.controller?.abort();
@@ -85,6 +137,8 @@ export function useShelfData({ restoreReaderBook }: ShelfDataOptions = {}) {
     const background = options?.background === true;
     const allowCached = options?.allowCached ?? !hasAppliedSnapshotRef.current;
     const request = beginSnapshotRequest();
+    const epoch = snapshotEpochRef.current;
+    const isCurrentEpoch = () => snapshotEpochRef.current === epoch;
     let hasUsableState = hasAppliedSnapshotRef.current;
     let snapshotRecord = latestSnapshotRecordRef.current;
 
@@ -98,7 +152,7 @@ export function useShelfData({ restoreReaderBook }: ShelfDataOptions = {}) {
     if (allowCached && !hasUsableState) {
       try {
         const cachedRecord = await loadCachedLibrarySnapshot();
-        if (!isCurrentSnapshotRequest(request)) return null;
+        if (!isCurrentSnapshotRequest(request) || !isCurrentEpoch()) return null;
 
         if (cachedRecord?.snapshot) {
           applySnapshot(cachedRecord.snapshot);
@@ -119,6 +173,8 @@ export function useShelfData({ restoreReaderBook }: ShelfDataOptions = {}) {
         signal: request.controller.signal,
       });
       if (!isCurrentSnapshotRequest(request)) return null;
+      // A mutation committed after this request started; its body, ETag and cache entry are obsolete.
+      if (!isCurrentEpoch()) return null;
 
       if (!response.notModified && response.snapshot) {
         const hydrated = applySnapshot(response.snapshot);
@@ -136,7 +192,7 @@ export function useShelfData({ restoreReaderBook }: ShelfDataOptions = {}) {
       setCatalogError('');
       return latestHydratedStateRef.current;
     } catch (error) {
-      if (isAbortError(error) || !isCurrentSnapshotRequest(request)) {
+      if (isAbortError(error) || !isCurrentSnapshotRequest(request) || !isCurrentEpoch()) {
         return null;
       }
 
@@ -190,6 +246,8 @@ export function useShelfData({ restoreReaderBook }: ShelfDataOptions = {}) {
 
     return () => {
       snapshotRequestRef.current.controller?.abort();
+      projectionRef.current = null;
+      deferredSnapshotRef.current = null;
     };
   }, [loadShelf]);
 
@@ -229,6 +287,7 @@ export function useShelfData({ restoreReaderBook }: ShelfDataOptions = {}) {
   }, []);
 
   return {
+    beginShelfProjection,
     catalogBooks,
     catalogError,
     folderBooksByFolderId,

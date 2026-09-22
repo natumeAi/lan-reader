@@ -1,6 +1,7 @@
 import type { FormEventHandler } from 'react';
 import { MAX_FOLDER_NAME_LENGTH } from '@lan-reader/shared';
 import type { Book, Folder, FolderBook } from '../../types/library.js';
+import type { ShelfMutationFeedback } from '../../hooks/useLibraryDrag.js';
 import type { snapshotRect } from '../../utils/folderMotion.js';
 import { useLayoutEffect, useRef } from 'react';
 import { rectSortingStrategy, SortableContext } from '@dnd-kit/sortable';
@@ -18,6 +19,7 @@ interface FolderOverlayProps {
   isRenaming: boolean;
   isRenameSaving: boolean;
   isSavingOrder: boolean;
+  mutationFeedback: ShelfMutationFeedback;
   originRect: ReturnType<typeof snapshotRect>;
   onClose: () => void;
   onOpenBook: (book: Book, originRect: DOMRect | null) => void;
@@ -38,6 +40,7 @@ export function FolderOverlay({
   isRenaming,
   isRenameSaving,
   isSavingOrder,
+  mutationFeedback,
   originRect,
   onClose,
   onOpenBook,
@@ -79,6 +82,7 @@ export function FolderOverlay({
     return null;
   }
 
+  const feedbackKeys = mutationFeedback.status === 'idle' ? null : mutationFeedback.keys;
   const folderName = folder.name || '文件夹';
   const overlayClassName = `folder-overlay${isClosing ? ' is-closing' : ''}`;
 
@@ -184,6 +188,12 @@ export function FolderOverlay({
                   <SortableFolderBook
                     book={book}
                     disabled={isSavingOrder}
+                    isPendingSave={
+                      mutationFeedback.status === 'pending' && Boolean(feedbackKeys?.includes(book.key))
+                    }
+                    isSaveFailed={
+                      mutationFeedback.status === 'failed' && Boolean(feedbackKeys?.includes(book.key))
+                    }
                     key={book.key}
                     onOpenBook={onOpenBook}
                     priority={index < 8}

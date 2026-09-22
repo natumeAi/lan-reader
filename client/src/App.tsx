@@ -14,7 +14,9 @@ import { useBookDeletion } from './hooks/useBookDeletion.js';
 import { useFolderState } from './hooks/useFolderState.js';
 import { useLibraryDrag } from './hooks/useLibraryDrag.js';
 import { useReaderSession } from './hooks/useReaderSession.js';
+import { useReducedMotion } from './hooks/useReducedMotion.js';
 import { useShelfData } from './hooks/useShelfData.js';
+import { dropAnimationConfig } from './utils/dragMotion.js';
 import { rectIntersectsViewport } from './utils/folderMotion.js';
 
 const ReaderView = lazy(() => import('./components/reader/ReaderView.js'));
@@ -30,6 +32,7 @@ function ReaderRestoreFallback() {
 
 function App() {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const reducedMotion = useReducedMotion();
   const {
     clearReadingBookOrigin,
     clearReaderBookIfDeleted,
@@ -40,6 +43,7 @@ function App() {
     restoreReaderBook,
   } = useReaderSession();
   const {
+    beginShelfProjection,
     catalogBooks,
     catalogError,
     folderBooksByFolderId,
@@ -74,6 +78,7 @@ function App() {
     folderError,
     folderNameDraft,
     folderOriginRect,
+    getFolderSession,
     handleCancelFolderRename,
     handleCloseFolder: closeFolder,
     handleOpenFolder: openFolderFromShelf,
@@ -81,6 +86,7 @@ function App() {
     handleSubmitFolderRename,
     isFolderClosing,
     isFolderLoading,
+    isFolderSessionCurrent,
     isRenamingFolder,
     isSavingFolderName,
     isSavingFolderOrder,
@@ -113,16 +119,22 @@ function App() {
     activeDragPreview,
     appCollisionDetection,
     dragIntent,
-    fixedDragPreviewPoint,
+    dragPreviewMotion,
     getFolderOpenIgnoreUntil,
     handleDragCancel,
     handleDragEnd,
     handleDragMove,
     handleDragStart,
+    isFixedDragPreviewActive,
+    landingKey,
+    mutationFeedback,
     sensors,
   } = useLibraryDrag({
+    beginShelfProjection,
     folderBooks,
     folderCloseVersion,
+    getFolderSession,
+    isFolderSessionCurrent,
     isSavingFolderOrder,
     isSavingOrder,
     loadShelf,
@@ -139,9 +151,10 @@ function App() {
     setShelfItems,
     shelfItems,
   });
-  function handleOpenBook(book: Book, originRect: DOMRect | null) {
+  // Stable so the memoized shelf cards survive a DndContext re-render.
+  const handleOpenBook = useCallback((book: Book, originRect: DOMRect | null) => {
     openBook(book, originRect, { disabled: isSavingOrder });
-  }
+  }, [isSavingOrder, openBook]);
 
   const handleReaderProgressSettled = useCallback(() => {
     reapplyPendingReadingPositions();
@@ -153,7 +166,7 @@ function App() {
     void loadShelf();
   }, [clearReaderBookIfDeleted, loadShelf]);
 
-  function handleOpenFolder(folder: Folder, originRect: DOMRect | null) {
+  const handleOpenFolder = useCallback((folder: Folder, originRect: DOMRect | null) => {
     openFolderFromShelf(folder, {
       books: folderBooksByFolderId.get(folder.id) || [],
       ignoreUntil: getFolderOpenIgnoreUntil(),
@@ -161,7 +174,13 @@ function App() {
       originRect,
     });
     void loadShelf({ background: true, allowCached: false });
-  }
+  }, [
+    folderBooksByFolderId,
+    getFolderOpenIgnoreUntil,
+    isSavingOrder,
+    loadShelf,
+    openFolderFromShelf,
+  ]);
 
   function handleCloseFolder() {
     const sourceElement = openFolder
@@ -225,6 +244,8 @@ function App() {
           isLoading={isLoading}
           isSavingOrder={isSavingOrder}
           isUploading={isUploading}
+          landingKey={landingKey}
+          mutationFeedback={mutationFeedback}
           onFileChange={handleFileChange}
           onOpenBook={handleOpenBook}
           onOpenFolder={handleOpenFolder}
@@ -244,6 +265,7 @@ function App() {
           isRenaming={isRenamingFolder}
           isRenameSaving={isSavingFolderName}
           isSavingOrder={isSavingFolderOrder}
+          mutationFeedback={mutationFeedback}
           onClose={handleCloseFolder}
           onOpenBook={handleOpenBook}
           onRenameCancel={handleCancelFolderRename}
@@ -265,6 +287,7 @@ function App() {
           </Suspense>
         )}
         <DeleteDropZone
+          armed={dragIntent.type === 'delete'}
           visible={activeDragPreview?.type === 'book' || activeDragPreview?.type === 'folder-book'}
         />
         <DeleteConfirmDialog
@@ -274,10 +297,17 @@ function App() {
           onConfirm={handleConfirmDeleteBook}
         />
       </main>
-      <DragOverlay dropAnimation={null}>
-        <DragPreview item={fixedDragPreviewPoint ? null : activeDragPreview} />
+      {/* The overlay settles onto the accepted destination (or back to the origin on a
+          cancel) instead of vanishing. While the fixed preview owns the visual the overlay
+          renders nothing, so the configuration has no node to animate there. */}
+      <DragOverlay dropAnimation={dropAnimationConfig(reducedMotion)}>
+        <DragPreview item={isFixedDragPreviewActive ? null : activeDragPreview} />
       </DragOverlay>
-      <FixedDragPreview item={activeDragPreview} point={fixedDragPreviewPoint} />
+      <FixedDragPreview
+        active={isFixedDragPreviewActive}
+        item={activeDragPreview}
+        motion={dragPreviewMotion}
+      />
     </DndContext>
   );
 }

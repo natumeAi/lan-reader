@@ -87,7 +87,7 @@ function isPointBeforeSortRect(point: Point, rect: Rect) {
   return point.x < centerX;
 }
 
-export function sortTargetKeyFromPoint({ activeKey, point, items, droppableRects }: { activeKey: string; point: Point; items: { key: string }[]; droppableRects: ReadonlyMap<UniqueIdentifier, Rect> }) {
+export function sortTargetKeyFromPoint({ activeKey, point, items, droppableRects }: { activeKey: string; point: Point; items: readonly { key: string }[]; droppableRects: ReadonlyMap<UniqueIdentifier, Rect> }) {
   const orderedKeys = items.map((item) => item.key);
   const oldIndex = orderedKeys.indexOf(activeKey);
 

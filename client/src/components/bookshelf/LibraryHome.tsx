@@ -1,8 +1,8 @@
 import type { ChangeEventHandler, RefObject } from 'react';
 import type { CatalogBook, RecentReadingItem, ShelfItem } from '../../types/library.js';
-import type { DragIntent } from '../../hooks/useLibraryDrag.js';
+import type { DragIntent, ShelfMutationFeedback } from '../../hooks/useLibraryDrag.js';
 import type { ShelfItemActions } from './ReadOnlyShelfItem.js';
-import { useRef } from 'react';
+import { useCallback, useRef } from 'react';
 import { useLibraryView } from '../../hooks/useLibraryView.js';
 import { ContinueReadingSection } from './ContinueReadingSection.js';
 import { LibraryGrid } from './LibraryGrid.js';
@@ -20,6 +20,8 @@ interface LibraryHomeProps extends ShelfItemActions {
   isLoading: boolean;
   isSavingOrder: boolean;
   isUploading: boolean;
+  landingKey: string | null;
+  mutationFeedback: ShelfMutationFeedback;
   onFileChange: ChangeEventHandler<HTMLInputElement>;
   onRetryCatalog: () => void;
   onRetryShelf: () => void;
@@ -42,6 +44,8 @@ export function LibraryHome({
   isLoading,
   isSavingOrder,
   isUploading,
+  landingKey,
+  mutationFeedback,
   onFileChange,
   onOpenBook,
   onOpenFolder,
@@ -54,6 +58,7 @@ export function LibraryHome({
   uploadProgress,
 }: LibraryHomeProps) {
   const libraryView = useLibraryView({ shelfItems, catalogBooks });
+  const { clearSearch } = libraryView;
   const savedScrollTopRef = useRef(0);
   const catalogControlsDisabled =
     isCatalogLoading || Boolean(catalogError) || !hasLoadedCatalog;
@@ -72,12 +77,21 @@ export function LibraryHome({
     libraryView.focusSearch();
   }
 
-  function restoreSearch(action: () => void) {
+  const restoreSearch = useCallback((action: () => void) => {
     action();
     requestAnimationFrame(() => {
       window.scrollTo({ top: savedScrollTopRef.current, behavior: 'auto' });
     });
-  }
+  }, []);
+
+  // Stable callbacks, so the memoized grid is not re-rendered by unrelated renders.
+  const handleClearSearch = useCallback(() => {
+    restoreSearch(clearSearch);
+  }, [clearSearch, restoreSearch]);
+
+  const handleImport = useCallback(() => {
+    fileInputRef.current?.click();
+  }, [fileInputRef]);
 
   return (
     <section className="library-home">
@@ -173,8 +187,10 @@ export function LibraryHome({
         isLoading={isLoading}
         isSavingOrder={isSavingOrder}
         items={libraryView.visibleItems}
-        onClearSearch={() => restoreSearch(libraryView.clearSearch)}
-        onImport={() => fileInputRef.current?.click()}
+        landingKey={landingKey}
+        mutationFeedback={mutationFeedback}
+        onClearSearch={handleClearSearch}
+        onImport={handleImport}
         onOpenBook={onOpenBook}
         onOpenFolder={onOpenFolder}
         query={libraryView.query}

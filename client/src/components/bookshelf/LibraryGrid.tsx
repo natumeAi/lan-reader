@@ -1,7 +1,8 @@
 import type { ShelfItem } from '../../types/library.js';
 import type { LibraryView } from '../../utils/libraryView.js';
-import type { DragIntent } from '../../hooks/useLibraryDrag.js';
+import type { DragIntent, ShelfMutationFeedback } from '../../hooks/useLibraryDrag.js';
 import type { ShelfItemActions } from './ReadOnlyShelfItem.js';
+import { memo } from 'react';
 import { rectSortingStrategy, SortableContext } from '@dnd-kit/sortable';
 import { LIBRARY_VIEW } from '../../utils/libraryView.js';
 import { ReadOnlyShelfItem } from './ReadOnlyShelfItem.js';
@@ -10,6 +11,9 @@ import { SortableShelfItem } from './SortableShelfItem.js';
 interface LibraryGridProps extends ShelfItemActions {
   dragIntent: DragIntent;
   editable: boolean;
+  /** Key of the card that just arrived from a Folder, while it settles into place. */
+  landingKey: string | null;
+  mutationFeedback: ShelfMutationFeedback;
   hasLoadedShelf: boolean;
   isLoading: boolean;
   isSavingOrder: boolean;
@@ -21,13 +25,16 @@ interface LibraryGridProps extends ShelfItemActions {
 }
 
 
-export function LibraryGrid({
+/** Memoized so pointer-only drag activity never re-renders the whole grid. */
+export const LibraryGrid = memo(function LibraryGrid({
   dragIntent,
   editable,
   hasLoadedShelf,
   isLoading,
   isSavingOrder,
   items,
+  landingKey,
+  mutationFeedback,
   onClearSearch,
   onImport,
   onOpenBook,
@@ -48,6 +55,12 @@ export function LibraryGrid({
     );
   }
 
+  const feedbackKeys = mutationFeedback.status === 'idle' ? null : mutationFeedback.keys;
+  const isPendingSave = (key: string) =>
+    mutationFeedback.status === 'pending' && Boolean(feedbackKeys?.includes(key));
+  const isSaveFailed = (key: string) =>
+    mutationFeedback.status === 'failed' && Boolean(feedbackKeys?.includes(key));
+
   if (items.length) {
     return editable ? (
       <SortableContext items={items.map((item) => item.key)} strategy={rectSortingStrategy}>
@@ -56,6 +69,9 @@ export function LibraryGrid({
             <SortableShelfItem
               disabled={isSavingOrder}
               dragIntent={dragIntent}
+              isLanding={landingKey === item.key}
+              isPendingSave={isPendingSave(item.key)}
+              isSaveFailed={isSaveFailed(item.key)}
               item={item}
               key={item.key}
               onOpenBook={onOpenBook}
@@ -110,4 +126,4 @@ export function LibraryGrid({
       <button type="button" onClick={onImport}>导入 EPUB</button>
     </div>
   );
-}
+});

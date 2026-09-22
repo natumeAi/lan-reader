@@ -22,6 +22,8 @@ const REDUCED_MOTION_CLOSE_ANIM_MS = 100;
 export function useFolderState({ onFolderRenamed }: FolderStateOptions = {}) {
   const reducedMotion = useReducedMotion();
   const folderCloseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Identifies one particular opening of one particular Folder. Reopening the same id is a new session. */
+  const folderSessionRef = useRef(0);
   const folderRequestRef = useRef<FolderRequest>({
     controller: null,
     folderId: null,
@@ -61,6 +63,13 @@ export function useFolderState({ onFolderRenamed }: FolderStateOptions = {}) {
     return request;
   }, [invalidateFolderRequest]);
 
+  const getFolderSession = useCallback(() => folderSessionRef.current, []);
+
+  const isFolderSessionCurrent = useCallback(
+    (session: number) => folderSessionRef.current === session,
+    [],
+  );
+
   const isCurrentFolderRequest = useCallback((request: FolderRequest) => (
     folderRequestRef.current.requestId === request.requestId &&
     folderRequestRef.current.folderId === request.folderId &&
@@ -69,6 +78,7 @@ export function useFolderState({ onFolderRenamed }: FolderStateOptions = {}) {
 
   const finishCloseFolder = useCallback(() => {
     invalidateFolderRequest();
+    folderSessionRef.current += 1;
     setOpenFolder(null);
     setIsFolderClosing(false);
     setFolderBooks([]);
@@ -95,6 +105,7 @@ export function useFolderState({ onFolderRenamed }: FolderStateOptions = {}) {
     }
 
     invalidateFolderRequest();
+    folderSessionRef.current += 1;
     setIsFolderClosing(false);
     setOpenFolder(folder);
     setFolderOriginRect(snapshotRect(options.originRect));
@@ -105,6 +116,8 @@ export function useFolderState({ onFolderRenamed }: FolderStateOptions = {}) {
     setFolderNameDraft('');
     setIsRenamingFolder(false);
     setIsFolderLoading(false);
+    // A new opening never inherits the previous opening's persistence state.
+    setIsSavingFolderOrder(false);
   }, [invalidateFolderRequest]);
 
   const handleCloseFolder = useCallback((options: { originRect?: MotionRect | null } = {}) => {
@@ -209,6 +222,7 @@ export function useFolderState({ onFolderRenamed }: FolderStateOptions = {}) {
     folderError,
     folderNameDraft,
     folderOriginRect,
+    getFolderSession,
     handleCancelFolderRename,
     handleCloseFolder,
     handleOpenFolder,
@@ -216,6 +230,7 @@ export function useFolderState({ onFolderRenamed }: FolderStateOptions = {}) {
     handleSubmitFolderRename,
     isFolderClosing,
     isFolderLoading,
+    isFolderSessionCurrent,
     isRenamingFolder,
     isSavingFolderName,
     isSavingFolderOrder,
