@@ -1,11 +1,15 @@
 import type { FontSettingsPanelProps } from './FontSettingsPanel.js';
 import type { LayoutSetting, ThemeOption } from '../../hooks/useReaderSettings.js';
 interface ReaderSettingsPanelProps extends FontSettingsPanelProps {
+  diagnosticsEnabled: boolean; onStartDiagnostics: () => void; onExportDiagnostics: () => void;
   layoutSettings: LayoutSetting[]; onBackToMain: () => void; onOpenFontSettings: () => void; onThemeChange: (id: string) => void; readerTheme: ThemeOption; readerThemeId: string; settingsView: 'main' | 'font'; themeOptions: ThemeOption[];
 }
 import { FontSettingsPanel } from './FontSettingsPanel.js';
 
 export function ReaderSettingsPanel({
+  diagnosticsEnabled,
+  onStartDiagnostics,
+  onExportDiagnostics,
   fontFamilyId,
   fontFamilyOptions,
   fontSize,
@@ -60,6 +64,12 @@ export function ReaderSettingsPanel({
                   <span className="reader-settings-chevron" aria-hidden="true">›</span>
                 </span>
               </button>
+            </section>
+            <section className="reader-settings-group" aria-label="阅读问题反馈">
+              <button className="reader-settings-menu-item" onClick={diagnosticsEnabled ? onExportDiagnostics : onStartDiagnostics}>
+                {diagnosticsEnabled ? '导出阅读诊断' : '记录阅读问题'}
+              </button>
+              <p className="reader-settings-value">{diagnosticsEnabled ? '复现后导出；文件包含阅读位置和少量可见文字，仅保存在本机。' : '记录本次阅读的翻页和位置变化，帮助排查卡顿或续读问题。'}</p>
             </section>
 
             <section className="reader-settings-group" aria-labelledby="reader-layout-settings-title">

@@ -1,3 +1,4 @@
+import type { ContentDocument } from '../reader/types';
 import type { ContentImage, SvgImageResource } from '../types/contentImage.js';
 
 function styledElement(element: Element): element is HTMLElement | SVGElement {
@@ -494,8 +495,8 @@ function describeContentImage(element: Element): ContentImage | null {
   return null;
 }
 
-function findContentImageElementAtViewportPoint(container: ParentNode | null, clientX: number, clientY: number) {
-  const frames = [...(container?.querySelectorAll?.('iframe') || [])];
+function findContentImageElementAtViewportPoint(contents: ContentDocument[], clientX: number, clientY: number) {
+  const frames = contents.map(c => c.frame).filter((frame): frame is HTMLIFrameElement => Boolean(frame));
 
   for (const frame of frames.reverse()) {
     const frameRect = frame.getBoundingClientRect?.();
@@ -520,13 +521,13 @@ function findContentImageElementAtViewportPoint(container: ParentNode | null, cl
   return null;
 }
 
-export function contentImageCursorAtViewportPoint(container: ParentNode | null, clientX: number, clientY: number) {
-  return findContentImageElementAtViewportPoint(container, clientX, clientY)
+export function contentImageCursorAtViewportPoint(contents: ContentDocument[], clientX: number, clientY: number) {
+  return findContentImageElementAtViewportPoint(contents, clientX, clientY)
     ? 'zoom-in'
     : '';
 }
 
-export function findContentImageAtViewportPoint(container: ParentNode | null, clientX: number, clientY: number) {
-  const element = findContentImageElementAtViewportPoint(container, clientX, clientY);
+export function findContentImageAtViewportPoint(contents: ContentDocument[], clientX: number, clientY: number) {
+  const element = findContentImageElementAtViewportPoint(contents, clientX, clientY);
   return element ? describeContentImage(element) : null;
 }

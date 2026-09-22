@@ -277,6 +277,7 @@ function App() {
         {readingBook && (
           <Suspense fallback={readingBookOrigin ? null : <ReaderRestoreFallback />}>
             <ReaderView
+              key={readingBook.id}
               book={readingBook}
               originRect={readingBookOrigin}
               onBookUnavailable={handleBookUnavailable}
