@@ -1,0 +1,156 @@
+name: Publish stable Docker Hub image
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dockerhub-release-lshym123-lan-reader
+  cancel-in-progress: false
+
+env:
+  IMAGE_NAME: lshym123/lan-reader
+
+jobs:
+  publish:
+    if: ${{ !github.event.release.prerelease && !github.event.release.draft }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Validate stable release version
+        id: version
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Stable releases must use a vX.Y.Z tag; received $RELEASE_TAG."
+            exit 1
+          fi
+
+          release_version="${RELEASE_TAG#v}"
+          package_version="$(node --input-type=module -e 'import { readFileSync } from "node:fs"; const pkg = JSON.parse(readFileSync("package.json", "utf8")); if (typeof pkg.version !== "string") throw new Error("package.json version must be a string"); process.stdout.write(pkg.version);')"
+
+          if [[ "$package_version" != "$release_version" ]]; then
+            echo "::error::Release tag $RELEASE_TAG does not match package.json version $package_version."
+            exit 1
+          fi
+
+          echo "version=$release_version" >> "$GITHUB_OUTPUT"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run release source checks
+        run: |
+          npm run typecheck
+          npm run lint
+          npm run build
+
+      - name: State test coverage limitation
+        run: |
+          echo '::warning::client/test, server/test and shared/test are intentionally excluded from Git. This release workflow runs install, type checking, lint and production build only.'
+          echo '### Test coverage limit' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Local regression suites are intentionally not present in this checkout, so this workflow does not claim a test pass.' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Find the prior stable release
+        id: prior-release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CURRENT_RELEASE_ID: ${{ github.event.release.id }}
+        run: |
+          set -euo pipefail
+
+          prior_tag="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" | jq -rs --argjson current_release_id "$CURRENT_RELEASE_ID" '
+            (add // [])
+            | map(select(
+                .id != $current_release_id
+                and .draft == false
+                and .prerelease == false
+                and .published_at != null
+              ))
+            | sort_by(.published_at)
+            | last
+            | .tag_name // empty
+          ')"
+
+          if [[ -z "$prior_tag" ]]; then
+            echo "has-prior=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [[ ! "$prior_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Prior stable release must use a vX.Y.Z tag; found $prior_tag."
+            exit 1
+          fi
+
+          echo "has-prior=true" >> "$GITHUB_OUTPUT"
+          echo "version=${prior_tag#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: lshym123
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Promote the prior latest image
+        if: ${{ steps.prior-release.outputs.has-prior == 'true' }}
+        shell: bash
+        env:
+          PRIOR_VERSION: ${{ steps.prior-release.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          prior_image="${IMAGE_NAME}:${PRIOR_VERSION}"
+          latest_image="${IMAGE_NAME}:latest"
+
+          if prior_inspection="$(docker buildx imagetools inspect "$prior_image" 2>&1)"; then
+            echo "Historical tag $prior_image already exists; leaving it unchanged."
+            exit 0
+          fi
+
+          if ! grep -Eqi 'not found|manifest unknown|name unknown' <<< "$prior_inspection"; then
+            echo "::error::Could not verify whether $prior_image already exists; refusing to overwrite a historical tag."
+            printf '%s\n' "$prior_inspection" >&2
+            exit 1
+          fi
+
+          if ! latest_inspection="$(docker buildx imagetools inspect "$latest_image" 2>&1)"; then
+            echo "::error::$latest_image is unavailable, so the prior release cannot be safely promoted."
+            printf '%s\n' "$latest_inspection" >&2
+            exit 1
+          fi
+
+          docker buildx imagetools create --tag "$prior_image" "$latest_image"
+
+      - name: Build and push the current latest image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64
+          tags: ${{ env.IMAGE_NAME }}:latest
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.version.outputs.version }}

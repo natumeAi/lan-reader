@@ -2,7 +2,7 @@ name: lan-reader
 
 services:
   lan-reader:
-    build: .
+    image: lshym123/lan-reader:latest
     restart: unless-stopped
     init: true
     environment:
