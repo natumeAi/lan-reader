@@ -1,5 +1,6 @@
 import type { KeyboardEvent, RefObject } from 'react';
 import { useCallback, useEffect, useRef } from 'react';
+import { requestFrameOrTimeout } from '../utils/animationFrame.js';
 
 const focusableSelector = [
   'button:not([disabled])',
@@ -44,7 +45,9 @@ export function useModalDialog({
   useEffect(() => {
     if (!open) return undefined;
     previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const animationFrame = requestAnimationFrame(() => {
+    // Bounded: a visible page that delivers no frames must still move focus
+    // into the dialog, or Escape/Tab containment never engage.
+    const cancelInitialFocus = requestFrameOrTimeout(() => {
       const dialog = dialogRef.current;
       if (!dialog) return;
       const initialTarget = initialFocusRef?.current;
@@ -55,7 +58,7 @@ export function useModalDialog({
     });
 
     return () => {
-      cancelAnimationFrame(animationFrame);
+      cancelInitialFocus();
       const previousFocus = previousFocusRef.current;
       if (restoreFocus && previousFocus?.isConnected) previousFocus.focus();
       previousFocusRef.current = null;

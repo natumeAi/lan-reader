@@ -1,5 +1,7 @@
 import type { Book, Folder } from './types/library.js';
-import { lazy, Suspense, useCallback, useEffect, useRef } from 'react';
+import type { MainView } from './utils/mainViewPreference.js';
+import type { GoalKind } from './utils/readingStatsFormat.js';
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef } from 'react';
 import {
   DndContext,
   DragOverlay,
@@ -9,15 +11,21 @@ import { DeleteDropZone } from './components/bookshelf/DeleteDropZone.js';
 import { DragPreview } from './components/bookshelf/DragPreview.js';
 import { FixedDragPreview } from './components/bookshelf/FixedDragPreview.js';
 import { LibraryHome } from './components/bookshelf/LibraryHome.js';
+import { MainNavigation } from './components/common/MainNavigation.js';
 import { FolderOverlay } from './components/folders/FolderOverlay.js';
+import { ReadingHome } from './components/home/ReadingHome.js';
 import { useBookDeletion } from './hooks/useBookDeletion.js';
 import { useFolderState } from './hooks/useFolderState.js';
 import { useLibraryDrag } from './hooks/useLibraryDrag.js';
+import { useMainView } from './hooks/useMainView.js';
 import { useReaderSession } from './hooks/useReaderSession.js';
+import { useReadingActivityDelivery } from './hooks/useReadingActivityDelivery.js';
+import { useReadingDashboard } from './hooks/useReadingDashboard.js';
 import { useReducedMotion } from './hooks/useReducedMotion.js';
 import { useShelfData } from './hooks/useShelfData.js';
 import { dropAnimationConfig } from './utils/dragMotion.js';
 import { rectIntersectsViewport } from './utils/folderMotion.js';
+import { MAIN_VIEW } from './utils/mainViewPreference.js';
 
 const ReaderView = lazy(() => import('./components/reader/ReaderView.js'));
 
@@ -42,6 +50,27 @@ function App() {
     readingBookOrigin,
     restoreReaderBook,
   } = useReaderSession();
+  const { mainView, selectMainView } = useMainView({ readerActive: Boolean(readingBook) });
+  // Delivers reading activity independently of any open reader. Only the dashboard observes
+  // its status (while active); the shell never subscribes.
+  const readingActivityDelivery = useReadingActivityDelivery();
+  // 首页 statistics. Active only while 首页 is shown with no reader over it, so entering 首页
+  // and closing a reader onto it refresh, and delivery status is observed only then.
+  const readingDashboard = useReadingDashboard({
+    active: mainView === MAIN_VIEW.HOME && !readingBook,
+    delivery: readingActivityDelivery,
+  });
+  const {
+    closeGoalDialog,
+    goalDialog,
+    invalidate: invalidateReadingDashboard,
+    openGoalDialog,
+    refresh: refreshReadingDashboard,
+    saveGoals: saveReadingGoals,
+  } = readingDashboard;
+  const homeViewRef = useRef<HTMLDivElement>(null);
+  const shelfViewRef = useRef<HTMLDivElement>(null);
+  const previousMainViewRef = useRef(mainView);
   const {
     beginShelfProjection,
     catalogBooks,
@@ -109,6 +138,7 @@ function App() {
   } = useBookDeletion({
     clearReaderBookIfDeleted,
     loadShelf,
+    onBookDeleted: invalidateReadingDashboard,
     openFolder,
     refreshOpenFolderBooksOrClose,
     setError: setOperationError,
@@ -151,6 +181,43 @@ function App() {
     setShelfItems,
     shelfItems,
   });
+  // The reader, an open/closing Folder, the delete and goal dialogs and an active drag each
+  // own interaction; the main views cannot be switched underneath them.
+  const isMainNavigationBlocked = Boolean(
+    readingBook ||
+    openFolder ||
+    isFolderClosing ||
+    deleteCandidateBook ||
+    goalDialog ||
+    activeDragPreview,
+  );
+
+  const handleSaveReadingGoal = useCallback((kind: GoalKind, value: number) => (
+    saveReadingGoals(kind === 'daily' ? { dailyMinutes: value } : { annualBooks: value })
+  ), [saveReadingGoals]);
+
+  const handleSelectMainView = useCallback((view: MainView) => {
+    if (isMainNavigationBlocked) return;
+    selectMainView(view);
+  }, [isMainNavigationBlocked, selectMainView]);
+
+  const handleOpenShelf = useCallback(() => {
+    handleSelectMainView(MAIN_VIEW.SHELF);
+  }, [handleSelectMainView]);
+
+  // A control inside the view that was just hidden loses focus with it (for example the
+  // empty-state shelf action). Hand focus to the newly shown view instead of the document.
+  useLayoutEffect(() => {
+    if (previousMainViewRef.current === mainView) return;
+    previousMainViewRef.current = mainView;
+    const activeElement = document.activeElement;
+    const shownView = mainView === MAIN_VIEW.HOME ? homeViewRef.current : shelfViewRef.current;
+    const hiddenView = mainView === MAIN_VIEW.HOME ? shelfViewRef.current : homeViewRef.current;
+    if (!activeElement || activeElement === document.body || hiddenView?.contains(activeElement)) {
+      shownView?.focus({ preventScroll: true });
+    }
+  }, [mainView]);
+
   // Stable so the memoized shelf cards survive a DndContext re-render.
   const handleOpenBook = useCallback((book: Book, originRect: DOMRect | null) => {
     openBook(book, originRect, { disabled: isSavingOrder });
@@ -230,31 +297,70 @@ function App() {
       onDragMove={handleDragMove}
       onDragStart={handleDragStart}
     >
-      <main className="app-shell" aria-label="EPUB Reader">
-        <LibraryHome
-          catalogBooks={catalogBooks}
-          catalogError={catalogError}
-          operationError={operationError}
-          shelfError={shelfError}
-          dragIntent={dragIntent}
-          fileInputRef={fileInputRef}
-          hasLoadedCatalog={hasLoadedCatalog}
-          hasLoadedShelf={hasLoadedShelf}
-          isCatalogLoading={isCatalogLoading}
-          isLoading={isLoading}
-          isSavingOrder={isSavingOrder}
-          isUploading={isUploading}
-          landingKey={landingKey}
-          mutationFeedback={mutationFeedback}
-          onFileChange={handleFileChange}
-          onOpenBook={handleOpenBook}
-          onOpenFolder={handleOpenFolder}
-          onRetryCatalog={loadCatalog}
-          onRetryShelf={loadShelf}
-          recentReadingItems={recentReadingItems}
-          shelfItems={shelfItems}
-          uploadProgress={uploadProgress}
-        />
+      <main className="app-shell has-main-navigation" aria-label="EPUB Reader">
+        {/* Both views stay mounted so shelf search/view/sort, grid and scroll context survive
+            a round trip. The hidden view is display:none and inert: it takes no focus, has no
+            laid-out cover for reader transitions, and cannot start a drag. */}
+        <div
+          ref={homeViewRef}
+          className="main-view"
+          data-main-view={MAIN_VIEW.HOME}
+          hidden={mainView !== MAIN_VIEW.HOME}
+          inert={mainView !== MAIN_VIEW.HOME}
+          tabIndex={-1}
+        >
+          <ReadingHome
+            goalDialog={goalDialog}
+            hasLoadedRecentReading={hasLoadedShelf}
+            onCloseGoalDialog={closeGoalDialog}
+            onEditGoal={openGoalDialog}
+            onOpenBook={handleOpenBook}
+            onOpenShelf={handleOpenShelf}
+            onRetryReadingStats={refreshReadingDashboard}
+            onRetryRecentReading={loadShelf}
+            onSaveGoal={handleSaveReadingGoal}
+            readingActivityNotice={readingDashboard.deliveryNotice}
+            readingStats={readingDashboard.stats}
+            readingStatsError={readingDashboard.error}
+            recentReadingError={shelfError}
+            recentReadingItems={recentReadingItems}
+          />
+        </div>
+        <div
+          ref={shelfViewRef}
+          className="main-view"
+          data-main-view={MAIN_VIEW.SHELF}
+          hidden={mainView !== MAIN_VIEW.SHELF}
+          inert={mainView !== MAIN_VIEW.SHELF}
+          tabIndex={-1}
+        >
+          <LibraryHome
+            catalogBooks={catalogBooks}
+            catalogError={catalogError}
+            operationError={operationError}
+            shelfError={shelfError}
+            dragIntent={dragIntent}
+            fileInputRef={fileInputRef}
+            hasLoadedCatalog={hasLoadedCatalog}
+            hasLoadedShelf={hasLoadedShelf}
+            isCatalogLoading={isCatalogLoading}
+            isLoading={isLoading}
+            isSavingOrder={isSavingOrder}
+            isUploading={isUploading}
+            landingKey={landingKey}
+            mutationFeedback={mutationFeedback}
+            onFileChange={handleFileChange}
+            onOpenBook={handleOpenBook}
+            onOpenFolder={handleOpenFolder}
+            onRetryCatalog={loadCatalog}
+            onRetryShelf={loadShelf}
+            shelfItems={shelfItems}
+            uploadProgress={uploadProgress}
+          />
+        </div>
+        {isMainNavigationBlocked ? null : (
+          <MainNavigation activeView={mainView} onSelectView={handleSelectMainView} />
+        )}
         <FolderOverlay
           books={folderBooks}
           error={folderError}
@@ -278,6 +384,7 @@ function App() {
           <Suspense fallback={readingBookOrigin ? null : <ReaderRestoreFallback />}>
             <ReaderView
               key={readingBook.id}
+              activitySink={readingActivityDelivery}
               book={readingBook}
               originRect={readingBookOrigin}
               onBookUnavailable={handleBookUnavailable}

@@ -108,3 +108,81 @@ export interface CountRow {
 export interface RevisionRow {
   revision: number;
 }
+
+/** `reading_stats_settings`, created by `006_add_reading_statistics.sql`. Singleton. */
+export interface ReadingStatsSettingsRow {
+  id: number;
+  daily_goal_minutes: number;
+  annual_book_goal: number;
+  tracking_started_at: string;
+  updated_at: string;
+}
+
+/**
+ * `reading_activity_events`, created by `006_add_reading_statistics.sql`.
+ *
+ * One acknowledgment per accepted activity event id. `skipped_sections` is the
+ * JSON-encoded skipped-coverage list returned on every identical retry.
+ */
+export interface ReadingActivityEventRow {
+  id: string;
+  book_id: number;
+  payload_hash: string;
+  local_date: string;
+  duration_ms: number;
+  characters_added: number;
+  skipped_sections: string;
+  accepted_at: string;
+}
+
+/** `reading_daily_activity`, created by `006_add_reading_statistics.sql`. */
+export interface ReadingDailyActivityRow {
+  book_id: number;
+  local_date: string;
+  duration_ms: number;
+  characters: number;
+}
+
+/**
+ * `reading_section_coverage`, created by `006_add_reading_statistics.sql`.
+ *
+ * `intervals` is the JSON-encoded merged `[start, end)` list.
+ */
+export interface ReadingSectionCoverageRow {
+  book_id: number;
+  normalization_version: number;
+  section_index: number;
+  signature: string;
+  section_length: number;
+  intervals: string;
+  covered_characters: number;
+  updated_at: string;
+}
+
+/** `reading_completions`, created by `006_add_reading_statistics.sql`. */
+export interface ReadingCompletionRow {
+  book_id: number;
+  year: number;
+  local_date: string;
+  occurred_at: string;
+  event_id: string;
+}
+
+/** Seven-day chart: activity summed over every Book for one local date. */
+export interface ReadingDayTotalRow {
+  local_date: string;
+  duration_ms: number;
+  characters: number;
+}
+
+/** Lifetime duration and character totals. */
+export interface ReadingLifetimeTotalRow {
+  duration_ms: number;
+  characters: number;
+}
+
+/** Annual completion list: completion joined with its Book. */
+export type CompletedBookRow = BookRow & {
+  completion_local_date: string;
+  completion_occurred_at: string;
+};

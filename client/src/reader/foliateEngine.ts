@@ -3,16 +3,23 @@ import { View } from 'foliate-js/view.js';
 import { compare } from 'foliate-js/epubcfi.js';
 import { unzipSync, strFromU8 } from 'fflate';
 import type { FoliateBook, NavigationTarget } from './foliateTypes';
-import type { ReaderEngine, ReaderState, StablePosition } from './types';
+import type { ReaderEngine, ReaderSession, ReaderState, StablePosition, NavigationCommand, NavigationResult } from './types';
 import type { ReaderLocation, TocItem, ReadingSection, PageRanges } from '../types/epub';
 import type { ReaderSettings } from '../hooks/useReaderSettings';
 import { getFoliateStyles } from '../hooks/useReaderSettings';
 import { createReadingSections, findCurrentTocItem, flattenTocItems, prepareTocItems } from '../utils/epubToc';
 import { createSectionPagination } from './sectionPagination';
 import { protectBookDocument } from './contentSecurity';
-import { createPageTurnPreview, turnAdjacentView } from './pageTurnPreview';
+import { turnAdjacentView } from './foliateNavigation';
+import { createFoliateSurfaceProvider, observeFoliateSurface } from './foliateSurfaceProvider';
+import { createPageBuffer } from './pageBuffer';
+import { waitForFrameOrTimeout } from '../utils/animationFrame';
 
-const paint = () => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+// Layout settlement waits two frames, each bounded by a timer so a visible page
+// that delivers no frames still opens (instead of hitting the operation deadline).
+const paint = async () => { await waitForFrameOrTimeout(); await waitForFrameOrTimeout(); };
+// Disposal must let upstream frame callbacks drain; never race a timer here.
+const drainFrames = () => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
 const delay = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 export class FoliateEngine implements ReaderEngine {
   readonly element = new View();
@@ -22,16 +29,18 @@ export class FoliateEngine implements ReaderEngine {
   readingSections: ReadingSection[] = [];
   restoreTarget: string | number = 0;
   private book: FoliateBook | null = null;
+  private documentSections = new WeakMap<Document, number>();
   private epoch = 0;
   private workTail: Promise<void> = Promise.resolve();
   private locationCache: { key: string; value: ReaderLocation } | null = null;
   private settings: ReaderSettings;
-  private requestedSettings: ReaderSettings;
   private settingsKey = '';
   private resizeTimer: ReturnType<typeof setTimeout> | undefined;
   private files: Record<string, Uint8Array> = {};
   private pagination: ReturnType<typeof createSectionPagination>;
-  private previews: ReturnType<typeof createPageTurnPreview>;
+  readonly session: ReaderSession;
+  private optionalWorkAllowed = false;
+  private stopContentObservation: (() => void) | undefined;
   private observer: ResizeObserver;
   private lastDimensions = '';
   private events: { time: number; event: string; state: ReaderState; cfi: string | null; page?: number; text?: string }[] = [];
@@ -39,24 +48,33 @@ export class FoliateEngine implements ReaderEngine {
   onState?: (state: ReaderState, error?: unknown) => void;
   onPages?: (section: ReadingSection, ranges: PageRanges) => void;
   onInvalidatePages?: () => void;
+  onLayoutInvalidated?: () => void;
   get direction(): 'ltr' | 'rtl' { return this.book?.dir === 'rtl' ? 'rtl' : 'ltr'; }
   constructor(private container: HTMLElement, settings: ReaderSettings) {
     this.settings = { ...settings };
-    this.requestedSettings = { ...settings };
-    this.previews = createPageTurnPreview({
-      container, createBook: () => this.createBook(), createView: () => new View(), configure: view => this.configure(view),
-      snapshot: () => this.stable ? { key: `${this.layout()}:${this.stable.cfi}`, cfi: this.stable.cfi, page: this.stable.page } : null,
-      available: direction => this.state === 'ready' && Boolean(this.stable) && !(direction === 'next' ? this.stable?.location.atEnd : this.stable?.location.atStart),
-      onWorkStart: () => this.pagination.pause(),
-      onWorkEnd: () => { if (!this.previews.busy && this.state === 'ready') this.pagination.request(); },
+    this.element.addEventListener('load', event => {
+      const { doc, index } = (event as CustomEvent<{ doc: Document; index: number }>).detail;
+      if (doc && Number.isInteger(index) && index >= 0) this.documentSections.set(doc, index);
     });
-    this.pagination = createSectionPagination({ container, createBook: () => this.createBook(), createView: () => new View(), configure: view => this.configure(view), getSnapshot: () => ({ layoutKey: this.layout(), currentSectionIndex: this.stable?.location.start?.index, readingSections: this.readingSections }), canMeasure: () => this.state === 'ready' && !this.previews.busy, onPages: (section, ranges) => this.onPages?.(section, ranges), onInvalidate: () => this.onInvalidatePages?.() });
+    const provider = createFoliateSurfaceProvider({
+      container, createBook: () => this.createBook(), createView: () => new View(),
+      configure: (view, request) => this.configure(view, request.settings, request.width),
+      onInvalidated: ownerId => { if (buffer.isCurrentOwner(ownerId)) this.onLayoutInvalidated?.(); },
+    });
+    const buffer = createPageBuffer(provider);
+    this.pagination = createSectionPagination({ container, createBook: () => this.createBook(), createView: () => new View(), configure: view => this.configure(view), getSnapshot: () => ({ layoutKey: this.layout(), currentSectionIndex: this.stable?.location.start?.index, readingSections: this.readingSections }), canMeasure: () => this.optionalWorkAllowed && this.state === 'ready' && !buffer.busy, onPages: (section, ranges) => this.onPages?.(section, ranges), onInvalidate: () => this.onInvalidatePages?.() });
+    this.session = {
+      engine: this, foreground: this.element, buffer, pagination: this.pagination,
+      createRequest: (position, key, direction, viewport) => ({ key, cfi: position.cfi, page: position.page, ...viewport, direction, readingDirection: this.direction, settings: { ...this.settings } }),
+      setOptionalWorkAllowed: allowed => { this.optionalWorkAllowed = allowed; },
+    };
     this.element.style.cssText = 'display:block;width:100%;height:100%;contain:layout paint;pointer-events:none;background:var(--reader-bg,#fff)';
     container.append(this.element);
     this.observer = new ResizeObserver(() => {
       const dimensions = this.dimensions();
       if (dimensions === this.lastDimensions) return;
       this.lastDimensions = dimensions;
+      if (this.onLayoutInvalidated && this.stable) { this.onLayoutInvalidated(); return; }
       this.invalidatePages();
       if (this.state === 'ready') {
         this.setState('recovering');
@@ -78,11 +96,7 @@ export class FoliateEngine implements ReaderEngine {
   }
   private setState(state: ReaderState, error?: unknown) {
     if (state === 'ready') this.element.style.visibility = '';
-    if (state === 'failed') this.previews.invalidate();
     this.state = state; this.trace(state); this.onState?.(state, error);
-    if (state === 'ready' && JSON.stringify(this.requestedSettings) !== this.settingsKey) {
-      queueMicrotask(() => { void this.applySettings(this.requestedSettings); });
-    }
   }
   private alive(token: number) { return token === this.epoch && this.state !== 'closed' && this.state !== 'suspended'; }
   private async settleLayout(token: number) {
@@ -101,29 +115,37 @@ export class FoliateEngine implements ReaderEngine {
     }
     throw new Error('阅读窗口尚未稳定');
   }
-  private async operation(work: (token: number) => Promise<void>) {
+  private async operation(work: (token: number) => Promise<void | boolean>): Promise<NavigationResult> {
     const token = ++this.epoch;
     this.pauseMeasurement();
+    this.stopContentObservation?.(); this.stopContentObservation = undefined;
     this.setState('recovering');
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let boundary = false;
     const job = this.workTail.catch(() => {}).then(async () => {
-      if (this.alive(token)) await work(token);
+      if (this.alive(token)) boundary = await work(token) === false;
     });
     this.workTail = job;
     try {
       await Promise.race([job, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('阅读位置恢复超时')), 10000); })]);
-      if (!this.alive(token)) return;
+      if (!this.alive(token)) return { kind: 'cancelled', commandId: token };
       this.setState('ready');
-      this.schedulePages();
+      if (this.element.renderer) this.stopContentObservation = observeFoliateSurface(this.element, () => this.onLayoutInvalidated?.());
+      if (boundary) return { kind: 'boundary', commandId: token };
+      return this.stable ? { kind: 'verified', commandId: token, position: this.stable } : { kind: 'unavailable', commandId: token };
     } catch (error) {
-      if (!this.alive(token)) return;
+      if (!this.alive(token)) return { kind: 'cancelled', commandId: token };
       ++this.epoch; // Late completions may never reopen persistence.
       this.setState('failed', error);
+      return { kind: 'failed', commandId: token, error };
     } finally { clearTimeout(timer); }
   }
   async open(data: ArrayBuffer, target: string | number = 0) {
+    await this.execute({ kind: 'open', data, target });
+  }
+  private async openVerified(data: ArrayBuffer, target: string | number = 0) {
     this.restoreTarget = target;
-    await this.operation(async token => {
+    return this.operation(async token => {
       this.files = unzipSync(new Uint8Array(data));
       const book = await this.createBook();
       if (!this.alive(token)) { book.destroy(); return; }
@@ -163,7 +185,7 @@ export class FoliateEngine implements ReaderEngine {
       }
     });
   }
-  private configure(view: View) {
+  private configure(view: View, settings: Readonly<ReaderSettings> = this.settings, width = this.container.clientWidth) {
     const renderer = view.renderer;
     renderer.setAttribute('flow', 'paginated');
     renderer.setAttribute('max-column-count', '1');
@@ -171,11 +193,11 @@ export class FoliateEngine implements ReaderEngine {
     renderer.setAttribute('max-block-size', '100000px');
     // Foliate interprets this attribute as a percentage, including in its
     // geometry calculations (a pixel unit would produce invalid columns).
-    renderer.setAttribute('gap', `${Math.min(40, (48 + this.settings.horizontalMargin) / Math.max(1, this.container.clientWidth) * 100)}%`);
-    renderer.setAttribute('margin', `${60 + this.settings.verticalMargin}px`);
+    renderer.setAttribute('gap', `${Math.min(40, (48 + settings.horizontalMargin) / Math.max(1, width) * 100)}%`);
+    renderer.setAttribute('margin', `${60 + settings.verticalMargin}px`);
     renderer.removeAttribute('animated');
-    renderer.setStyles?.(getFoliateStyles(this.settings, view.isFixedLayout));
-    this.settingsKey = JSON.stringify(this.settings);
+    renderer.setStyles?.(getFoliateStyles(settings, view.isFixedLayout));
+    if (view === this.element) this.settingsKey = JSON.stringify(settings);
   }
   private resolve(target: string | number): NavigationTarget {
     if (typeof target === 'string' && !target.startsWith('epubcfi(')) {
@@ -192,7 +214,23 @@ export class FoliateEngine implements ReaderEngine {
     return resolved;
   }
   getContents() {
-    return (this.element.renderer?.getContents() ?? []).map(c => ({ document: c.doc, sectionIndex: c.index ?? this.element.lastLocation?.section?.current ?? 0, frame: c.doc.defaultView?.frameElement as HTMLIFrameElement | null }));
+    return (this.element.renderer?.getContents() ?? []).flatMap(c => {
+      if (!c.doc) return [];
+      const sectionIndex = c.index ?? this.documentSections.get(c.doc)
+        ?? (this.element.isFixedLayout ? undefined : this.element.lastLocation?.section?.current);
+      // Fixed spreads include blank and opposite-side documents. Never label
+      // them using the active side's location when the renderer omits indices.
+      return sectionIndex === undefined ? [] : [{ document: c.doc, sectionIndex, frame: c.doc.defaultView?.frameElement as HTMLIFrameElement | null }];
+    });
+  }
+  private isFixedSectionVisible(index: number) {
+    const content = this.getContents().find(c => c.sectionIndex === index);
+    const frame = content?.frame;
+    if (!frame?.isConnected) return false;
+    const rect = frame.getBoundingClientRect();
+    const viewport = this.container.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0 && rect.right > viewport.left + 1
+      && rect.left < viewport.right - 1 && rect.bottom > viewport.top && rect.top < viewport.bottom;
   }
   private targetRange(target: string) {
     const resolved = this.resolve(target);
@@ -203,16 +241,23 @@ export class FoliateEngine implements ReaderEngine {
   }
   isVisible(target: string) {
     try {
-      if (this.element.isFixedLayout && !target.includes('!')) return this.resolve(target).index === this.element.lastLocation?.section?.current && this.getContents().length > 0;
+      if (this.element.isFixedLayout) {
+        const index = this.resolve(target).index;
+        if (index !== this.element.lastLocation?.section?.current || !this.isFixedSectionVisible(index)) return false;
+        if (!target.includes('!')) return true;
+      }
       const range = this.targetRange(target);
-      if (!range) return this.element.isFixedLayout && this.resolve(target).index === this.element.lastLocation?.section?.current;
-      const visible = this.element.lastLocation?.range;
+      if (!range) return false;
+      const visible = this.element.isFixedLayout ? range.startContainer.ownerDocument?.createRange() : this.element.lastLocation?.range;
+      if (this.element.isFixedLayout) visible?.selectNodeContents(range.startContainer.ownerDocument!.documentElement);
       if (!visible || visible.startContainer.ownerDocument !== range.startContainer.ownerDocument) return false;
       const frame = range.startContainer.ownerDocument?.defaultView?.frameElement;
       const f = frame?.getBoundingClientRect();
       const viewport = this.container.getBoundingClientRect();
-      if (!f) return false;
-      const onPage = (r: DOMRect) => r.height > 0 && r.right + f.left > viewport.left + 1 && r.left + f.left < viewport.right - 1 && r.bottom + f.top > viewport.top && r.top + f.top < viewport.bottom;
+      if (!frame || !f) return false;
+      const scaleX = this.element.isFixedLayout && frame.clientWidth > 0 ? f.width / frame.clientWidth : 1;
+      const scaleY = this.element.isFixedLayout && frame.clientHeight > 0 ? f.height / frame.clientHeight : 1;
+      const onPage = (r: DOMRect) => r.height > 0 && r.right * scaleX + f.left > viewport.left + 1 && r.left * scaleX + f.left < viewport.right - 1 && r.bottom * scaleY + f.top > viewport.top && r.top * scaleY + f.top < viewport.bottom;
       if (range.startContainer.nodeType === 1) {
         // Element CFIs denote the start of an element, which can precede the
         // first text point in foliate's visible Range (headings and images).
@@ -254,6 +299,7 @@ export class FoliateEngine implements ReaderEngine {
     await this.settleLayout(token);
     if (!this.alive(token)) return;
     if (this.element.lastLocation?.section?.current !== resolved.index) throw new Error('阅读位置未到达目标章节');
+    if (this.element.isFixedLayout && !this.isFixedSectionVisible(resolved.index)) throw new Error('目标固定版式页面不可见');
     if (typeof target === 'string' && target.startsWith('epubcfi(')) {
       const range = this.element.isFixedLayout && !target.includes('!') ? null : this.targetRange(target);
       if (range && compare(this.element.getCFI(resolved.index, range), target) !== 0) throw new Error('保存的 CFI 无法精确往返解析');
@@ -334,61 +380,56 @@ export class FoliateEngine implements ReaderEngine {
     this.restoreTarget = cfi;
     // The controller may still be covering the newly navigated foreground with
     // its preview. Keep that exact surface until it explicitly cancels it.
-    this.previews.invalidate(true);
     this.trace('verified');
   }
   publish() { if (this.state === 'ready' && this.stable) this.onPosition?.(this.stable); }
   async display(target: string | number) {
-    if (this.state !== 'ready') return;
-    this.previews.invalidate();
-    await this.operation(async token => { await this.gotoVerified(target, token); if (this.alive(token)) this.commit(); });
-    this.publish();
+    await this.execute({ kind: 'display', target });
   }
   async turn(direction: 'next' | 'prev') {
-    if (this.state !== 'ready') return;
-    await this.operation(async token => {
-      await turnAdjacentView(this.element, this.book!, direction);
+    await this.execute({ kind: 'turn', direction });
+  }
+  async execute(command: NavigationCommand): Promise<NavigationResult> {
+    if (this.state === 'closed') return { kind: 'unavailable', commandId: this.epoch };
+    if (command.kind === 'open') return this.openVerified(command.data, command.target);
+    if (command.kind === 'turn' || command.kind === 'display') {
+      if (this.state !== 'ready') return { kind: 'unavailable', commandId: this.epoch };
+    }
+    if (command.kind === 'turn') return this.operation(async token => {
+      if (!await turnAdjacentView(this.element, this.book!, command.direction)) return false;
       await this.settleLayout(token);
       if (this.alive(token)) this.commit();
     });
-    this.publish();
+    const previous = this.stable;
+    return this.operation(async token => {
+      if (command.kind === 'settings') {
+        this.settings = { ...command.settings }; this.configure(this.element); this.invalidatePages();
+      } else if (command.kind === 'restore') this.configure(this.element);
+      await this.gotoVerified(command.target, token);
+      if (!this.alive(token)) return;
+      if (command.kind === 'restore' && previous?.cfi === command.target && previous.layout === this.layout()
+        && previous.page !== this.currentLocation()?.start?.displayed?.page) throw new Error('同布局恢复后的页码与离开时不同');
+      this.commit();
+    });
   }
-  prepareTurn(direction: 'next' | 'prev') { return this.previews.prepare(direction); }
-  cancelTurnPreview() { this.previews.cancel(); if (this.state === 'ready') this.previews.warm(); }
   suspend() {
     if (this.state === 'closed' || this.state === 'suspended' || this.state === 'failed') return;
     ++this.epoch; this.pauseMeasurement(); clearTimeout(this.resizeTimer);
-    this.previews.invalidate();
+    this.stopContentObservation?.(); this.stopContentObservation = undefined;
     this.element.style.visibility = 'hidden';
     this.setState('suspended');
   }
   async resume() {
     if (this.state === 'closed' || this.state === 'failed') return;
-    const stable = this.stable;
-    this.previews.invalidate();
     this.element.style.visibility = 'hidden';
-    const target = stable?.cfi ?? this.restoreTarget;
-    await this.operation(async token => {
-      this.configure(this.element);
-      await this.gotoVerified(target, token);
-      if (!this.alive(token)) return;
-      if (stable && stable.layout === this.layout() && stable.page !== this.currentLocation()?.start?.displayed?.page) throw new Error('同布局恢复后的页码与离开时不同');
-      this.commit();
-    });
-    // Resuming itself never rewrites the saved record.
+    await this.execute({ kind: 'restore', target: this.stable?.cfi ?? this.restoreTarget });
   }
   async applySettings(settings: ReaderSettings) {
-    this.requestedSettings = { ...settings };
     if (JSON.stringify(settings) === this.settingsKey || this.state !== 'ready') return;
-    const target = this.stable?.cfi ?? this.restoreTarget;
-    await this.operation(async token => {
-      this.settings = { ...settings }; this.configure(this.element); this.invalidatePages();
-      await this.gotoVerified(target, token); if (this.alive(token)) this.commit();
-    });
+    await this.execute({ kind: 'settings', settings, target: this.stable?.cfi ?? this.restoreTarget });
   }
-  private invalidatePages() { this.pagination.invalidate(); this.previews.invalidate(); }
-  pauseMeasurement() { this.pagination.pause(); this.previews.pauseWarm(); }
-  schedulePages() { this.pagination.request(); this.previews.warm(); }
+  private invalidatePages() { this.pagination.invalidate(); }
+  private pauseMeasurement() { this.pagination.pause(); this.session.buffer.stopWarm(); }
   private async createBook() {
     const files = this.files;
       const book = await new EPUB({
@@ -411,17 +452,20 @@ export class FoliateEngine implements ReaderEngine {
   destroy() {
     if (this.state === 'closed') return;
     ++this.epoch; this.pauseMeasurement(); clearTimeout(this.resizeTimer); this.observer.disconnect();
+    this.stopContentObservation?.(); this.stopContentObservation = undefined;
     this.setState('closed');
     const book = this.book;
     const release = async () => {
       // Foliate schedules style/font callbacks for the next paint. Close only
       // after the actual navigation job and those callbacks have drained.
-      await paint();
+      await drainFrames();
       try { this.element.close(); } finally { book?.destroy(); }
     };
     // Invalidate immediately, then release once. A late iframe may finish in
     // the detached element, but cannot publish or leak a new live renderer.
     void this.workTail.then(release, release);
-    this.pagination.destroy(); this.previews.destroy(); this.element.remove(); this.book = null; this.files = {};
+    this.pagination.destroy();
+    void this.session.buffer.destroy().catch(() => this.trace('buffer-release-failed'));
+    this.element.remove(); this.book = null; this.files = {};
   }
 }

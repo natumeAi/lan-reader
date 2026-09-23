@@ -4,6 +4,8 @@ import { errorMessage } from '../api/transport.js';
 interface BookDeletionOptions {
   clearReaderBookIfDeleted?: (id: number) => void;
   loadShelf?: () => unknown;
+  /** Called once the server deleted the Book (its statistics are deleted with it). */
+  onBookDeleted?: (id: number) => void;
   openFolder?: Folder | null;
   refreshOpenFolderBooksOrClose?: () => unknown;
   setError?: (message: string) => void;
@@ -18,6 +20,7 @@ const noop = () => {};
 export function useBookDeletion({
   clearReaderBookIfDeleted = noop,
   loadShelf = noop,
+  onBookDeleted = noop,
   openFolder,
   refreshOpenFolderBooksOrClose = noop,
   setError = noop,
@@ -58,6 +61,7 @@ export function useBookDeletion({
       await deleteBook(book.id);
 
       clearReaderBookIfDeleted(book.id);
+      onBookDeleted(book.id);
       setDeleteCandidateBook(null);
 
       if (openFolder) {
@@ -81,6 +85,7 @@ export function useBookDeletion({
     deleteCandidateBook,
     isDeletingBook,
     loadShelf,
+    onBookDeleted,
     openFolder,
     refreshOpenFolderBooksOrClose,
     setError,

@@ -1,4 +1,4 @@
-// Lifecycle fixes for foliate-js 78914aef4466eb960965702401634c2cb348e9b1.
+// Renderer fixes for foliate-js 78914aef4466eb960965702401634c2cb348e9b1.
 // Detached iframes lose contentDocument before queued style/font/resize callbacks
 // run. Guard those callbacks in both dev and production, without modifying the
 // installed package. Exact matches deliberately fail when upstream changes.
@@ -56,6 +56,16 @@ export function guardFoliateDisposal(source: string): string {
 
 export function guardFoliateFixedLayoutDisposal(source: string): string {
   return replaceExactly(source, [
+    [
+      '                const spread = last.left || last.right ? newSpread() : last',
+      '                const spread = last.left || last.right || last.center ? newSpread() : last',
+    ],
+    // Reusing a spread must update its active side before reporting the exact
+    // section. Rendering alone changes pixels while leaving location stale.
+    [
+      '        if (index === this.#index) {\n            this.#render(side)\n            return\n        }',
+      '        if (index === this.#index) {\n            this.#side = side ?? this.#side\n            this.#render()\n            this.#reportLocation(reason)\n            return\n        }',
+    ],
     [
       "        return new Promise(resolve => {\n            iframe.addEventListener('load', () => {",
       '        return loadFoliateFrame(iframe, src, () => {',

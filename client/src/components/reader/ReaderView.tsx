@@ -1,7 +1,8 @@
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react';
 import type { ReaderBook } from '../../types/library.js';
 import type { SessionRendition } from '../../types/readerSession.js';
-interface ReaderViewProps { book: ReaderBook; originRect?: Pick<DOMRect, 'left' | 'top' | 'width' | 'height'> | null; onBookUnavailable?: (id: number) => void; onClose: () => void; onOriginConsumed?: () => void; onProgressSettled?: () => void }
+import type { ReadingActivitySink } from '../../utils/activityDelivery.js';
+interface ReaderViewProps { book: ReaderBook; originRect?: Pick<DOMRect, 'left' | 'top' | 'width' | 'height'> | null; onBookUnavailable?: (id: number) => void; onClose: () => void; onOriginConsumed?: () => void; onProgressSettled?: () => void; activitySink?: ReadingActivitySink | null }
 import { useCallback, useEffect, useRef, useState } from 'react';
 import '../../styles/reader.css';
 import { useFoliateReader } from '../../hooks/useFoliateReader.js';
@@ -11,12 +12,17 @@ import { usePageTurnController } from '../../hooks/usePageTurnController.js';
 import { usePageProgress } from '../../hooks/usePageProgress.js';
 import { usePageScrollLock } from '../../hooks/usePageScrollLock.js';
 import { useReadingProgressPersistence } from '../../hooks/useReadingProgressPersistence.js';
+import { useReadingActivity } from '../../hooks/useReadingActivity.js';
 import { useReaderSettings } from '../../hooks/useReaderSettings.js';
+import type { ReaderSettings } from '../../hooks/useReaderSettings.js';
+import type { ReaderController } from '../../reader/readerController';
 import { useReducedMotion } from '../../hooks/useReducedMotion.js';
 import {
   contentImageCursorAtViewportPoint,
   findContentImageAtViewportPoint,
 } from '../../utils/contentImage.js';
+import { requestFrameOrTimeout } from '../../utils/animationFrame.js';
+import { findVisibleBookCoverRect } from '../../utils/coverOrigin.js';
 import { readerBookIdFromHistoryState } from '../../utils/readerHistoryState.js';
 import { ImageViewer } from './ImageViewer.js';
 import { ReaderBottomBar } from './ReaderBottomBar.js';
@@ -59,6 +65,7 @@ export function ReaderView({
   onClose,
   onOriginConsumed = noop,
   onProgressSettled = noop,
+  activitySink = null,
 }: ReaderViewProps) {
   const reducedMotion = useReducedMotion();
   const containerRef = useRef<(HTMLDivElement) | null>(null);
@@ -68,7 +75,7 @@ export function ReaderView({
   const originRectRef = useRef(originRect);
   const isClosingRef = useRef(false);
   const pageEdgeRef = useRef<(HTMLDivElement) | null>(null);
-  const bookPaginationRequestRef = useRef<(() => void) | null>(null);
+  const readerControllerRef = useRef<ReaderController | null>(null);
   const cancelPageTurnRef = useRef<((reason: string) => void) | null>(null);
   const captureCurrentProgressRef = useRef<(() => Promise<boolean | undefined>) | null>(null);
   const closeAnimationFramesRef = useRef(new Set<number>());
@@ -76,8 +83,8 @@ export function ReaderView({
   const panelCloseTimerRef = useRef<(ReturnType<typeof setTimeout>) | null>(null);
   const progressSettlementRef = useRef<(Promise<void>) | null>(null);
   const unmountSettlementTimerRef = useRef<(ReturnType<typeof setTimeout>) | null>(null);
-  const cancelBeforeRenditionMutation = useCallback(() => {
-    cancelPageTurnRef.current?.('settings');
+  const applyReaderSettings = useCallback(async (settings: ReaderSettings) => {
+    await readerControllerRef.current?.applySettings(settings);
   }, []);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
@@ -158,12 +165,7 @@ export function ReaderView({
   const {
     pageProgressController,
     pageProgressLabel,
-    refreshCurrentPageProgress,
   } = usePageProgress({ renditionRef });
-  const handleReaderSettingsReflow = useCallback((rendition: SessionRendition | null) => {
-    void refreshCurrentPageProgress(rendition);
-    bookPaginationRequestRef.current?.();
-  }, [refreshCurrentPageProgress]);
 
   const {
     decreaseFontSize,
@@ -187,11 +189,10 @@ export function ReaderView({
     resetReaderSettingsLoad,
     themeOptions,
   } = useReaderSettings({
-    beforeRenditionMutation: cancelBeforeRenditionMutation,
+    applySettings: applyReaderSettings,
     containerRef,
     currentCfiRef,
     isReaderReady: !isLoading && !error,
-    onSettingsReflow: handleReaderSettingsReflow,
     renditionRef,
   });
 
@@ -200,7 +201,18 @@ export function ReaderView({
     flushProgress,
   } = useReadingProgressPersistence({ bookId: book?.id });
 
+  // Reading statistics observe accepted positions only and never gate reading.
+  const readingActivity = useReadingActivity({
+    bookId: book?.id,
+    sink: activitySink,
+    contentReady: isReaderLayoutReady && !isLoading && !error,
+    blockingPanel: Boolean(activePanel),
+    imageViewerOpen: isImageViewerOpen,
+  });
+  const closeReadingActivity = readingActivity.close;
+
   const settleReaderProgress = useCallback(() => {
+    closeReadingActivity();
     if (progressSettlementRef.current) return progressSettlementRef.current;
 
     const settlement = Promise.resolve(captureCurrentProgressRef.current?.())
@@ -212,7 +224,7 @@ export function ReaderView({
       );
     progressSettlementRef.current = settlement;
     return settlement;
-  }, [flushProgress, onProgressSettled]);
+  }, [closeReadingActivity, flushProgress, onProgressSettled]);
 
   useEffect(() => {
     if (unmountSettlementTimerRef.current !== null) {
@@ -233,11 +245,11 @@ export function ReaderView({
     currentChapter,
     currentHref,
     engine,
+    controller,
     retry,
     startChapter,
     canFallback,
     progress,
-    requestBookPagination,
     toc,
   } = useFoliateReader({
     book,
@@ -247,6 +259,7 @@ export function ReaderView({
     isLayoutReady: isReaderLayoutReady,
     loadReaderSettings,
     markReaderSettingsLoaded,
+    onAcceptedObservation: readingActivity.observeAccepted,
     onBookUnavailable,
     pageProgressController,
     readerSettingsRef,
@@ -255,7 +268,7 @@ export function ReaderView({
     setError,
     setIsLoading,
   });
-  bookPaginationRequestRef.current = requestBookPagination;
+  readerControllerRef.current = controller;
   captureCurrentProgressRef.current = captureCurrentProgress;
   const handleExportDiagnostics = () => exportReaderDiagnostics(engine, readerSettingsRef.current);
   const handleStartDiagnostics = () => {
@@ -286,6 +299,7 @@ export function ReaderView({
   }, [closePanel]);
 
   const handleReaderTap = useCallback(({ clientX, clientY }: { clientX: number; clientY: number }) => {
+    if (readerControllerRef.current?.snapshot.phase !== 'idle') return false;
     const image = findContentImageAtViewportPoint(
       renditionRef.current?.getContents() ?? [],
       clientX,
@@ -306,21 +320,18 @@ export function ReaderView({
     phase: pageTurnPhase,
     turnPage,
   } = usePageTurnController({
-    engine,
-    currentCfiRef,
+    controller,
     disabled: Boolean(activePanel) || isImageViewerOpen || isLoading || Boolean(error),
     edgeRef: pageEdgeRef,
     onCenterTap: handleCenterTap,
-    onNavigationSettled: captureCurrentProgress,
-    onPageTurnCommitted: refreshCurrentPageProgress,
     onTap: handleReaderTap,
     reducedMotion,
-    renditionRef,
   });
 
   const handleGesturePointerMove = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     handlePagePointerMove(event);
     if (event.pointerType !== 'mouse' || event.buttons) return;
+    if (readerControllerRef.current?.snapshot.phase !== 'idle') return;
     const cursor = contentImageCursorAtViewportPoint(
       renditionRef.current?.getContents() ?? [],
       event.clientX,
@@ -360,19 +371,22 @@ export function ReaderView({
       return undefined;
     }
 
-    let raf1: number | null = null;
-    let raf2: number | null = null;
-    let completionRaf: number | null = null;
+    // Frame waits are bounded: a visible page that delivers no frames must
+    // still reach layout-ready, or the reader never starts loading.
+    let cancelFrame: (() => void) | null = null;
     let timer: ReturnType<typeof setTimeout> | null = null;
     setIsReaderLayoutReady(false);
-    raf1 = requestAnimationFrame(() => {
-      raf2 = requestAnimationFrame(() => {
+    cancelFrame = requestFrameOrTimeout(() => {
+      cancelFrame = requestFrameOrTimeout(() => {
+        cancelFrame = null;
         setFlipTransitionEnabled(true);
         setFlipTransform(null);
         setCoverOpacity(0);
         timer = setTimeout(() => {
+          timer = null;
           setFlipTransitionEnabled(false);
-          completionRaf = requestAnimationFrame(() => {
+          cancelFrame = requestFrameOrTimeout(() => {
+            cancelFrame = null;
             setIsReaderLayoutReady(true);
           });
         }, READER_FLIP_ANIM_MS);
@@ -380,9 +394,7 @@ export function ReaderView({
     });
 
     return () => {
-      if (raf1) cancelAnimationFrame(raf1);
-      if (raf2) cancelAnimationFrame(raf2);
-      if (completionRaf) cancelAnimationFrame(completionRaf);
+      cancelFrame?.();
       if (timer) clearTimeout(timer);
     };
   }, [reducedMotion]);
@@ -397,12 +409,9 @@ export function ReaderView({
       return;
     }
 
-    const targetEl = book?.id
-      ? document.querySelector(`[data-book-id="${book.id}"] .book-cover`)
-      : null;
-    const targetRect = targetEl?.getBoundingClientRect();
+    const targetRect = book?.id ? findVisibleBookCoverRect(book.id) : null;
 
-    if (targetRect && targetRect.width > 0 && targetRect.height > 0) {
+    if (targetRect) {
       setFlipTransitionEnabled(true);
       const firstFrame = requestAnimationFrame(() => {
         closeAnimationFramesRef.current.delete(firstFrame);
