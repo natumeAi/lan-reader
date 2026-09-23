@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { PointerEvent as ReactPointerEvent, RefObject } from 'react';
-import type { ReaderEngine } from '../reader/types';
+import type { ReaderSession } from '../reader/types';
 import { createReaderController } from '../reader/readerController';
 import type { ReaderController } from '../reader/readerController';
 
 interface Options {
   controller?: ReaderController | null;
   /** Transitional isolated-consumer seam; ReaderView passes its owned controller. */
-  engine?: ReaderEngine | null;
+  session?: ReaderSession | null;
   disabled: boolean; reducedMotion: boolean;
   onCenterTap: () => void;
   onTap?: (point: { clientX: number; clientY: number }) => boolean;
@@ -18,7 +18,7 @@ const idleSnapshot = { phase: 'idle' as const, direction: null };
 const sample = (event: ReactPointerEvent<HTMLDivElement>) => ({ x: event.clientX, y: event.clientY, time: event.timeStamp });
 
 /** React adapts events/capture and subscribes to low-frequency controller UI. */
-export function usePageTurnController({ controller: supplied, engine, disabled, reducedMotion, onCenterTap, onTap, onPageTurnCommitted, edgeRef }: Options) {
+export function usePageTurnController({ controller: supplied, session, disabled, reducedMotion, onCenterTap, onTap, onPageTurnCommitted, edgeRef }: Options) {
   const [local, setLocal] = useState<ReaderController | null>(null);
   const controller = supplied ?? local;
   const pointer = useRef<{ id: number; element: HTMLElement } | null>(null);
@@ -27,10 +27,10 @@ export function usePageTurnController({ controller: supplied, engine, disabled, 
     try { if (current?.element.hasPointerCapture(current.id)) current.element.releasePointerCapture(current.id); } catch { /* Capture already released by browser. */ }
   }, []);
   useEffect(() => {
-    if (supplied || !engine) return;
-    const owned = createReaderController(engine); setLocal(owned);
+    if (supplied || !session) return;
+    const owned = createReaderController(session); setLocal(owned);
     return () => { owned.destroy(); setLocal(null); };
-  }, [engine, supplied]);
+  }, [session, supplied]);
   useEffect(() => {
     controller?.configure({ disabled, reducedMotion, onCenterTap, onTap, onPageTurnCommitted, onReleasePointer: release });
   }, [controller, disabled, reducedMotion, onCenterTap, onTap, onPageTurnCommitted, release]);

@@ -6,13 +6,14 @@ type WorkKind = 'preview' | 'measurement';
 interface WorkRecord {
   id: number; kind: WorkKind; start: number; workEnd: number | null;
   released: number | null; bookCreated: number | null; viewCreated: number | null;
+  stage: string | null; failure: string | null;
 }
 const workRecords: WorkRecord[] = [];
 let nextWorkId = 0;
 /** Retain pending releases: canceling publication does not stop hidden work. */
 export function beginReaderWork(kind: WorkKind) {
   if (!readPageTurnDebugConfig().enabled) return undefined;
-  const record: WorkRecord = { id: ++nextWorkId, kind, start: performance.now(), workEnd: null, released: null, bookCreated: null, viewCreated: null };
+  const record: WorkRecord = { id: ++nextWorkId, kind, start: performance.now(), workEnd: null, released: null, bookCreated: null, viewCreated: null, stage: null, failure: null };
   workRecords.push(record);
   while (workRecords.length > 500) {
     const index = workRecords.findIndex(item => item.released !== null);
@@ -20,6 +21,8 @@ export function beginReaderWork(kind: WorkKind) {
     workRecords.splice(index, 1);
   }
   return {
+    stage(value: string) { record.stage = value; },
+    fail(reason: string) { record.failure = reason; },
     bookCreated() { record.bookCreated ??= performance.now(); },
     viewCreated() { record.viewCreated ??= performance.now(); },
     end() { record.workEnd ??= performance.now(); },

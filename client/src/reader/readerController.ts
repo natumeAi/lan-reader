@@ -1,4 +1,6 @@
-import type { ReaderEngine, StablePosition, NavigationCommand, NavigationResult } from './types';
+import type { ReaderSession, StablePosition, NavigationCommand, NavigationResult } from './types';
+import type { PositionKey, SurfaceLease } from './bufferTypes';
+import { samePositionKey } from './bufferTypes';
 import type { ReaderSettings } from '../hooks/useReaderSettings';
 import { createPageRenderer } from './pageRenderer';
 import type { PageRendererBinding } from './pageRenderer';
@@ -10,15 +12,16 @@ import { createPageTurnDiagnostics, readPageTurnDebugConfig } from '../utils/pag
 type Direction = 'next' | 'prev';
 export type ReaderPhase = 'idle' | 'tracking' | 'dragging' | 'preparing' | 'settling' | 'committing' | 'recovering' | 'suspended' | 'failed';
 export interface AcceptedPosition { reason: 'opened' | 'navigation' | 'layout-restored' | 'snapshot'; position: StablePosition; revision: number }
-interface Options { onAccepted?: (event: AcceptedPosition) => void; diagnostics?: ReturnType<typeof createPageTurnDiagnostics> }
+interface Options { onAccepted?: (event: AcceptedPosition) => void; diagnostics?: ReturnType<typeof createPageTurnDiagnostics>; preparationTimeoutMs?: number }
 interface InputOptions {
   disabled?: boolean; reducedMotion?: boolean;
   onCenterTap?: () => void; onTap?: (point: { clientX: number; clientY: number }) => boolean;
   onReleasePointer?: () => void;
   onPageTurnCommitted?: () => Promise<void>;
 }
-interface Snapshot extends GestureSnapshot { left: number }
-interface Pair { direction: Direction; width: number; sign: -1 | 1; element: HTMLElement | null; ready: Promise<Pair | null> }
+interface Snapshot extends GestureSnapshot { left: number; height: number }
+interface Pair { direction: Direction; width: number; sign: -1 | 1; element: HTMLElement | null; ready: Promise<Pair | null>; lease?: SurfaceLease }
+let nextSessionId = 0;
 const copyPosition = (position: StablePosition): StablePosition => ({
   ...position, location: { ...position.location, start: position.location.start ? {
     ...position.location.start, displayed: position.location.start.displayed ? { ...position.location.start.displayed } : undefined,
@@ -26,7 +29,11 @@ const copyPosition = (position: StablePosition): StablePosition => ({
 });
 
 /** One session owns input admission, candidates, acceptance and rollback. */
-export function createReaderController(engine: ReaderEngine, options: Options = {}) {
+export function createReaderController(session: ReaderSession, options: Options = {}) {
+  const { engine, foreground, buffer, pagination } = session;
+  const sessionId = ++nextSessionId;
+  let layoutGeneration = 0; let appearanceGeneration = 0; let optionalEpoch = 0;
+  let quiet: Promise<boolean> | null = null; let motionReady = false;
   const diagnostics = options.diagnostics ?? createPageTurnDiagnostics({ enabled: readPageTurnDebugConfig().enabled });
   const renderer = createPageRenderer();
   const listeners = new Set<() => void>();
@@ -46,7 +53,7 @@ export function createReaderController(engine: ReaderEngine, options: Options = 
   let settingsWork: Promise<void> | null = null;
   let resumeWork: Promise<void> | null = null;
   let lifecycle = 0;
-  let pointer: { id: number; snapshot: Snapshot; gesture: ReturnType<typeof createPageTurnEngine>; latest: GestureMoveResult | null; visual: number; start: number } | null = null;
+  let pointer: { id: number; snapshot: Snapshot; gesture: ReturnType<typeof createPageTurnEngine>; latest: GestureMoveResult | null; visual: number; start: number; boundaryPending?: boolean } | null = null;
   const setPhase = (phase: ReaderPhase, direction: Direction | null = ui.direction) => {
     if (ui.phase === phase && ui.direction === direction) return;
     ui = { phase, direction }; for (const listener of listeners) listener();
@@ -54,22 +61,55 @@ export function createReaderController(engine: ReaderEngine, options: Options = 
   const alive = (version: number) => !disposed && !suspended && version === command;
   const snapshot = (): Snapshot => {
     const location = committed?.location ?? engine.currentLocation();
-    const rect = engine.element.getBoundingClientRect();
-    return { width: engine.element.clientWidth, left: rect.left, direction: engine.direction ?? 'ltr', canPrev: !location?.atStart, canNext: !location?.atEnd };
+    const rect = foreground.getBoundingClientRect();
+    return { width: foreground.clientWidth, height: foreground.clientHeight, left: rect.left, direction: engine.direction ?? 'ltr', canPrev: !location?.atStart, canNext: !location?.atEnd };
   };
-  const clearPair = () => { pair = null; renderer.release(); binding = null; engine.cancelTurnPreview(); };
+  const key = (): PositionKey => ({ sessionId, positionRevision: revision, layoutGeneration, appearanceGeneration });
+  const stopOptional = () => { session.setOptionalWorkAllowed(false); buffer.stopWarm(); pagination.pause(); };
+  const clearPair = () => {
+    const previous = pair; pair = null; renderer.release(); binding = null;
+    buffer.endMotion(); previous?.lease?.release();
+    ++optionalEpoch; quiet = null; motionReady = false;
+  };
+  const bounded = (work: Promise<unknown>) => new Promise<boolean>(resolve => {
+    const timeout = setTimeout(() => resolve(false), options.preparationTimeoutMs ?? 2500);
+    void work.then(value => { clearTimeout(timeout); resolve(value !== false); }, () => { clearTimeout(timeout); resolve(false); });
+  });
+  const ensureMotion = () => {
+    if (quiet) return quiet;
+    stopOptional();
+    const epoch = optionalEpoch;
+    // A timeout declines animation; it never releases or discounts an owner.
+    quiet = bounded(Promise.all([pagination.stopAndDrain(), buffer.stopAndDrain()])).then(drained => {
+      if (epoch !== optionalEpoch || disposed || suspended) return false;
+      motionReady = drained; return drained;
+    });
+    return quiet;
+  };
+  const invalidateResources = () => {
+    ++layoutGeneration; ++optionalEpoch; quiet = null; motionReady = false;
+    buffer.invalidate(); pagination.invalidate();
+  };
   const resetVisual = () => {
     if (frame !== null) cancelAnimationFrame(frame); frame = null;
     pointer?.gesture.cancel(); pointer = null; input.onReleasePointer?.(); clearPair();
   };
   const idle = () => {
     if (!disposed && !suspended && !navigation && !recovery && !settingsWork && !resumeWork && resizeTimer === undefined && ui.phase !== 'failed') {
-      setPhase('idle', null); engine.schedulePages?.();
+      setPhase('idle', null); session.setOptionalWorkAllowed(true);
+      if (committed) {
+        const viewport = { width: foreground.clientWidth, height: foreground.clientHeight };
+        const requests = (['next', 'prev'] as const).filter(direction => direction === 'next' ? !committed!.location.atEnd : !committed!.location.atStart)
+          .map(direction => session.createRequest(committed!, key(), direction, viewport));
+        buffer.warm(requests);
+      }
+      pagination.request();
     }
   };
   const accept = (position: StablePosition, reason: AcceptedPosition['reason']) => {
     committed = copyPosition(position);
     if (reason !== 'layout-restored') { revision++; capturedRevision = -1; }
+    buffer.invalidate(); buffer.setCurrent(key(), committed.cfi);
     options.onAccepted?.({ reason, position: copyPosition(committed), revision });
   };
   const execute = (request: NavigationCommand) => {
@@ -78,6 +118,7 @@ export function createReaderController(engine: ReaderEngine, options: Options = 
     return pending;
   };
   const restore = async (origin: StablePosition, version: number) => {
+    stopOptional(); invalidateResources();
     const result = await execute({ kind: 'restore', target: origin.cfi });
     if (!alive(version)) return;
     if (result.kind === 'verified') {
@@ -114,34 +155,46 @@ export function createReaderController(engine: ReaderEngine, options: Options = 
   };
   const bind = (nextPair: Pair | null) => {
     if (binding?.pair === nextPair) return binding.value;
-    const value = renderer.bind({ current: engine.element, incoming: nextPair?.element, width: nextPair?.width ?? 0, sign: nextPair?.sign ?? 1 });
+    const value = renderer.bind({ current: foreground, incoming: nextPair?.element, width: nextPair?.width ?? 0, sign: nextPair?.sign ?? 1 });
     binding = { pair: nextPair, value }; return value;
   };
   const update = (nextPair: Pair | null, distance: number) => {
+    if (!motionReady || !buffer.beginMotion()) return;
     bind(nextPair).update(distance); diagnostics.markVisualUpdate(record);
     diagnostics.startPhase(record, 'motion');
   };
   const prepare = (next: Direction, ruler: Snapshot) => {
     if (pair?.direction === next) return pair.ready;
-    clearPair(); engine.pauseMeasurement?.();
+    clearPair(); stopOptional();
     if (pointer) pointer.visual = 0;
     const nextPair: Pair = { direction: next, width: ruler.width, sign: (next === 'next') !== (ruler.direction === 'rtl') ? -1 : 1, element: null, ready: Promise.resolve(null) };
     pair = nextPair;
     const prepareRecord = record;
     diagnostics.startPhase(prepareRecord, 'prepare');
-    nextPair.ready = engine.prepareTurn(next).then(element => {
-      if (disposed || suspended || pair !== nextPair || engine.state !== 'ready' || !element) return null;
-      nextPair.element = element;
+    const origin = committed;
+    if (!origin) return nextPair.ready;
+    const request = session.createRequest(origin, key(), next, { width: ruler.width, height: ruler.height });
+    nextPair.ready = (async () => {
+      if (!await bounded(buffer.prepare(request))) return null;
+      if (disposed || suspended || pair !== nextPair || !samePositionKey(request.key, key())) return null;
+      if (!await ensureMotion()) return null;
+      if (disposed || suspended || pair !== nextPair || engine.state !== 'ready' || !samePositionKey(request.key, key())) return null;
+      const lease = buffer.acquire(request); if (!lease) return null;
+      nextPair.lease = lease; nextPair.element = lease.prepared.element;
       const latest = pointer?.latest;
       const distance = latest?.phase === 'dragging' && latest.direction === next ? clampDragDistance(latest.distance, ruler.width) : 0;
       if (pointer) pointer.visual = distance;
       update(nextPair, distance); diagnostics.markMilestone(record, 'neighborReady');
       return nextPair;
-    }).catch(() => null).finally(() => diagnostics.endPhase(prepareRecord, 'prepare'));
+    })().catch(() => null).finally(() => diagnostics.endPhase(prepareRecord, 'prepare'));
     return nextPair.ready;
   };
   const animate = async (from: number, to: number, duration: number, nextPair: Pair | null) => {
     if (input.reducedMotion) return 'finished' as const;
+    const version = command; const epoch = optionalEpoch;
+    if (!motionReady && !await ensureMotion()) return 'cancelled' as const;
+    if (!alive(version) || epoch !== optionalEpoch || (nextPair && pair !== nextPair)) return 'cancelled' as const;
+    if (!buffer.beginMotion()) return 'cancelled' as const;
     const animationRecord = record; const time = document.timeline?.currentTime;
     try {
       return await bind(nextPair).settle(from, to, duration, typeof time === 'number' ? time : null, () => {
@@ -161,12 +214,14 @@ export function createReaderController(engine: ReaderEngine, options: Options = 
     if (alive(version)) { record = null; resetVisual(); idle(); }
   };
   const commitNavigation = async (request: NavigationCommand, version: number, turnRecord: number | null) => {
+    buffer.endMotion();
     setPhase('committing'); diagnostics.startPhase(turnRecord, 'handoff');
     const origin = committed;
     const result = await execute(request);
     if (!alive(version)) return;
     diagnostics.endPhase(turnRecord, 'handoff');
-    if (result.kind === 'verified') {
+    const proof = pair?.lease?.prepared.target;
+    if (result.kind === 'verified' && (request.kind !== 'turn' || !proof || (samePositionKey(pair!.lease!.request.key, key()) && result.position.location.start?.index === proof.sectionIndex && result.position.page === proof.page))) {
       diagnostics.markMilestone(turnRecord, 'engineVerified');
       accept(result.position, 'navigation');
       diagnostics.markMilestone(turnRecord, 'committed'); diagnostics.countInput('committed');
@@ -178,7 +233,7 @@ export function createReaderController(engine: ReaderEngine, options: Options = 
   const turnPage = async (next: Direction, commandOptions: { action?: string; inputTime?: number } = {}, distance = 0, frozen?: Snapshot) => {
     if (!admit()) return;
     const version = ++command; const ruler = frozen ?? snapshot();
-    engine.pauseMeasurement?.(); setPhase('preparing', next);
+    stopOptional(); setPhase('preparing', next);
     const turnRecord = diagnostics.begin({ action: commandOptions.action ?? 'tap-' + next, backend: 'foliate-paired-views', inputTime: commandOptions.inputTime }); record = turnRecord;
     diagnostics.startPhase(turnRecord, 'busy');
     try {
@@ -187,7 +242,8 @@ export function createReaderController(engine: ReaderEngine, options: Options = 
       if (!alive(version) || engine.state !== 'ready') return;
       setPhase('settling', next);
       if (boundary) {
-        clearPair(); if (await animate(distance, 0, PAGE_TURN_RULES.settleDurationMinMs, null) === 'cancelled') return;
+        if (pair) clearPair();
+        if (await animate(distance, 0, PAGE_TURN_RULES.settleDurationMinMs, null) === 'cancelled') return;
       } else if (nextPair) {
         update(nextPair, distance); diagnostics.markMilestone(turnRecord, 'neighborReady');
         const duration = commandOptions.action === 'release' ? getSettleDuration(ruler.width - Math.abs(distance), ruler.width) : PAGE_TURN_RULES.tapDurationMs;
@@ -204,7 +260,7 @@ export function createReaderController(engine: ReaderEngine, options: Options = 
   };
   const navigateTo = async (target: string) => {
     if (!admit()) return;
-    const version = ++command; engine.pauseMeasurement?.(); clearPair();
+    const version = ++command; stopOptional(); clearPair();
     const turnRecord = diagnostics.begin({ action: 'navigation', backend: 'foliate-paired-views' }); record = turnRecord;
     diagnostics.startPhase(turnRecord, 'busy');
     try { await commitNavigation({ kind: 'display', target }, version, turnRecord); }
@@ -217,6 +273,7 @@ export function createReaderController(engine: ReaderEngine, options: Options = 
     if (settingsWork) return settingsWork;
     settingsWork = (async () => {
       await cancel('settings');
+      stopOptional(); ++appearanceGeneration; invalidateResources();
       while (requestedSettings && !disposed && !suspended && committed) {
         const requested: ReaderSettings = requestedSettings; requestedSettings = null;
         const version = ++command; setPhase('recovering', null);
@@ -257,6 +314,7 @@ export function createReaderController(engine: ReaderEngine, options: Options = 
   };
   engine.onLayoutInvalidated = () => {
     void cancel('layout'); setPhase('recovering', null);
+    stopOptional(); invalidateResources();
     clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { resizeTimer = undefined; void resume(); }, 150);
   };
 
@@ -278,7 +336,7 @@ export function createReaderController(engine: ReaderEngine, options: Options = 
       return result;
     },
     turnPage, navigateTo, cancel, applySettings, resume,
-    suspend() { suspended = true; ++lifecycle; void cancel('background'); clearTimeout(resizeTimer); resizeTimer = undefined; engine.suspend(); setPhase('suspended', null); },
+    suspend() { suspended = true; ++lifecycle; void cancel('background'); stopOptional(); invalidateResources(); clearTimeout(resizeTimer); resizeTimer = undefined; engine.suspend(); setPhase('suspended', null); },
     capture() {
       if (!committed || disposed) return false;
       if (capturedRevision !== revision) { capturedRevision = revision; options.onAccepted?.({ reason: 'snapshot', position: copyPosition(committed), revision }); }
@@ -288,7 +346,7 @@ export function createReaderController(engine: ReaderEngine, options: Options = 
       if (!admissible()) return false;
       const ruler = snapshot(); const gesture = createPageTurnEngine(ruler); gesture.begin(sample);
       pointer = { id, snapshot: ruler, gesture, latest: null, visual: 0, start: sample.time };
-      engine.pauseMeasurement?.(); setPhase('tracking', null); return true;
+      stopOptional(); setPhase('tracking', null); return true;
     },
     pointerMove(id: number, sample: GestureInput) {
       const current = pointer; if (!current || current.id !== id) return false;
@@ -300,7 +358,17 @@ export function createReaderController(engine: ReaderEngine, options: Options = 
       if (frame === null) frame = requestAnimationFrame(() => {
         frame = null; if (pointer !== current || disposed || suspended) return;
         const latest = current.latest; if (!latest?.direction) return;
-        if (latest.boundary) { if (pair) clearPair(); current.visual = latest.visualDistance; update(null, current.visual); }
+        if (latest.boundary) {
+          if (pair) clearPair();
+          if (!current.boundaryPending) {
+            current.boundaryPending = true;
+            void ensureMotion().then(drained => {
+              current.boundaryPending = false;
+              if (!drained || pointer !== current || !current.latest?.boundary) return;
+              current.visual = current.latest.visualDistance; update(null, current.visual);
+            });
+          }
+        }
         else {
           void prepare(latest.direction, current.snapshot);
           if (pair?.element) { current.visual = latest.visualDistance; update(pair, current.visual); }
@@ -315,7 +383,7 @@ export function createReaderController(engine: ReaderEngine, options: Options = 
       diagnostics.endPhase(record, 'motion'); diagnostics.finish(record); record = null;
       setPhase('idle', null);
       if (result.kind === 'tap') {
-        engine.schedulePages?.();
+        idle();
         if (input.onTap?.({ clientX: sample.x, clientY: sample.y })) return;
         const zone = getTapZone(sample.x, current.snapshot.left, current.snapshot.width);
         if (zone === 'center') input.onCenterTap?.(); else void turnPage(zone, { inputTime: current.start }, 0, current.snapshot);
@@ -327,13 +395,14 @@ export function createReaderController(engine: ReaderEngine, options: Options = 
         const version = ++command; setPhase('settling', result.direction);
         record = diagnostics.begin({ action: 'rebound', backend: 'foliate-paired-views', inputTime: sample.time }); const reboundRecord = record;
         diagnostics.startPhase(record, 'busy');
-        const prepared = pair?.element ? pair : null; if (!prepared) clearPair();
+        const prepared = pair?.element ? pair : null; if (!prepared && pair) clearPair();
         void animate(current.visual, 0, getSettleDuration(Math.abs(current.visual), current.snapshot.width), prepared).finally(() => finish(version, reboundRecord));
       } else { resetVisual(); idle(); }
     },
     destroy() {
       if (disposed) return;
       disposed = true; ++command; ++lifecycle; clearTimeout(resizeTimer); resizeTimer = undefined; resetVisual();
+      stopOptional(); buffer.invalidate();
       engine.onLayoutInvalidated = undefined; diagnostics.destroy(); listeners.clear();
     },
   };

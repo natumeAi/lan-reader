@@ -39,6 +39,9 @@ export function createSectionPagination(options: SectionPaginationOptions) {
   let destroyed = false;
   let running = false;
   let pending = false;
+  let actualPromise: Promise<void> | null = null;
+  let draining = 0;
+  let drainFailure: { error: unknown } | null = null;
   let layoutKey: string | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let idle: number | undefined;
@@ -61,7 +64,15 @@ export function createSectionPagination(options: SectionPaginationOptions) {
     layoutKey = undefined;
     options.onInvalidate?.();
   };
-  const available = () => !destroyed && options.canMeasure() && document.visibilityState !== 'hidden';
+  const available = () => !destroyed && draining === 0 && !drainFailure && options.canMeasure() && document.visibilityState !== 'hidden';
+  const stopAndDrain = async () => {
+    pause();
+    draining++;
+    try {
+      await actualPromise;
+      if (drainFailure) throw drainFailure.error;
+    } finally { draining--; }
+  };
 
   const run = async () => {
     if (running || !pending || !available()) return;
@@ -143,17 +154,36 @@ export function createSectionPagination(options: SectionPaginationOptions) {
     } catch {
       // Preserve unknown page counts; a future idle request can retry.
     } finally {
-      await Promise.allSettled(navigation);
-      diagnostics?.end();
-      if (view) await settleDisposal();
-      try { view?.close(); } finally {
-        view?.remove();
-        host.remove();
-        try { book?.destroy(); } finally { diagnostics?.release(); }
-      }
-      running = false;
-      if (pending && available()) schedule();
+      try {
+        await Promise.allSettled(navigation);
+        diagnostics?.end();
+        if (view) await settleDisposal();
+        try { view?.close(); } finally {
+          try { view?.remove(); } finally {
+            try { host.remove(); } finally {
+              book?.destroy();
+            }
+          }
+        }
+        diagnostics?.release();
+      } finally { running = false; }
     }
+  };
+  const start = () => {
+    if (actualPromise) return;
+    // Publish the run owner before invoking factories. Even a stop issued by a
+    // synchronous factory callback must observe and await this entire lifetime.
+    const work = Promise.resolve().then(run).catch(error => {
+      drainFailure ??= { error };
+      throw error;
+    }).finally(() => {
+      if (actualPromise === work) actualPromise = null;
+      if (pending && available()) schedule();
+    });
+    actualPromise = work;
+    // Optional dispatch has no awaiting caller; drain still receives failures
+    // and must never treat failed disposal as a resource-safe motion boundary.
+    void work.catch(() => {});
   };
   const schedule = () => {
     cancelSchedule();
@@ -161,17 +191,18 @@ export function createSectionPagination(options: SectionPaginationOptions) {
       timer = undefined;
       if (!available()) return;
       if (typeof window.requestIdleCallback === 'function') {
-        idle = window.requestIdleCallback(() => { idle = undefined; void run(); });
-      } else void run();
+        idle = window.requestIdleCallback(() => { idle = undefined; start(); });
+      } else start();
     }, options.idleDelayMs ?? 700);
   };
   return {
     request() {
-      if (destroyed) return;
+      if (!available()) return;
       pending = true;
-      if (!running) schedule();
+      if (!running && !actualPromise) schedule();
     },
     pause,
+    stopAndDrain,
     invalidate,
     destroy() { destroyed = true; pause(); measured.clear(); },
   };

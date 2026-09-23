@@ -88,7 +88,7 @@ export function useFoliateReader(options: Options) {
         if (restore.current === 0 && saved && !saved.cfi && saved.progress > 0) throw new Error('记录缺少精确阅读位置。原记录已保留，请重试或选择从本章开头继续。');
         owned = new FoliateEngine(containerRef.current!, settings);
         renditionRef.current = owned; setEngine(owned);
-        coordinator = createReaderController(owned, { onAccepted: event => displayPosition(event.position, event.reason !== 'layout-restored') });
+        coordinator = createReaderController(owned.session, { onAccepted: event => displayPosition(event.position, event.reason !== 'layout-restored') });
         setController(coordinator);
         owned.onPages = pageProgressController.setReadingSectionPageRanges;
         owned.onInvalidatePages = pageProgressController.invalidateReadingSectionPages;
@@ -116,7 +116,7 @@ export function useFoliateReader(options: Options) {
     };
   }, [book.id, isLayoutReady, reload, containerRef, renditionRef, currentCfiRef, readerSettingsRef, enqueueProgress, setError, setIsLoading, loadReaderSettings, markReaderSettingsLoaded, resetReaderSettingsLoad, pageProgressController, onBookUnavailable]);
   const captureCurrentProgress = useCallback(async () => capture.current?.() ?? false, []);
-  const requestBookPagination = useCallback(() => { if (controller?.snapshot.phase === 'idle') engine?.schedulePages(); }, [engine, controller]);
+  const requestBookPagination = useCallback(() => { if (controller?.snapshot.phase === 'idle') engine?.session.pagination.request(); }, [engine, controller]);
   const retry = useCallback(() => { setReload(value => value + 1); }, []);
   const startChapter = useCallback(() => { if (fallback.current) { restore.current = fallback.current; setReload(value => value + 1); } }, []);
   return { engine, controller, toc, currentChapter, currentHref, progress, captureCurrentProgress, requestBookPagination, retry, startChapter, canFallback };

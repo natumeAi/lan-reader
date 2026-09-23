@@ -3,14 +3,16 @@ import { View } from 'foliate-js/view.js';
 import { compare } from 'foliate-js/epubcfi.js';
 import { unzipSync, strFromU8 } from 'fflate';
 import type { FoliateBook, NavigationTarget } from './foliateTypes';
-import type { ReaderEngine, ReaderState, StablePosition, NavigationCommand, NavigationResult } from './types';
+import type { ReaderEngine, ReaderSession, ReaderState, StablePosition, NavigationCommand, NavigationResult } from './types';
 import type { ReaderLocation, TocItem, ReadingSection, PageRanges } from '../types/epub';
 import type { ReaderSettings } from '../hooks/useReaderSettings';
 import { getFoliateStyles } from '../hooks/useReaderSettings';
 import { createReadingSections, findCurrentTocItem, flattenTocItems, prepareTocItems } from '../utils/epubToc';
 import { createSectionPagination } from './sectionPagination';
 import { protectBookDocument } from './contentSecurity';
-import { createPageTurnPreview, turnAdjacentView } from './pageTurnPreview';
+import { turnAdjacentView } from './foliateNavigation';
+import { createFoliateSurfaceProvider, observeFoliateSurface } from './foliateSurfaceProvider';
+import { createPageBuffer } from './pageBuffer';
 import { waitForFrameOrTimeout } from '../utils/animationFrame';
 
 // Layout settlement waits two frames, each bounded by a timer so a visible page
@@ -36,7 +38,9 @@ export class FoliateEngine implements ReaderEngine {
   private resizeTimer: ReturnType<typeof setTimeout> | undefined;
   private files: Record<string, Uint8Array> = {};
   private pagination: ReturnType<typeof createSectionPagination>;
-  private previews: ReturnType<typeof createPageTurnPreview>;
+  readonly session: ReaderSession;
+  private optionalWorkAllowed = false;
+  private stopContentObservation: (() => void) | undefined;
   private observer: ResizeObserver;
   private lastDimensions = '';
   private events: { time: number; event: string; state: ReaderState; cfi: string | null; page?: number; text?: string }[] = [];
@@ -52,22 +56,26 @@ export class FoliateEngine implements ReaderEngine {
       const { doc, index } = (event as CustomEvent<{ doc: Document; index: number }>).detail;
       if (doc && Number.isInteger(index) && index >= 0) this.documentSections.set(doc, index);
     });
-    this.previews = createPageTurnPreview({
-      container, createBook: () => this.createBook(), createView: () => new View(), configure: view => this.configure(view),
-      snapshot: () => this.stable ? { key: `${this.layout()}:${this.stable.cfi}`, cfi: this.stable.cfi, page: this.stable.page } : null,
-      available: direction => this.state === 'ready' && Boolean(this.stable) && !(direction === 'next' ? this.stable?.location.atEnd : this.stable?.location.atStart),
-      onWorkStart: () => this.pagination.pause(),
-      onWorkEnd: () => { if (!this.previews.busy && this.state === 'ready') this.pagination.request(); },
+    const provider = createFoliateSurfaceProvider({
+      container, createBook: () => this.createBook(), createView: () => new View(),
+      configure: (view, request) => this.configure(view, request.settings, request.width),
+      onInvalidated: ownerId => { if (buffer.isCurrentOwner(ownerId)) this.onLayoutInvalidated?.(); },
     });
-    this.pagination = createSectionPagination({ container, createBook: () => this.createBook(), createView: () => new View(), configure: view => this.configure(view), getSnapshot: () => ({ layoutKey: this.layout(), currentSectionIndex: this.stable?.location.start?.index, readingSections: this.readingSections }), canMeasure: () => this.state === 'ready' && !this.previews.busy, onPages: (section, ranges) => this.onPages?.(section, ranges), onInvalidate: () => this.onInvalidatePages?.() });
+    const buffer = createPageBuffer(provider);
+    this.pagination = createSectionPagination({ container, createBook: () => this.createBook(), createView: () => new View(), configure: view => this.configure(view), getSnapshot: () => ({ layoutKey: this.layout(), currentSectionIndex: this.stable?.location.start?.index, readingSections: this.readingSections }), canMeasure: () => this.optionalWorkAllowed && this.state === 'ready' && !buffer.busy, onPages: (section, ranges) => this.onPages?.(section, ranges), onInvalidate: () => this.onInvalidatePages?.() });
+    this.session = {
+      engine: this, foreground: this.element, buffer, pagination: this.pagination,
+      createRequest: (position, key, direction, viewport) => ({ key, cfi: position.cfi, page: position.page, ...viewport, direction, readingDirection: this.direction, settings: { ...this.settings } }),
+      setOptionalWorkAllowed: allowed => { this.optionalWorkAllowed = allowed; },
+    };
     this.element.style.cssText = 'display:block;width:100%;height:100%;contain:layout paint;pointer-events:none;background:var(--reader-bg,#fff)';
     container.append(this.element);
     this.observer = new ResizeObserver(() => {
       const dimensions = this.dimensions();
       if (dimensions === this.lastDimensions) return;
       this.lastDimensions = dimensions;
-      this.invalidatePages();
       if (this.onLayoutInvalidated && this.stable) { this.onLayoutInvalidated(); return; }
+      this.invalidatePages();
       if (this.state === 'ready') {
         this.setState('recovering');
         clearTimeout(this.resizeTimer);
@@ -88,7 +96,6 @@ export class FoliateEngine implements ReaderEngine {
   }
   private setState(state: ReaderState, error?: unknown) {
     if (state === 'ready') this.element.style.visibility = '';
-    if (state === 'failed') this.previews.invalidate();
     this.state = state; this.trace(state); this.onState?.(state, error);
   }
   private alive(token: number) { return token === this.epoch && this.state !== 'closed' && this.state !== 'suspended'; }
@@ -111,6 +118,7 @@ export class FoliateEngine implements ReaderEngine {
   private async operation(work: (token: number) => Promise<void | boolean>): Promise<NavigationResult> {
     const token = ++this.epoch;
     this.pauseMeasurement();
+    this.stopContentObservation?.(); this.stopContentObservation = undefined;
     this.setState('recovering');
     let timer: ReturnType<typeof setTimeout> | undefined;
     let boundary = false;
@@ -122,6 +130,7 @@ export class FoliateEngine implements ReaderEngine {
       await Promise.race([job, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('阅读位置恢复超时')), 10000); })]);
       if (!this.alive(token)) return { kind: 'cancelled', commandId: token };
       this.setState('ready');
+      if (this.element.renderer) this.stopContentObservation = observeFoliateSurface(this.element, () => this.onLayoutInvalidated?.());
       if (boundary) return { kind: 'boundary', commandId: token };
       return this.stable ? { kind: 'verified', commandId: token, position: this.stable } : { kind: 'unavailable', commandId: token };
     } catch (error) {
@@ -176,7 +185,7 @@ export class FoliateEngine implements ReaderEngine {
       }
     });
   }
-  private configure(view: View) {
+  private configure(view: View, settings: Readonly<ReaderSettings> = this.settings, width = this.container.clientWidth) {
     const renderer = view.renderer;
     renderer.setAttribute('flow', 'paginated');
     renderer.setAttribute('max-column-count', '1');
@@ -184,11 +193,11 @@ export class FoliateEngine implements ReaderEngine {
     renderer.setAttribute('max-block-size', '100000px');
     // Foliate interprets this attribute as a percentage, including in its
     // geometry calculations (a pixel unit would produce invalid columns).
-    renderer.setAttribute('gap', `${Math.min(40, (48 + this.settings.horizontalMargin) / Math.max(1, this.container.clientWidth) * 100)}%`);
-    renderer.setAttribute('margin', `${60 + this.settings.verticalMargin}px`);
+    renderer.setAttribute('gap', `${Math.min(40, (48 + settings.horizontalMargin) / Math.max(1, width) * 100)}%`);
+    renderer.setAttribute('margin', `${60 + settings.verticalMargin}px`);
     renderer.removeAttribute('animated');
-    renderer.setStyles?.(getFoliateStyles(this.settings, view.isFixedLayout));
-    this.settingsKey = JSON.stringify(this.settings);
+    renderer.setStyles?.(getFoliateStyles(settings, view.isFixedLayout));
+    if (view === this.element) this.settingsKey = JSON.stringify(settings);
   }
   private resolve(target: string | number): NavigationTarget {
     if (typeof target === 'string' && !target.startsWith('epubcfi(')) {
@@ -371,7 +380,6 @@ export class FoliateEngine implements ReaderEngine {
     this.restoreTarget = cfi;
     // The controller may still be covering the newly navigated foreground with
     // its preview. Keep that exact surface until it explicitly cancels it.
-    this.previews.invalidate(true);
     this.trace('verified');
   }
   publish() { if (this.state === 'ready' && this.stable) this.onPosition?.(this.stable); }
@@ -393,7 +401,6 @@ export class FoliateEngine implements ReaderEngine {
       if (this.alive(token)) this.commit();
     });
     const previous = this.stable;
-    this.previews.invalidate();
     return this.operation(async token => {
       if (command.kind === 'settings') {
         this.settings = { ...command.settings }; this.configure(this.element); this.invalidatePages();
@@ -405,12 +412,10 @@ export class FoliateEngine implements ReaderEngine {
       this.commit();
     });
   }
-  prepareTurn(direction: 'next' | 'prev') { return this.previews.prepare(direction); }
-  cancelTurnPreview() { this.previews.cancel(); if (this.state === 'ready') this.previews.warm(); }
   suspend() {
     if (this.state === 'closed' || this.state === 'suspended' || this.state === 'failed') return;
     ++this.epoch; this.pauseMeasurement(); clearTimeout(this.resizeTimer);
-    this.previews.invalidate();
+    this.stopContentObservation?.(); this.stopContentObservation = undefined;
     this.element.style.visibility = 'hidden';
     this.setState('suspended');
   }
@@ -423,9 +428,8 @@ export class FoliateEngine implements ReaderEngine {
     if (JSON.stringify(settings) === this.settingsKey || this.state !== 'ready') return;
     await this.execute({ kind: 'settings', settings, target: this.stable?.cfi ?? this.restoreTarget });
   }
-  private invalidatePages() { this.pagination.invalidate(); this.previews.invalidate(); }
-  pauseMeasurement() { this.pagination.pause(); this.previews.pauseWarm(); }
-  schedulePages() { this.pagination.request(); this.previews.warm(); }
+  private invalidatePages() { this.pagination.invalidate(); }
+  private pauseMeasurement() { this.pagination.pause(); this.session.buffer.stopWarm(); }
   private async createBook() {
     const files = this.files;
       const book = await new EPUB({
@@ -448,6 +452,7 @@ export class FoliateEngine implements ReaderEngine {
   destroy() {
     if (this.state === 'closed') return;
     ++this.epoch; this.pauseMeasurement(); clearTimeout(this.resizeTimer); this.observer.disconnect();
+    this.stopContentObservation?.(); this.stopContentObservation = undefined;
     this.setState('closed');
     const book = this.book;
     const release = async () => {
@@ -459,6 +464,8 @@ export class FoliateEngine implements ReaderEngine {
     // Invalidate immediately, then release once. A late iframe may finish in
     // the detached element, but cannot publish or leak a new live renderer.
     void this.workTail.then(release, release);
-    this.pagination.destroy(); this.previews.destroy(); this.element.remove(); this.book = null; this.files = {};
+    this.pagination.destroy();
+    void this.session.buffer.destroy().catch(() => this.trace('buffer-release-failed'));
+    this.element.remove(); this.book = null; this.files = {};
   }
 }
