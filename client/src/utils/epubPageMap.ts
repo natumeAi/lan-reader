@@ -17,6 +17,26 @@ function containsSectionIndex(readingSection: ReadingSection, sectionIndex: numb
   return sectionIndex !== undefined && readingSection?.sectionIndexes?.includes(sectionIndex) || false;
 }
 
+/**
+ * A Reading Section that is exactly one complete publication document: its
+ * measured range is always that document's own `1..total`, which the
+ * foreground renderer already reports as `displayed.page/total`.
+ * Evaluate against the full Reading Section list of the Book.
+ */
+export function isWholeDocumentReadingSection(readingSection: ReadingSection, readingSections: readonly ReadingSection[]) {
+  const sectionIndexes = [...new Set(readingSection?.sectionIndexes ?? [])];
+  const [sectionIndex] = sectionIndexes;
+  if (sectionIndexes.length !== 1 || sectionIndex === undefined) return false;
+  const { endHref, startHref } = readingSection;
+  if (typeof startHref !== 'string' || !startHref || startHref.includes('#')) return false;
+  if (endHref && endHref.includes('#')) return false;
+  return !readingSections.some((other) => (
+    other !== readingSection &&
+    other.id !== readingSection.id &&
+    other.sectionIndexes?.includes(sectionIndex)
+  ));
+}
+
 const DEFAULT_MEASUREMENT_TIMEOUT_MS = 5000;
 
 function measureWithin<T>(measure: () => Awaitable<T>, timeoutMs: number, shouldStop: () => boolean) {

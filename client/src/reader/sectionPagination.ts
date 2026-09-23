@@ -2,7 +2,7 @@ import type { View } from 'foliate-js/view.js';
 import type { FoliateBook } from './foliateTypes';
 import type { PageRanges, ReadingSection } from '../types/epub';
 import { waitForFrameOrTimeout } from '../utils/animationFrame';
-import { measureReadingSectionPages } from '../utils/epubPageMap';
+import { isWholeDocumentReadingSection, measureReadingSectionPages } from '../utils/epubPageMap';
 import { beginReaderWork } from './diagnostics';
 
 // Upstream renderer style changes queue animation-frame callbacks that still
@@ -27,7 +27,15 @@ interface SectionPaginationOptions {
   createView: () => View;
   configure: (view: View) => void;
   getSnapshot: () => PaginationSnapshot;
+  /** Permission for optional work. A request made without it is rejected, not remembered. */
   canMeasure: () => boolean;
+  /**
+   * Transient contention (preview buffer work). A permitted request is kept
+   * pending while busy and starts once quiet, without another request.
+   */
+  isBusy?: () => boolean;
+  /** Recheck interval while a retained request waits for contention to clear. */
+  busyRetryMs?: number;
   onPages: (section: ReadingSection, ranges: PageRanges) => void;
   onInvalidate?: () => void;
   idleDelayMs?: number;
@@ -35,6 +43,7 @@ interface SectionPaginationOptions {
 
 /** Current-section measurement is optional work, with independent book ownership. */
 export function createSectionPagination(options: SectionPaginationOptions) {
+  const busyRetryMs = options.busyRetryMs ?? 250;
   let generation = 0;
   let destroyed = false;
   let running = false;
@@ -45,6 +54,8 @@ export function createSectionPagination(options: SectionPaginationOptions) {
   let layoutKey: string | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let idle: number | undefined;
+  // Set when retained work should recheck contention sooner than the idle delay.
+  let contentionRetry = false;
   const measured = new Set<string>();
 
   const cancelSchedule = () => {
@@ -56,6 +67,7 @@ export function createSectionPagination(options: SectionPaginationOptions) {
   const pause = () => {
     ++generation;
     pending = false;
+    contentionRetry = false;
     cancelSchedule();
   };
   const invalidate = () => {
@@ -64,7 +76,12 @@ export function createSectionPagination(options: SectionPaginationOptions) {
     layoutKey = undefined;
     options.onInvalidate?.();
   };
-  const available = () => !destroyed && draining === 0 && !drainFailure && options.canMeasure() && document.visibilityState !== 'hidden';
+  const permitted = () => !destroyed && draining === 0 && !drainFailure && options.canMeasure() && document.visibilityState !== 'hidden';
+  const busy = () => options.isBusy?.() ?? false;
+  // Whole-document Reading Sections take their label from the foreground
+  // renderer; they never need a hidden measurement Book/View.
+  const measurable = (snapshot: PaginationSnapshot) => snapshot.readingSections
+    .filter(section => !isWholeDocumentReadingSection(section, snapshot.readingSections));
   const stopAndDrain = async () => {
     pause();
     draining++;
@@ -75,7 +92,9 @@ export function createSectionPagination(options: SectionPaginationOptions) {
   };
 
   const run = async () => {
-    if (running || !pending || !available()) return;
+    if (running || !pending || !permitted()) return;
+    // Contention leaves the request pending; start() reschedules the recheck.
+    if (busy()) { contentionRetry = true; return; }
     pending = false;
     const snapshot = options.getSnapshot();
     if (snapshot.layoutKey !== layoutKey) {
@@ -83,7 +102,8 @@ export function createSectionPagination(options: SectionPaginationOptions) {
       if (layoutKey !== undefined) options.onInvalidate?.();
       layoutKey = snapshot.layoutKey;
     }
-    if (!snapshot.readingSections.some(section =>
+    const readingSections = measurable(snapshot);
+    if (!readingSections.some(section =>
       !measured.has(section.id) && snapshot.currentSectionIndex !== undefined &&
       section.sectionIndexes.includes(snapshot.currentSectionIndex))) return;
     const width = options.container.clientWidth;
@@ -93,7 +113,14 @@ export function createSectionPagination(options: SectionPaginationOptions) {
     const diagnostics = beginReaderWork('measurement');
     const token = generation;
     let failed = false;
-    const stopped = () => failed || token !== generation || !available() || options.getSnapshot().layoutKey !== snapshot.layoutKey;
+    // Contention is sticky for this run: once observed, every later check
+    // stops, so a quick busy/quiet flip cannot surface as a section failure.
+    let contended = false;
+    const stopped = () => {
+      if (failed || contended || token !== generation || !permitted() || options.getSnapshot().layoutKey !== snapshot.layoutKey) return true;
+      if (busy()) contended = true;
+      return contended;
+    };
     const host = document.createElement('div');
     host.style.cssText = `position:fixed;left:-100000px;top:0;width:${width}px;height:${height}px;visibility:hidden;pointer-events:none;contain:strict`;
     host.setAttribute('aria-hidden', 'true');
@@ -137,7 +164,7 @@ export function createSectionPagination(options: SectionPaginationOptions) {
         return result;
       };
       await measureReadingSectionPages({
-        readingSections: snapshot.readingSections,
+        readingSections,
         prioritySectionIndex: snapshot.currentSectionIndex,
         measureCurrentReadingSectionsOnly: true,
         cachedReadingSectionIds: measured,
@@ -166,7 +193,15 @@ export function createSectionPagination(options: SectionPaginationOptions) {
           }
         }
         diagnostics?.release();
-      } finally { running = false; }
+      } finally {
+        running = false;
+        // Only a contention interruption of the current generation and layout
+        // retries itself; measurement failures wait for a later explicit request.
+        if (contended && !failed && token === generation && permitted() && options.getSnapshot().layoutKey === snapshot.layoutKey) {
+          pending = true;
+          contentionRetry = true;
+        }
+      }
     }
   };
   const start = () => {
@@ -178,26 +213,30 @@ export function createSectionPagination(options: SectionPaginationOptions) {
       throw error;
     }).finally(() => {
       if (actualPromise === work) actualPromise = null;
-      if (pending && available()) schedule();
+      const retry = contentionRetry;
+      contentionRetry = false;
+      if (pending && permitted()) schedule(retry ? busyRetryMs : undefined);
     });
     actualPromise = work;
     // Optional dispatch has no awaiting caller; drain still receives failures
     // and must never treat failed disposal as a resource-safe motion boundary.
     void work.catch(() => {});
   };
-  const schedule = () => {
+  const schedule = (delayMs = options.idleDelayMs ?? 700) => {
     cancelSchedule();
     timer = setTimeout(() => {
       timer = undefined;
-      if (!available()) return;
+      if (!permitted()) { pending = false; return; }
+      // Preview work keeps priority: keep the request and recheck shortly.
+      if (busy()) { schedule(busyRetryMs); return; }
       if (typeof window.requestIdleCallback === 'function') {
         idle = window.requestIdleCallback(() => { idle = undefined; start(); });
       } else start();
-    }, options.idleDelayMs ?? 700);
+    }, delayMs);
   };
   return {
     request() {
-      if (!available()) return;
+      if (!permitted()) return;
       pending = true;
       if (!running && !actualPromise) schedule();
     },

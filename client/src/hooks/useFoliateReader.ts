@@ -125,8 +125,7 @@ export function useFoliateReader(options: Options) {
     };
   }, [book.id, isLayoutReady, reload, containerRef, renditionRef, currentCfiRef, readerSettingsRef, enqueueProgress, setError, setIsLoading, loadReaderSettings, markReaderSettingsLoaded, resetReaderSettingsLoad, pageProgressController, onBookUnavailable, onAcceptedObservation]);
   const captureCurrentProgress = useCallback(async () => capture.current?.() ?? false, []);
-  const requestBookPagination = useCallback(() => { if (controller?.snapshot.phase === 'idle') engine?.session.pagination.request(); }, [engine, controller]);
   const retry = useCallback(() => { setReload(value => value + 1); }, []);
   const startChapter = useCallback(() => { if (fallback.current) { restore.current = fallback.current; setReload(value => value + 1); } }, []);
-  return { engine, controller, toc, currentChapter, currentHref, progress, captureCurrentProgress, requestBookPagination, retry, startChapter, canFallback };
+  return { engine, controller, toc, currentChapter, currentHref, progress, captureCurrentProgress, retry, startChapter, canFallback };
 }
