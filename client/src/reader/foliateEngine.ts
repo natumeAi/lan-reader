@@ -62,7 +62,7 @@ export class FoliateEngine implements ReaderEngine {
       onInvalidated: ownerId => { if (buffer.isCurrentOwner(ownerId)) this.onLayoutInvalidated?.(); },
     });
     const buffer = createPageBuffer(provider);
-    this.pagination = createSectionPagination({ container, createBook: () => this.createBook(), createView: () => new View(), configure: view => this.configure(view), getSnapshot: () => ({ layoutKey: this.layout(), currentSectionIndex: this.stable?.location.start?.index, readingSections: this.readingSections }), canMeasure: () => this.optionalWorkAllowed && this.state === 'ready' && !buffer.busy, onPages: (section, ranges) => this.onPages?.(section, ranges), onInvalidate: () => this.onInvalidatePages?.() });
+    this.pagination = createSectionPagination({ container, createBook: () => this.createBook(), createView: () => new View(), configure: view => this.configure(view), getSnapshot: () => ({ layoutKey: this.layout(), currentSectionIndex: this.stable?.location.start?.index, readingSections: this.readingSections }), canMeasure: () => this.optionalWorkAllowed && this.state === 'ready', isBusy: () => buffer.busy, onPages: (section, ranges) => this.onPages?.(section, ranges), onInvalidate: () => this.onInvalidatePages?.() });
     this.session = {
       engine: this, foreground: this.element, buffer, pagination: this.pagination,
       createRequest: (position, key, direction, viewport) => ({ key, cfi: position.cfi, page: position.page, ...viewport, direction, readingDirection: this.direction, settings: { ...this.settings } }),

@@ -15,6 +15,7 @@ interface ProgressContext {
   readingSections: ReadingSection[];
 }
 import { useCallback, useMemo, useRef, useState } from 'react';
+import { isWholeDocumentReadingSection } from '../utils/epubPageMap.js';
 
 function getLocalPageProgress(location: ReaderLocation | null | undefined) {
   const displayed = location?.start?.displayed;
@@ -156,6 +157,16 @@ export function usePageProgress({ renditionRef }: { renditionRef: RefObject<Read
     if (candidateReadingSections.length === 0) {
       return { shouldUpdate: true, value: getPageProgressFromLocation(location) };
     }
+    // One complete publication document: the foreground renderer's own
+    // page/total equals its measured range, so it never waits for measurement.
+    const [onlyReadingSection] = candidateReadingSections;
+    if (
+      candidateReadingSections.length === 1 &&
+      onlyReadingSection &&
+      isWholeDocumentReadingSection(onlyReadingSection, context.readingSections)
+    ) {
+      return { shouldUpdate: true, value: getPageProgressFromLocation(location) };
+    }
 
     const currentReadingSection = candidateReadingSections.find((readingSection) => (
       readingSection.id === context.currentReadingSectionId
@@ -230,7 +241,10 @@ export function usePageProgress({ renditionRef }: { renditionRef: RefObject<Read
       pageRangesByReadingSectionId: new Map(),
       readingSections,
     };
+    // Never keep a label from before these sections; re-evaluate the displayed
+    // position now so a whole-document section does not wait for another turn.
     setPageProgress(null);
+    void refreshCurrentPageProgress();
   }, [refreshCurrentPageProgress]);
 
   const invalidateReadingSectionPages = useCallback(() => {
