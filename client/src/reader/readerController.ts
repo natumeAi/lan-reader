@@ -203,10 +203,12 @@ export function createReaderController(session: ReaderSession, options: Options 
       });
     } finally { diagnostics.endPhase(animationRecord, 'motion'); }
   };
-  const admissible = () => !disposed && !suspended && !input.disabled && !pointer && !navigation && !recovery && !settingsWork && !resumeWork && resizeTimer === undefined && ui.phase === 'idle' && engine.state === 'ready';
-  const admit = () => {
+  // Panels disable gestures, but may themselves request programmatic navigation.
+  // Both paths still require a ready, idle session with no outstanding work.
+  const admissible = (source: 'gesture' | 'navigation' = 'gesture') => !disposed && !suspended && (source === 'navigation' || !input.disabled) && !pointer && !navigation && !recovery && !settingsWork && !resumeWork && resizeTimer === undefined && ui.phase === 'idle' && engine.state === 'ready';
+  const admit = (source: 'gesture' | 'navigation' = 'gesture') => {
     diagnostics.countInput('received');
-    if (!admissible()) { diagnostics.countInput('rejected'); return false; }
+    if (!admissible(source)) { diagnostics.countInput('rejected'); return false; }
     diagnostics.countInput('accepted'); return true;
   };
   const finish = (version: number, turnRecord: number | null) => {
@@ -259,7 +261,7 @@ export function createReaderController(session: ReaderSession, options: Options 
     finally { finish(version, turnRecord); }
   };
   const navigateTo = async (target: string) => {
-    if (!admit()) return;
+    if (!admit('navigation')) return;
     const version = ++command; stopOptional(); clearPair();
     const turnRecord = diagnostics.begin({ action: 'navigation', backend: 'foliate-paired-views' }); record = turnRecord;
     diagnostics.startPhase(turnRecord, 'busy');
