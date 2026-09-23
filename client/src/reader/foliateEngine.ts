@@ -11,8 +11,13 @@ import { createReadingSections, findCurrentTocItem, flattenTocItems, prepareTocI
 import { createSectionPagination } from './sectionPagination';
 import { protectBookDocument } from './contentSecurity';
 import { createPageTurnPreview, turnAdjacentView } from './pageTurnPreview';
+import { waitForFrameOrTimeout } from '../utils/animationFrame';
 
-const paint = () => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+// Layout settlement waits two frames, each bounded by a timer so a visible page
+// that delivers no frames still opens (instead of hitting the operation deadline).
+const paint = async () => { await waitForFrameOrTimeout(); await waitForFrameOrTimeout(); };
+// Disposal must let upstream frame callbacks drain; never race a timer here.
+const drainFrames = () => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
 const delay = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 export class FoliateEngine implements ReaderEngine {
   readonly element = new View();
@@ -416,7 +421,7 @@ export class FoliateEngine implements ReaderEngine {
     const release = async () => {
       // Foliate schedules style/font callbacks for the next paint. Close only
       // after the actual navigation job and those callbacks have drained.
-      await paint();
+      await drainFrames();
       try { this.element.close(); } finally { book?.destroy(); }
     };
     // Invalidate immediately, then release once. A late iframe may finish in

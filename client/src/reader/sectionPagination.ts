@@ -1,6 +1,7 @@
 import type { View } from 'foliate-js/view.js';
 import type { FoliateBook } from './foliateTypes';
 import type { PageRanges, ReadingSection } from '../types/epub';
+import { waitForFrameOrTimeout } from '../utils/animationFrame';
 import { measureReadingSectionPages } from '../utils/epubPageMap';
 
 // Upstream renderer style changes queue animation-frame callbacks that still
@@ -109,10 +110,7 @@ export function createSectionPagination(options: SectionPaginationOptions) {
           if (stopped()) throw new Error('Measurement interrupted');
           await Promise.all(measurementView.renderer.getContents().map(({ doc }) => doc.fonts?.ready));
           if (stopped()) throw new Error('Measurement interrupted');
-          await new Promise<void>(resolve => {
-            const timeout = setTimeout(() => { cancelAnimationFrame(frame); resolve(); }, 100);
-            const frame = requestAnimationFrame(() => { clearTimeout(timeout); resolve(); });
-          });
+          await waitForFrameOrTimeout(100);
           if (stopped()) throw new Error('Measurement interrupted');
           return {
             page: measurementView.isFixedLayout ? 1 : measurementView.renderer.page,

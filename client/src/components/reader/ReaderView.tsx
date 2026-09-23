@@ -17,6 +17,7 @@ import {
   contentImageCursorAtViewportPoint,
   findContentImageAtViewportPoint,
 } from '../../utils/contentImage.js';
+import { requestFrameOrTimeout } from '../../utils/animationFrame.js';
 import { findVisibleBookCoverRect } from '../../utils/coverOrigin.js';
 import { readerBookIdFromHistoryState } from '../../utils/readerHistoryState.js';
 import { ImageViewer } from './ImageViewer.js';
@@ -361,19 +362,22 @@ export function ReaderView({
       return undefined;
     }
 
-    let raf1: number | null = null;
-    let raf2: number | null = null;
-    let completionRaf: number | null = null;
+    // Frame waits are bounded: a visible page that delivers no frames must
+    // still reach layout-ready, or the reader never starts loading.
+    let cancelFrame: (() => void) | null = null;
     let timer: ReturnType<typeof setTimeout> | null = null;
     setIsReaderLayoutReady(false);
-    raf1 = requestAnimationFrame(() => {
-      raf2 = requestAnimationFrame(() => {
+    cancelFrame = requestFrameOrTimeout(() => {
+      cancelFrame = requestFrameOrTimeout(() => {
+        cancelFrame = null;
         setFlipTransitionEnabled(true);
         setFlipTransform(null);
         setCoverOpacity(0);
         timer = setTimeout(() => {
+          timer = null;
           setFlipTransitionEnabled(false);
-          completionRaf = requestAnimationFrame(() => {
+          cancelFrame = requestFrameOrTimeout(() => {
+            cancelFrame = null;
             setIsReaderLayoutReady(true);
           });
         }, READER_FLIP_ANIM_MS);
@@ -381,9 +385,7 @@ export function ReaderView({
     });
 
     return () => {
-      if (raf1) cancelAnimationFrame(raf1);
-      if (raf2) cancelAnimationFrame(raf2);
-      if (completionRaf) cancelAnimationFrame(completionRaf);
+      cancelFrame?.();
       if (timer) clearTimeout(timer);
     };
   }, [reducedMotion]);
