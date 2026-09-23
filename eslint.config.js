@@ -18,6 +18,8 @@ export default tseslint.config(
       '.trellis/**',
       'client/public/**',
       'server/public/**',
+      // Local (Git-ignored) P5 performance CDP driver; not part of the app gate.
+      'client/test/browser/p5-cdp.mjs',
     ],
   },
   js.configs.recommended,
