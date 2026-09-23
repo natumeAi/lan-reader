@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent, RefObject } from 'react';
 import type { ReaderEngine } from '../reader/types';
-import { PAGE_TURN_RULES, classifyDirection, decidePageDelta, getRecentVelocity, getSettleDuration, getTapZone, clampDragDistance, dampBoundaryDistance, sampleEaseOutCubicKeyframes } from '../utils/pageTurnGesture';
+import { PAGE_TURN_RULES, classifyDirection, decidePageDelta, getRecentVelocity, getSettleDuration, getTapZone, clampDragDistance, dampBoundaryDistance } from '../utils/pageTurnGesture';
 import { createPageTurnDiagnostics, readPageTurnDebugConfig } from '../utils/pageTurnDiagnostics';
+import { createPageRenderer } from '../reader/pageRenderer';
+import type { PageRendererBinding, PageMotionResult } from '../reader/pageRenderer';
 
 type Direction = 'next' | 'prev';
 interface Options {
@@ -20,7 +22,7 @@ interface Options {
 interface Pointer { id: number; x: number; y: number; start: number; dx: number; visualDx: number; horizontal: boolean; samples: { x: number; time: number }[]; element: HTMLElement }
 interface Preview {
   direction: Direction;
-  sign: number;
+  sign: -1 | 1;
   width: number;
   element: HTMLElement | null;
   ready: Promise<Preview | null>;
@@ -28,12 +30,6 @@ interface Preview {
 function releasePointer(p: Pointer | null) {
   try { if (p?.element.hasPointerCapture(p.id)) p.element.releasePointerCapture(p.id); } catch { /* iOS already released capture. */ }
 }
-const translate = (x: number) => `translateX(${x}px)`;
-// Use the same sampled cubic curve as the original epub.js compositor path.
-const turnEasing = sampleEaseOutCubicKeyframes();
-const turnKeyframes = (from: number, to: number): Keyframe[] => turnEasing.map(({ offset, value }) => ({
-  offset, transform: translate(from + (to - from) * value),
-}));
 function directionOf(dx: number, engine: ReaderEngine): Direction {
   return (dx < 0) !== (engine.direction === 'rtl') ? 'next' : 'prev';
 }
@@ -47,7 +43,9 @@ export function usePageTurnController({ engine, disabled, reducedMotion, onCente
   const pointer = useRef<Pointer | null>(null);
   const busy = useRef(false);
   const generation = useRef(0);
-  const animations = useRef<Animation[]>([]);
+  const renderer = useRef<ReturnType<typeof createPageRenderer> | null>(null);
+  if (!renderer.current) renderer.current = createPageRenderer();
+  const surfaceBinding = useRef<{ pair: Preview | null; binding: PageRendererBinding } | null>(null);
   const preview = useRef<Preview | null>(null);
   const diagnostic = useRef<ReturnType<typeof createPageTurnDiagnostics> | null>(null);
   const record = useRef<number | null>(null);
@@ -64,28 +62,37 @@ export function usePageTurnController({ engine, disabled, reducedMotion, onCente
     diagnostic.current = createPageTurnDiagnostics({ enabled: readPageTurnDebugConfig().enabled });
     return () => diagnostic.current?.destroy();
   }, [engine]);
-  const stopAnimations = useCallback(() => {
-    for (const animation of animations.current) animation.cancel();
-    animations.current = [];
+  const releaseSurfaces = useCallback(() => {
+    renderer.current?.release();
+    surfaceBinding.current = null;
   }, []);
+  const bindSurfaces = useCallback((pair: Preview | null) => {
+    if (!engine) return null;
+    if (surfaceBinding.current?.pair === pair) return surfaceBinding.current.binding;
+    const binding = renderer.current!.bind({
+      current: engine.element, incoming: pair?.element,
+      width: pair?.width ?? 0, sign: pair?.sign ?? 1,
+    });
+    surfaceBinding.current = { pair, binding };
+    return binding;
+  }, [engine]);
   const clearPreview = useCallback(() => {
     // Invalidate first: a late prepare completion can share a cached view with
     // a newer request and must never restyle that newer request's page.
     preview.current = null;
+    releaseSurfaces();
     engine?.cancelTurnPreview();
-  }, [engine]);
+  }, [engine, releaseSurfaces]);
   const reset = useCallback(() => {
-    stopAnimations();
     if (frame.current !== null) cancelAnimationFrame(frame.current);
     frame.current = null;
-    if (engine) { engine.element.style.transform = ''; engine.element.style.willChange = ''; }
     clearPreview();
     const p = pointer.current;
     pointer.current = null;
     releasePointer(p);
     busy.current = false; setPhase('idle'); setDirection(null);
     engine?.schedulePages?.();
-  }, [clearPreview, engine, stopAnimations]);
+  }, [clearPreview, engine]);
   const cancelPageTurn = useCallback((reason = 'cancelled') => {
     ++generation.current; diagnostic.current?.cancel(record.current, reason); record.current = null; reset();
   }, [reset]);
@@ -99,15 +106,10 @@ export function usePageTurnController({ engine, disabled, reducedMotion, onCente
 
   const positionPair = useCallback((pair: Preview, dx: number) => {
     if (!engine || !pair.element || preview.current !== pair) return;
-    // Both real pages move by the same distance, exactly one viewport apart.
-    pair.element.style.transform = translate(dx - pair.sign * pair.width);
-    pair.element.style.willChange = 'transform';
-    pair.element.style.visibility = 'visible';
-    engine.element.style.willChange = 'transform';
-    engine.element.style.transform = translate(dx);
+    bindSurfaces(pair)?.update(dx);
     diagnostic.current?.markVisualUpdate(record.current, performance.now());
     if (pointer.current?.horizontal) diagnostic.current?.startPhase(record.current, 'motion');
-  }, [engine]);
+  }, [engine, bindSurfaces]);
   const prepare = useCallback((next: Direction): Promise<Preview | null> => {
     if (!engine) return Promise.resolve(null);
     if (preview.current?.direction === next) return preview.current.ready;
@@ -115,10 +117,9 @@ export function usePageTurnController({ engine, disabled, reducedMotion, onCente
     engine.pauseMeasurement?.();
     // Keep the current page covering the viewport until its neighbor is ready.
     // Pointer samples continue accumulating during the asynchronous preparation.
-    engine.element.style.transform = '';
     if (pointer.current) pointer.current.visualDx = 0;
     const pair: Preview = {
-      direction: next, sign: (next === 'next' ? -1 : 1) * (engine.direction === 'rtl' ? -1 : 1),
+      direction: next, sign: (next === 'next') !== (engine.direction === 'rtl') ? -1 : 1,
       width: engine.element.clientWidth, element: null, ready: Promise.resolve(null),
     };
     preview.current = pair;
@@ -138,26 +139,22 @@ export function usePageTurnController({ engine, disabled, reducedMotion, onCente
     }).catch(() => null).finally(() => diagnostics?.endPhase(prepareRecord, 'prepare'));
     return pair.ready;
   }, [clearPreview, engine, positionPair]);
-  const animate = useCallback(async (from: number, to: number, duration: number, pair: Preview | null) => {
-    if (!engine || reducedMotion) return;
-    const options: KeyframeAnimationOptions = { duration, easing: 'linear', fill: 'forwards' };
-    const current = engine.element.animate(turnKeyframes(from, to), options);
-    const list = [current];
-    if (pair?.element) {
-      const offset = -pair.sign * pair.width;
-      list.push(pair.element.animate(turnKeyframes(from + offset, to + offset), options));
-    }
+  const animate = useCallback(async (from: number, to: number, duration: number, pair: Preview | null): Promise<PageMotionResult> => {
+    if (!engine) return 'cancelled';
+    if (reducedMotion) return 'finished';
+    const binding = bindSurfaces(pair);
+    if (!binding) return 'cancelled';
     const time = document.timeline?.currentTime;
-    if (typeof time === 'number') for (const animation of list) animation.startTime = time;
-    animations.current = list;
     const diagnostics = diagnostic.current;
     const animationRecord = record.current;
-    diagnostics?.markVisualUpdate(animationRecord, performance.now());
-    diagnostics?.startPhase(animationRecord, 'motion');
-    diagnostics?.markAnimationStart(animationRecord, performance.now(), { sampleFrames: true });
-    try { await Promise.all(list.map(animation => animation.finished)); } catch { /* Lifecycle or pointer cancellation. */ }
+    const result = binding.settle(from, to, duration, typeof time === 'number' ? time : null, () => {
+      diagnostics?.markVisualUpdate(animationRecord, performance.now());
+      diagnostics?.startPhase(animationRecord, 'motion');
+      diagnostics?.markAnimationStart(animationRecord, performance.now(), { sampleFrames: true });
+    });
+    try { return await result; }
     finally { diagnostics?.endPhase(animationRecord, 'motion'); }
-  }, [engine, reducedMotion]);
+  }, [engine, reducedMotion, bindSurfaces]);
   const turnPage = useCallback(async (next: Direction, options: { action?: string; inputTime?: number } = {}, drag = 0) => {
     const diagnostics = diagnostic.current;
     diagnostics?.countInput('received');
@@ -176,21 +173,19 @@ export function usePageTurnController({ engine, disabled, reducedMotion, onCente
       const pair = !boundary && !reducedMotion ? await prepare(next) : null;
       if (version !== generation.current || engine.state !== 'ready') return;
       if (pair) diagnostics?.markMilestone(turnRecord, 'neighborReady');
-      if (boundary) { clearPreview(); await animate(drag, 0, PAGE_TURN_RULES.settleDurationMinMs, null); }
+      if (boundary) { clearPreview(); if (await animate(drag, 0, PAGE_TURN_RULES.settleDurationMinMs, null) === 'cancelled') return; }
       else if (pair) {
         positionPair(pair, drag);
         const duration = options.action === 'release'
           ? getSettleDuration(Math.max(0, pair.width - Math.abs(drag)), pair.width)
           : PAGE_TURN_RULES.tapDurationMs;
-        await animate(drag, pair.sign * pair.width, duration, pair);
+        if (await animate(drag, pair.sign * pair.width, duration, pair) === 'cancelled') return;
       }
       if (version !== generation.current || engine.state !== 'ready') return;
       if (!boundary) {
         // Leave the incoming real page at x=0 above the main renderer while
         // the main renderer verifies its new content with normal geometry.
-        if (pair?.element) pair.element.style.transform = translate(0);
-        stopAnimations();
-        engine.element.style.transform = '';
+        surfaceBinding.current?.binding.holdIncoming();
         if (reducedMotion) clearPreview();
         diagnostics?.startPhase(turnRecord, 'handoff');
         const previousPosition = engine.stable;
@@ -216,7 +211,7 @@ export function usePageTurnController({ engine, disabled, reducedMotion, onCente
     } finally {
       if (version === generation.current) { diagnostics?.cancel(turnRecord, 'interrupted'); record.current = null; reset(); }
     }
-  }, [animate, clearPreview, disabled, engine, onPageTurnCommitted, positionPair, prepare, reducedMotion, reset, stopAnimations]);
+  }, [animate, clearPreview, disabled, engine, onPageTurnCommitted, positionPair, prepare, reducedMotion, reset]);
   const navigateTo = useCallback(async (target: string) => {
     cancelPageTurn('navigation');
     if (!engine || engine.state !== 'ready') return;
@@ -256,10 +251,9 @@ export function usePageTurnController({ engine, disabled, reducedMotion, onCente
       const next = directionOf(p.dx, engine);
       setDirection(next);
       if (isBoundary(engine, next)) {
-        clearPreview();
+        if (preview.current) clearPreview();
         p.visualDx = dampBoundaryDistance(p.dx);
-        engine.element.style.transform = translate(p.visualDx);
-        engine.element.style.willChange = 'transform';
+        bindSurfaces(null)?.update(p.visualDx);
         diagnostic.current?.markVisualUpdate(record.current, performance.now());
         diagnostic.current?.startPhase(record.current, 'motion');
       } else {
@@ -272,7 +266,7 @@ export function usePageTurnController({ engine, disabled, reducedMotion, onCente
         }
       }
     });
-  }, [cancelPageTurn, clearPreview, engine, positionPair, prepare]);
+  }, [cancelPageTurn, clearPreview, engine, positionPair, prepare, bindSurfaces]);
   const handlePointerUp = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     const p = pointer.current;
     if (!p || event.pointerId !== p.id || !engine) return;
