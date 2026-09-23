@@ -2,17 +2,24 @@ import type { ReaderSession, StablePosition, NavigationCommand, NavigationResult
 import type { PositionKey, SurfaceLease } from './bufferTypes';
 import { samePositionKey } from './bufferTypes';
 import type { ReaderSettings } from '../hooks/useReaderSettings';
+import type { ReaderLocation } from '../types/epub';
 import { createPageRenderer } from './pageRenderer';
 import type { PageRendererBinding } from './pageRenderer';
 import { createPageTurnEngine } from './pageTurnEngine';
 import type { GestureSnapshot, GestureInput, GestureMoveResult } from './pageTurnEngine';
-import { PAGE_TURN_RULES, getSettleDuration, getTapZone, clampDragDistance } from '../utils/pageTurnGesture';
+import { PAGE_TURN_RULES, getSettleDuration, getTapZone, easeOutCubic } from '../utils/pageTurnGesture';
 import { createPageTurnDiagnostics, readPageTurnDebugConfig } from '../utils/pageTurnDiagnostics';
 
 type Direction = 'next' | 'prev';
 export type ReaderPhase = 'idle' | 'tracking' | 'dragging' | 'preparing' | 'settling' | 'committing' | 'recovering' | 'suspended' | 'failed';
 export interface AcceptedPosition { reason: 'opened' | 'navigation' | 'layout-restored' | 'snapshot'; position: StablePosition; revision: number }
-interface Options { onAccepted?: (event: AcceptedPosition) => void; diagnostics?: ReturnType<typeof createPageTurnDiagnostics>; preparationTimeoutMs?: number }
+interface Options {
+  onAccepted?: (event: AcceptedPosition) => void;
+  /** Display-only metadata when the verified preview becomes dominant; null restores accepted metadata. */
+  onPageDisplayed?: (location: ReaderLocation | null) => void;
+  diagnostics?: ReturnType<typeof createPageTurnDiagnostics>;
+  preparationTimeoutMs?: number;
+}
 interface InputOptions {
   disabled?: boolean; reducedMotion?: boolean;
   onCenterTap?: () => void; onTap?: (point: { clientX: number; clientY: number }) => boolean;
@@ -43,6 +50,7 @@ export function createReaderController(session: ReaderSession, options: Options 
   let committed = engine.stable ? copyPosition(engine.stable) : null;
   let capturedRevision = -1;
   let pair: Pair | null = null;
+  let displayingPreview = false;
   let binding: { pair: Pair | null; value: PageRendererBinding } | null = null;
   let record: number | null = null;
   let frame: number | null = null;
@@ -53,7 +61,7 @@ export function createReaderController(session: ReaderSession, options: Options 
   let settingsWork: Promise<void> | null = null;
   let resumeWork: Promise<void> | null = null;
   let lifecycle = 0;
-  let pointer: { id: number; snapshot: Snapshot; gesture: ReturnType<typeof createPageTurnEngine>; latest: GestureMoveResult | null; visual: number; start: number; boundaryPending?: boolean } | null = null;
+  let pointer: { id: number; snapshot: Snapshot; gesture: ReturnType<typeof createPageTurnEngine>; latest: GestureMoveResult | null; visual: number; start: number; boundaryPending?: boolean; catchUp?: { from: number; startTime: number | null } } | null = null;
   const setPhase = (phase: ReaderPhase, direction: Direction | null = ui.direction) => {
     if (ui.phase === phase && ui.direction === direction) return;
     ui = { phase, direction }; for (const listener of listeners) listener();
@@ -68,6 +76,8 @@ export function createReaderController(session: ReaderSession, options: Options 
   const stopOptional = () => { session.setOptionalWorkAllowed(false); buffer.stopWarm(); pagination.pause(); };
   const clearPair = () => {
     const previous = pair; pair = null; renderer.release(); binding = null;
+    if (pointer) pointer.catchUp = undefined;
+    if (displayingPreview) { displayingPreview = false; options.onPageDisplayed?.(null); }
     buffer.endMotion(); previous?.lease?.release();
     ++optionalEpoch; quiet = null; motionReady = false;
   };
@@ -159,9 +169,42 @@ export function createReaderController(session: ReaderSession, options: Options 
     binding = { pair: nextPair, value }; return value;
   };
   const update = (nextPair: Pair | null, distance: number) => {
-    if (!motionReady || !buffer.beginMotion()) return;
+    if (!motionReady || !buffer.beginMotion()) return false;
     bind(nextPair).update(distance); diagnostics.markVisualUpdate(record);
     diagnostics.startPhase(record, 'motion');
+    return true;
+  };
+  const scheduleDragFrame = (current: NonNullable<typeof pointer>) => {
+    if (frame !== null) return;
+    frame = requestAnimationFrame(time => {
+      frame = null; if (pointer !== current || disposed || suspended) return;
+      const latest = current.latest; if (!latest?.direction) return;
+      if (latest.boundary) {
+        if (pair) clearPair();
+        if (!current.boundaryPending) {
+          current.boundaryPending = true;
+          void ensureMotion().then(drained => {
+            current.boundaryPending = false;
+            if (!drained || pointer !== current || !current.latest?.boundary) return;
+            const distance = current.latest.visualDistance;
+            if (update(null, distance)) current.visual = distance;
+          });
+        }
+        return;
+      }
+      if (!pair?.element || pair.direction !== latest.direction) return;
+      let distance = latest.visualDistance;
+      if (current.catchUp) {
+        current.catchUp.startTime ??= time;
+        const progress = Math.min(1, Math.max(0, (time - current.catchUp.startTime) / PAGE_TURN_RULES.dragCatchUpDurationMs));
+        distance = current.catchUp.from + (distance - current.catchUp.from) * easeOutCubic(progress);
+        if (progress === 1) current.catchUp = undefined;
+      }
+      if (update(pair, distance)) current.visual = distance;
+      // A held finger emits no more pointermoves. Finish a late preview's short
+      // catch-up on real frames, always following the latest input position.
+      if (current.catchUp) scheduleDragFrame(current);
+    });
   };
   const prepare = (next: Direction, ruler: Snapshot) => {
     if (pair?.direction === next) return pair.ready;
@@ -174,6 +217,8 @@ export function createReaderController(session: ReaderSession, options: Options 
     const origin = committed;
     if (!origin) return nextPair.ready;
     const request = session.createRequest(origin, key(), next, { width: ruler.width, height: ruler.height });
+    const wasReady = buffer.snapshot()[next === 'next' ? 'next' : 'previous'].state === 'ready';
+    const started = performance.now();
     nextPair.ready = (async () => {
       if (!await bounded(buffer.prepare(request))) return null;
       if (disposed || suspended || pair !== nextPair || !samePositionKey(request.key, key())) return null;
@@ -181,27 +226,61 @@ export function createReaderController(session: ReaderSession, options: Options 
       if (disposed || suspended || pair !== nextPair || engine.state !== 'ready' || !samePositionKey(request.key, key())) return null;
       const lease = buffer.acquire(request); if (!lease) return null;
       nextPair.lease = lease; nextPair.element = lease.prepared.element;
-      const latest = pointer?.latest;
-      const distance = latest?.phase === 'dragging' && latest.direction === next ? clampDragDistance(latest.distance, ruler.width) : 0;
-      if (pointer) pointer.visual = distance;
-      update(nextPair, distance); diagnostics.markMilestone(record, 'neighborReady');
+      const current = pointer;
+      const latest = current?.latest;
+      if (current && latest?.phase === 'dragging' && latest.direction === next && !latest.boundary) {
+        // Cached pages follow input directly. Only a cold preview (or a slow
+        // resource-drain barrier) bridges the missing motion instead of jumping.
+        if (!input.reducedMotion && (!wasReady || performance.now() - started > 32)) {
+          current.catchUp = { from: current.visual, startTime: null };
+        }
+        update(nextPair, current.visual);
+        scheduleDragFrame(current);
+      } else update(nextPair, 0);
+      diagnostics.markMilestone(record, 'neighborReady');
       return nextPair;
     })().catch(() => null).finally(() => diagnostics.endPhase(prepareRecord, 'prepare'));
     return nextPair.ready;
   };
-  const animate = async (from: number, to: number, duration: number, nextPair: Pair | null) => {
+  const showPreviewPage = (nextPair: Pair | null) => {
+    const lease = nextPair?.lease;
+    if (!lease || pair !== nextPair || !samePositionKey(lease.request.key, key())) return false;
+    if (!displayingPreview) {
+      const { sectionIndex, page, total, cfi } = lease.prepared.target;
+      displayingPreview = true;
+      options.onPageDisplayed?.({ start: { index: sectionIndex, cfi, displayed: { page, total } } });
+    }
+    return true;
+  };
+  const animate = async (from: number, to: number, duration: number, nextPair: Pair | null, onProgress?: (distance: number) => boolean) => {
     if (input.reducedMotion) return 'finished' as const;
     const version = command; const epoch = optionalEpoch;
     if (!motionReady && !await ensureMotion()) return 'cancelled' as const;
     if (!alive(version) || epoch !== optionalEpoch || (nextPair && pair !== nextPair)) return 'cancelled' as const;
     if (!buffer.beginMotion()) return 'cancelled' as const;
     const animationRecord = record; const time = document.timeline?.currentTime;
+    const motion = bind(nextPair);
+    let progressFrame: number | null = null;
+    const reportProgress = () => {
+      progressFrame = null;
+      if (!onProgress || !alive(version) || epoch !== optionalEpoch || binding?.value !== motion) return;
+      const progress = motion.progress;
+      // Read the actual WAAPI clock, so delayed starts and paused animations do
+      // not advance the label on a wall-clock timer. The keyframes use this curve.
+      if (progress !== null && onProgress(from + (to - from) * easeOutCubic(progress))) return;
+      progressFrame = requestAnimationFrame(reportProgress);
+    };
     try {
-      return await bind(nextPair).settle(from, to, duration, typeof time === 'number' ? time : null, () => {
+      const completion = motion.settle(from, to, duration, typeof time === 'number' ? time : null, () => {
         diagnostics.markVisualUpdate(animationRecord); diagnostics.startPhase(animationRecord, 'motion');
         diagnostics.markAnimationStart(animationRecord, undefined, { sampleFrames: true });
       });
-    } finally { diagnostics.endPhase(animationRecord, 'motion'); }
+      if (onProgress) reportProgress();
+      return await completion;
+    } finally {
+      if (progressFrame !== null) cancelAnimationFrame(progressFrame);
+      diagnostics.endPhase(animationRecord, 'motion');
+    }
   };
   // Panels disable gestures, but may themselves request programmatic navigation.
   // Both paths still require a ready, idle session with no outstanding work.
@@ -249,11 +328,15 @@ export function createReaderController(session: ReaderSession, options: Options 
       } else if (nextPair) {
         update(nextPair, distance); diagnostics.markMilestone(turnRecord, 'neighborReady');
         const duration = commandOptions.action === 'release' ? getSettleDuration(ruler.width - Math.abs(distance), ruler.width) : PAGE_TURN_RULES.tapDurationMs;
-        if (await animate(distance, nextPair.sign * ruler.width, duration, nextPair) === 'cancelled') return;
+        if (await animate(distance, nextPair.sign * ruler.width, duration, nextPair, visibleDistance => (
+          Math.abs(visibleDistance) >= ruler.width / 2 && showPreviewPage(nextPair)
+        )) === 'cancelled') return;
       }
       if (!alive(version) || engine.state !== 'ready') return;
       if (!boundary) {
         binding?.value.holdIncoming();
+        // Completion is also a fallback when the browser skips frame callbacks.
+        showPreviewPage(nextPair);
         if (input.reducedMotion) clearPair();
         await commitNavigation({ kind: 'turn', direction: next }, version, turnRecord);
       }
@@ -357,25 +440,11 @@ export function createReaderController(session: ReaderSession, options: Options 
       if (motion.phase !== 'dragging') return false;
       if (record === null) { record = diagnostics.begin({ action: 'drag', backend: 'foliate-paired-views', inputTime: sample.time }); diagnostics.markAnimationStart(record, undefined, { sampleFrames: true }); }
       setPhase('dragging', motion.direction);
-      if (frame === null) frame = requestAnimationFrame(() => {
-        frame = null; if (pointer !== current || disposed || suspended) return;
-        const latest = current.latest; if (!latest?.direction) return;
-        if (latest.boundary) {
-          if (pair) clearPair();
-          if (!current.boundaryPending) {
-            current.boundaryPending = true;
-            void ensureMotion().then(drained => {
-              current.boundaryPending = false;
-              if (!drained || pointer !== current || !current.latest?.boundary) return;
-              current.visual = current.latest.visualDistance; update(null, current.visual);
-            });
-          }
-        }
-        else {
-          void prepare(latest.direction, current.snapshot);
-          if (pair?.element) { current.visual = latest.visualDistance; update(pair, current.visual); }
-        }
-      });
+      // Start loading on direction lock; waiting for rAF first adds latency
+      // before any of the real document/font/frame work can even begin.
+      if (!motion.boundary && motion.direction) void prepare(motion.direction, current.snapshot);
+      else current.catchUp = undefined;
+      scheduleDragFrame(current);
       return true;
     },
     pointerUp(id: number, sample: GestureInput) {

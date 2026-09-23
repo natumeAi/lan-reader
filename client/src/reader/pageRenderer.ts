@@ -9,6 +9,8 @@ export interface PageSurfaces {
 }
 export type PageMotionResult = 'finished' | 'cancelled';
 export interface PageRendererBinding {
+  /** Native animation timeline progress; null when there is no active motion. */
+  readonly progress: number | null;
   update(distance: number): void;
   settle(from: number, to: number, duration: number, timelineTime?: number | null, onAnimationWrite?: () => void): Promise<PageMotionResult>;
   /** Stationary handoff: keep the incoming surface covering normal foreground geometry. */
@@ -51,6 +53,7 @@ export function createPageRenderer() {
       if (incoming) incoming.style.transform = original.incomingTransform;
     };
     const binding: PageRendererBinding = {
+      get progress() { return run?.animations[0]?.effect?.getComputedTiming().progress ?? null; },
       update(distance) {
         if (active !== binding) return;
         current.style.transform = translate(distance);

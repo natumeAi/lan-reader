@@ -1,6 +1,7 @@
 import type { RefObject } from 'react';
 import type { PageRange, PageRanges, ReaderLocation, ReaderRendition, ReadingSection } from '../types/epub.js';
 interface UpdateOptions { readingSectionId?: string | null }
+interface DisplayedPosition { location: ReaderLocation | null | undefined; options?: UpdateOptions }
 interface ProgressOptions {
   readingSection?: ReadingSection;
   pageRangesBySectionIndex?: PageRanges;
@@ -135,6 +136,8 @@ async function getCurrentRenditionLocation(rendition: ReaderRendition | null) {
 export function usePageProgress({ renditionRef }: { renditionRef: RefObject<ReaderRendition | null> }) {
   const [pageProgress, setPageProgress] = useState<{ current: number; total: number } | null>(null);
   const pageProgressContextRef = useRef<ProgressContext | { navigationPending: true } | null>(null);
+  const acceptedPositionRef = useRef<DisplayedPosition | null>(null);
+  const previewPositionRef = useRef<DisplayedPosition | null>(null);
 
   const pageProgressUpdateFromLocation = useCallback((location: ReaderLocation | null | undefined, options: UpdateOptions = {}) => {
     if (!getLocalPageProgress(location)) {
@@ -210,19 +213,31 @@ export function usePageProgress({ renditionRef }: { renditionRef: RefObject<Read
   }, [pageProgressUpdateFromLocation]);
 
   const beginBookPageProgress = useCallback(() => {
+    acceptedPositionRef.current = null;
+    previewPositionRef.current = null;
     pageProgressContextRef.current = { navigationPending: true };
     setPageProgress(null);
   }, []);
 
   const updatePageProgressFromLocation = useCallback((location: ReaderLocation | null | undefined, options?: UpdateOptions) => {
-    applyPageProgressFromLocation(location, options);
+    acceptedPositionRef.current = { location, options };
+    if (!previewPositionRef.current) applyPageProgressFromLocation(location, options);
+  }, [applyPageProgressFromLocation]);
+
+  const setPageProgressPreview = useCallback((location: ReaderLocation | null, options?: UpdateOptions) => {
+    previewPositionRef.current = location ? { location, options } : null;
+    const displayed = previewPositionRef.current ?? acceptedPositionRef.current;
+    if (displayed) applyPageProgressFromLocation(displayed.location, displayed.options);
   }, [applyPageProgressFromLocation]);
 
   const refreshCurrentPageProgress = useCallback((rendition = renditionRef.current) => (
     getCurrentRenditionLocation(rendition)
       .then((location) => {
         if (renditionRef.current !== rendition) return;
-        applyPageProgressFromLocation(location);
+        // Measurement completion and snapshot saves cannot replace the visible
+        // preview with the foreground's still-unaccepted navigation position.
+        const displayed = previewPositionRef.current ?? acceptedPositionRef.current;
+        applyPageProgressFromLocation(displayed ? displayed.location : location, displayed?.options);
       })
       .catch(() => {})
   ), [applyPageProgressFromLocation, renditionRef]);
@@ -281,6 +296,7 @@ export function usePageProgress({ renditionRef }: { renditionRef: RefObject<Read
     invalidateReadingSectionPages,
     setReadingSectionPageRanges,
     setReadingSections,
+    setPageProgressPreview,
     updatePageProgressFromLocation,
   }), [
     beginBookPageProgress,
@@ -288,6 +304,7 @@ export function usePageProgress({ renditionRef }: { renditionRef: RefObject<Read
     invalidateReadingSectionPages,
     setReadingSectionPageRanges,
     setReadingSections,
+    setPageProgressPreview,
     updatePageProgressFromLocation,
   ]);
 

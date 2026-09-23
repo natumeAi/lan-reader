@@ -4,6 +4,7 @@ import type { FoliateBook } from './foliateTypes';
 import type { PreparedSurface, SurfaceOwner, SurfaceProvider, SurfaceRequest } from './bufferTypes';
 import { turnAdjacentView } from './foliateNavigation';
 import { beginReaderWork } from './diagnostics';
+import { getVisiblePageTextAnchor } from './visiblePageAnchor';
 
 interface Options {
   container: HTMLElement;
@@ -78,10 +79,15 @@ function targetProof(view: View, viewport: DOMRect, sections: WeakMap<Document, 
   const index = last?.section?.current;
   if (!last || index === undefined) return null;
   const page = view.isFixedLayout ? 1 : view.renderer.page;
-  if (page < 1 || !Number.isFinite(page)) return null;
+  const total = view.isFixedLayout ? 1 : view.renderer.pages - 2;
+  if (page < 1 || !Number.isFinite(page) || !Number.isFinite(total) || page > total) return null;
   const candidates: string[] = [last.cfi];
   const visible = last.range;
   if (visible) {
+    const textAnchor = getVisiblePageTextAnchor(visible);
+    // The first visible point can belong to a preceding tiny chapter on the
+    // same page. Use the foreground's anchor policy for display metadata too.
+    if (textAnchor) candidates.unshift(view.getCFI(index, textAnchor));
     const doc = visible.startContainer.ownerDocument!;
     const walker = doc.createTreeWalker(visible.commonAncestorContainer, 4 /* SHOW_TEXT */);
     const nodes: Node[] = visible.commonAncestorContainer.nodeType === 3 ? [visible.commonAncestorContainer] : [];
@@ -102,7 +108,7 @@ function targetProof(view: View, viewport: DOMRect, sections: WeakMap<Document, 
     }
   }
   const cfi = candidates.find(candidate => visibleAnchor(view, candidate, viewport, sections));
-  return cfi ? { sectionIndex: index, page, cfi } : null;
+  return cfi ? { sectionIndex: index, page, total, cfi } : null;
 }
 
 export function observeFoliateSurface(prepared: View, invalidate: (reason: string) => void): () => void {
@@ -266,6 +272,4 @@ export function createFoliateSurfaceProvider(options: Options): SurfaceProvider 
     },
   };
 }
-
-
 

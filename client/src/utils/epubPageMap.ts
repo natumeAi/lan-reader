@@ -10,6 +10,7 @@ export interface MeasureReadingSectionOptions {
   onReadingSectionComplete?: (section: ReadingSection, ranges: Map<number, PageRange>) => void;
   onReadingSectionFailed?: (section: ReadingSection) => void;
   prioritySectionIndex?: number;
+  priorityReadingSectionId?: string;
   readingSections: ReadingSection[];
   shouldStop?: () => boolean;
 }
@@ -71,9 +72,9 @@ function measureWithin<T>(measure: () => Awaitable<T>, timeoutMs: number, should
   });
 }
 
-export function prioritizeReadingSections(readingSections: ReadingSection[] | undefined, prioritySectionIndex?: number) {
+export function prioritizeReadingSections(readingSections: ReadingSection[] | undefined, prioritySectionIndex?: number, priorityReadingSectionId?: string) {
   if (!Array.isArray(readingSections)) return [];
-  const priority = readingSections.find((readingSection) => (
+  const priority = readingSections.find(section => section.id === priorityReadingSectionId) ?? readingSections.find((readingSection) => (
     containsSectionIndex(readingSection, prioritySectionIndex)
   ));
   if (!priority) return [...readingSections];
@@ -158,6 +159,7 @@ export async function measureReadingSectionPages({
   onReadingSectionComplete,
   onReadingSectionFailed,
   prioritySectionIndex,
+  priorityReadingSectionId,
   readingSections,
   shouldStop = () => false,
 }: MeasureReadingSectionOptions) {
@@ -174,6 +176,7 @@ export async function measureReadingSectionPages({
   const orderedSections = prioritizeReadingSections(
     selectedReadingSections,
     prioritySectionIndex,
+    priorityReadingSectionId,
   );
   const timeoutMs = Number.isFinite(measurementTimeoutMs) && measurementTimeoutMs > 0
     ? measurementTimeoutMs

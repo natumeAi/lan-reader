@@ -15,7 +15,7 @@ const freezeRequest = (request: SurfaceRequest): SurfaceRequest => Object.freeze
 });
 
 /** Logical neighbors; all loading/leased/retiring owners share the same budget. */
-export function createPageBuffer(provider: SurfaceProvider) {
+export function createPageBuffer(provider: SurfaceProvider, options: { canWarm?: () => boolean } = {}) {
   const entries = new Set<Entry>();
   const reservations = new Set<string>();
   let draining = 0;
@@ -192,15 +192,18 @@ export function createPageBuffer(provider: SurfaceProvider) {
     warm(requests: SurfaceRequest[]) {
       stopWarm(); if (destroyed || motion) return;
       const token = warmToken;
-      timer = setTimeout(() => {
+      let index = 0;
+      const next = () => {
+        if (destroyed || motion || token !== warmToken || index >= requests.length) return;
         timer = undefined;
-        void (async () => {
-          for (const request of requests) {
-            if (destroyed || motion || token !== warmToken) return;
-            await prepare(request);
-          }
-        })();
-      }, 350);
+        // Speculation yields to the visible section's page count. Explicit
+        // prepare() calls from user input still take priority over both jobs.
+        if (options.canWarm && !options.canWarm()) { timer = setTimeout(next, 50); return; }
+        void prepare(requests[index++]!).then(next, () => {});
+      };
+      // Let visible-section pagination yield/admit this work; an additional
+      // fixed delay leaves the next quick drag without its prepared neighbor.
+      timer = setTimeout(next, 0);
     },
     snapshot() {
       const neighbors = [...entries].filter(entry => current && samePositionKey(entry.request.key, current.key) && entry.request.cfi === current.cfi);

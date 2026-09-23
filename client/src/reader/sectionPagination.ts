@@ -17,6 +17,7 @@ function settleDisposal() {
 export interface PaginationSnapshot {
   layoutKey: string;
   currentSectionIndex: number | undefined;
+  currentReadingSectionId?: string;
   readingSections: ReadingSection[];
 }
 
@@ -43,7 +44,7 @@ interface SectionPaginationOptions {
 
 /** Current-section measurement is optional work, with independent book ownership. */
 export function createSectionPagination(options: SectionPaginationOptions) {
-  const busyRetryMs = options.busyRetryMs ?? 250;
+  const busyRetryMs = options.busyRetryMs ?? 50;
   let generation = 0;
   let destroyed = false;
   let running = false;
@@ -166,6 +167,7 @@ export function createSectionPagination(options: SectionPaginationOptions) {
       await measureReadingSectionPages({
         readingSections,
         prioritySectionIndex: snapshot.currentSectionIndex,
+        priorityReadingSectionId: snapshot.currentReadingSectionId,
         measureCurrentReadingSectionsOnly: true,
         cachedReadingSectionIds: measured,
         shouldStop: stopped,
@@ -222,7 +224,7 @@ export function createSectionPagination(options: SectionPaginationOptions) {
     // and must never treat failed disposal as a resource-safe motion boundary.
     void work.catch(() => {});
   };
-  const schedule = (delayMs = options.idleDelayMs ?? 700) => {
+  const schedule = (delayMs = options.idleDelayMs ?? 0) => {
     cancelSchedule();
     timer = setTimeout(() => {
       timer = undefined;
@@ -230,15 +232,25 @@ export function createSectionPagination(options: SectionPaginationOptions) {
       // Preview work keeps priority: keep the request and recheck shortly.
       if (busy()) { schedule(busyRetryMs); return; }
       if (typeof window.requestIdleCallback === 'function') {
-        idle = window.requestIdleCallback(() => { idle = undefined; start(); });
+        idle = window.requestIdleCallback(() => { idle = undefined; start(); }, { timeout: 100 });
       } else start();
     }, delayMs);
   };
   return {
+    get hasPendingCurrentPages() {
+      if (!pending && !actualPromise && draining === 0) return false;
+      const snapshot = options.getSnapshot();
+      const candidates = measurable(snapshot).filter(section => snapshot.currentSectionIndex !== undefined && section.sectionIndexes.includes(snapshot.currentSectionIndex));
+      const current = candidates.find(section => section.id === snapshot.currentReadingSectionId);
+      // Once the visible section is published, neighboring-section measurement
+      // yields to warming again; a large TOC must not starve page-turn previews.
+      return (current ? [current] : candidates).some(section => layoutKey !== snapshot.layoutKey || !measured.has(section.id));
+    },
     request() {
       if (!permitted()) return;
       pending = true;
-      if (!running && !actualPromise) schedule();
+      // Repeated idle notifications must not move an already queued deadline.
+      if (!running && !actualPromise && timer === undefined && idle === undefined) schedule();
     },
     pause,
     stopAndDrain,
