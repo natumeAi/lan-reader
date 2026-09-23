@@ -1,7 +1,8 @@
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react';
 import type { ReaderBook } from '../../types/library.js';
 import type { SessionRendition } from '../../types/readerSession.js';
-interface ReaderViewProps { book: ReaderBook; originRect?: Pick<DOMRect, 'left' | 'top' | 'width' | 'height'> | null; onBookUnavailable?: (id: number) => void; onClose: () => void; onOriginConsumed?: () => void; onProgressSettled?: () => void }
+import type { ReadingActivitySink } from '../../utils/activityDelivery.js';
+interface ReaderViewProps { book: ReaderBook; originRect?: Pick<DOMRect, 'left' | 'top' | 'width' | 'height'> | null; onBookUnavailable?: (id: number) => void; onClose: () => void; onOriginConsumed?: () => void; onProgressSettled?: () => void; activitySink?: ReadingActivitySink | null }
 import { useCallback, useEffect, useRef, useState } from 'react';
 import '../../styles/reader.css';
 import { useFoliateReader } from '../../hooks/useFoliateReader.js';
@@ -11,6 +12,7 @@ import { usePageTurnController } from '../../hooks/usePageTurnController.js';
 import { usePageProgress } from '../../hooks/usePageProgress.js';
 import { usePageScrollLock } from '../../hooks/usePageScrollLock.js';
 import { useReadingProgressPersistence } from '../../hooks/useReadingProgressPersistence.js';
+import { useReadingActivity } from '../../hooks/useReadingActivity.js';
 import { useReaderSettings } from '../../hooks/useReaderSettings.js';
 import type { ReaderSettings } from '../../hooks/useReaderSettings.js';
 import type { ReaderController } from '../../reader/readerController';
@@ -63,6 +65,7 @@ export function ReaderView({
   onClose,
   onOriginConsumed = noop,
   onProgressSettled = noop,
+  activitySink = null,
 }: ReaderViewProps) {
   const reducedMotion = useReducedMotion();
   const containerRef = useRef<(HTMLDivElement) | null>(null);
@@ -198,7 +201,18 @@ export function ReaderView({
     flushProgress,
   } = useReadingProgressPersistence({ bookId: book?.id });
 
+  // Reading statistics observe accepted positions only and never gate reading.
+  const readingActivity = useReadingActivity({
+    bookId: book?.id,
+    sink: activitySink,
+    contentReady: isReaderLayoutReady && !isLoading && !error,
+    blockingPanel: Boolean(activePanel),
+    imageViewerOpen: isImageViewerOpen,
+  });
+  const closeReadingActivity = readingActivity.close;
+
   const settleReaderProgress = useCallback(() => {
+    closeReadingActivity();
     if (progressSettlementRef.current) return progressSettlementRef.current;
 
     const settlement = Promise.resolve(captureCurrentProgressRef.current?.())
@@ -210,7 +224,7 @@ export function ReaderView({
       );
     progressSettlementRef.current = settlement;
     return settlement;
-  }, [flushProgress, onProgressSettled]);
+  }, [closeReadingActivity, flushProgress, onProgressSettled]);
 
   useEffect(() => {
     if (unmountSettlementTimerRef.current !== null) {
@@ -245,6 +259,7 @@ export function ReaderView({
     isLayoutReady: isReaderLayoutReady,
     loadReaderSettings,
     markReaderSettingsLoaded,
+    onAcceptedObservation: readingActivity.observeAccepted,
     onBookUnavailable,
     pageProgressController,
     readerSettingsRef,

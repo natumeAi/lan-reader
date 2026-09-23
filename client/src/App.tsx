@@ -18,6 +18,7 @@ import { useFolderState } from './hooks/useFolderState.js';
 import { useLibraryDrag } from './hooks/useLibraryDrag.js';
 import { useMainView } from './hooks/useMainView.js';
 import { useReaderSession } from './hooks/useReaderSession.js';
+import { useReadingActivityDelivery } from './hooks/useReadingActivityDelivery.js';
 import { useReducedMotion } from './hooks/useReducedMotion.js';
 import { useShelfData } from './hooks/useShelfData.js';
 import { dropAnimationConfig } from './utils/dragMotion.js';
@@ -48,6 +49,9 @@ function App() {
     restoreReaderBook,
   } = useReaderSession();
   const { mainView, selectMainView } = useMainView({ readerActive: Boolean(readingBook) });
+  // Delivers reading activity independently of any open reader. Its status is
+  // for the dashboard (`useReadingActivityStatus`); the shell never subscribes.
+  const readingActivityDelivery = useReadingActivityDelivery();
   const homeViewRef = useRef<HTMLDivElement>(null);
   const shelfViewRef = useRef<HTMLDivElement>(null);
   const previousMainViewRef = useRef(mainView);
@@ -350,6 +354,7 @@ function App() {
           <Suspense fallback={readingBookOrigin ? null : <ReaderRestoreFallback />}>
             <ReaderView
               key={readingBook.id}
+              activitySink={readingActivityDelivery}
               book={readingBook}
               originRect={readingBookOrigin}
               onBookUnavailable={handleBookUnavailable}

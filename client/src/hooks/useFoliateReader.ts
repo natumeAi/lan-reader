@@ -10,6 +10,7 @@ import type { usePageProgress } from './usePageProgress';
 import { getReadingProgress } from '../api/readingApi';
 import { readProgressOutbox } from '../utils/readingProgress';
 import type { ProgressRecord } from '../utils/readingProgress';
+import type { AcceptedObserver } from '../reader/activityTracker';
 
 interface Options {
   book: { id: number };
@@ -26,9 +27,11 @@ interface Options {
   resetReaderSettingsLoad: () => void;
   pageProgressController: ReturnType<typeof usePageProgress>['pageProgressController'];
   onBookUnavailable?: (id: number) => void;
+  /** Reading-activity observer of accepted positions; must be referentially stable. */
+  onAcceptedObservation?: AcceptedObserver;
 }
 export function useFoliateReader(options: Options) {
-  const { book, containerRef, renditionRef, currentCfiRef, readerSettingsRef, isLayoutReady, enqueueProgress, setError, setIsLoading, loadReaderSettings, markReaderSettingsLoaded, resetReaderSettingsLoad, pageProgressController, onBookUnavailable } = options;
+  const { book, containerRef, renditionRef, currentCfiRef, readerSettingsRef, isLayoutReady, enqueueProgress, setError, setIsLoading, loadReaderSettings, markReaderSettingsLoaded, resetReaderSettingsLoad, pageProgressController, onBookUnavailable, onAcceptedObservation } = options;
   const [toc, setToc] = useState<TocItem[]>([]);
   const [currentChapter, setCurrentChapter] = useState<TocItem | null>(null);
   const [currentHref, setCurrentHref] = useState<string | null>(null);
@@ -88,7 +91,13 @@ export function useFoliateReader(options: Options) {
         if (restore.current === 0 && saved && !saved.cfi && saved.progress > 0) throw new Error('记录缺少精确阅读位置。原记录已保留，请重试或选择从本章开头继续。');
         owned = new FoliateEngine(containerRef.current!, settings);
         renditionRef.current = owned; setEngine(owned);
-        coordinator = createReaderController(owned.session, { onAccepted: event => displayPosition(event.position, event.reason !== 'layout-restored') });
+        const hadSavedPosition = Boolean(saved);
+        coordinator = createReaderController(owned.session, { onAccepted: event => {
+          displayPosition(event.position, event.reason !== 'layout-restored');
+          if (disposed || !owned || !coordinator) return;
+          // Statistics observe accepted positions only; their failure never affects reading.
+          try { onAcceptedObservation?.({ event, engine: owned, controller: coordinator, foreground: owned.session.foreground, hadSavedPosition }); } catch { /* ignored */ }
+        } });
         setController(coordinator);
         owned.onPages = pageProgressController.setReadingSectionPageRanges;
         owned.onInvalidatePages = pageProgressController.invalidateReadingSectionPages;
@@ -114,7 +123,7 @@ export function useFoliateReader(options: Options) {
       document.removeEventListener('visibilitychange', visibility); window.removeEventListener('pagehide', hidden); window.removeEventListener('pageshow', shown);
       owned?.destroy(); if (renditionRef.current === owned) renditionRef.current = null;
     };
-  }, [book.id, isLayoutReady, reload, containerRef, renditionRef, currentCfiRef, readerSettingsRef, enqueueProgress, setError, setIsLoading, loadReaderSettings, markReaderSettingsLoaded, resetReaderSettingsLoad, pageProgressController, onBookUnavailable]);
+  }, [book.id, isLayoutReady, reload, containerRef, renditionRef, currentCfiRef, readerSettingsRef, enqueueProgress, setError, setIsLoading, loadReaderSettings, markReaderSettingsLoaded, resetReaderSettingsLoad, pageProgressController, onBookUnavailable, onAcceptedObservation]);
   const captureCurrentProgress = useCallback(async () => capture.current?.() ?? false, []);
   const requestBookPagination = useCallback(() => { if (controller?.snapshot.phase === 'idle') engine?.session.pagination.request(); }, [engine, controller]);
   const retry = useCallback(() => { setReload(value => value + 1); }, []);
