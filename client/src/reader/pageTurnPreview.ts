@@ -1,5 +1,6 @@
 import type { View } from 'foliate-js/view.js';
 import type { FoliateBook, NavigationTarget } from './foliateTypes';
+import { beginReaderWork } from './diagnostics';
 
 export type TurnDirection = 'next' | 'prev';
 export function adjacentPageTarget(view: View, book: FoliateBook, direction: TurnDirection): NavigationTarget | null {
@@ -41,6 +42,7 @@ interface Entry {
   key: string; direction: TurnDirection; stale: boolean; disposed: boolean;
   abort: AbortController;
   view?: View; book?: FoliateBook; ready: Promise<View | null>;
+  diagnostics?: ReturnType<typeof beginReaderWork>;
 }
 function paint(signal: AbortSignal) {
   return new Promise<void>(resolve => {
@@ -93,7 +95,9 @@ export function createPageTurnPreview(options: Options) {
     entry.view?.remove();
     if (entries.get(entry.direction) === entry) entries.delete(entry.direction);
     void entry.ready.finally(() => {
-      try { entry.view?.close(); } finally { entry.book?.destroy(); }
+      try { entry.view?.close(); } finally {
+        try { entry.book?.destroy(); } finally { entry.diagnostics?.release(); }
+      }
     });
   };
   const obtain = (direction: TurnDirection) => {
@@ -109,11 +113,14 @@ export function createPageTurnPreview(options: Options) {
     entries.set(direction, entry);
     const stopped = () => destroyed || entry.stale || options.snapshot()?.key !== snapshot.key;
     working++; options.onWorkStart();
+    entry.diagnostics = beginReaderWork('preview');
     entry.ready = (async () => {
       try {
         const book = await options.createBook(); entry.book = book;
+        entry.diagnostics?.bookCreated();
         if (stopped()) return null;
         const view = options.createView(); entry.view = view;
+        entry.diagnostics?.viewCreated();
         view.style.cssText = 'display:block;position:absolute;inset:0;width:100%;height:100%;z-index:2;visibility:hidden;pointer-events:none;contain:layout paint;background:var(--reader-bg,#fff)';
         view.setAttribute('aria-hidden', 'true');
         options.container.append(view);
@@ -131,7 +138,7 @@ export function createPageTurnPreview(options: Options) {
         await paint(entry.abort.signal);
         return stopped() ? null : view;
       } catch { return null; }
-      finally { working--; options.onWorkEnd(); }
+      finally { entry.diagnostics?.end(); working--; options.onWorkEnd(); }
     })();
     void entry.ready.then(view => { if (!view) dispose(entry); });
     return entry;

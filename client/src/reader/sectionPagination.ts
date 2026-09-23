@@ -3,6 +3,7 @@ import type { FoliateBook } from './foliateTypes';
 import type { PageRanges, ReadingSection } from '../types/epub';
 import { waitForFrameOrTimeout } from '../utils/animationFrame';
 import { measureReadingSectionPages } from '../utils/epubPageMap';
+import { beginReaderWork } from './diagnostics';
 
 // Upstream renderer style changes queue animation-frame callbacks that still
 // access its document. Let queued work drain before closing its resources.
@@ -78,6 +79,7 @@ export function createSectionPagination(options: SectionPaginationOptions) {
     const height = options.container.clientHeight;
     if (width < 2 || height < 2) return;
     running = true;
+    const diagnostics = beginReaderWork('measurement');
     const token = generation;
     let failed = false;
     const stopped = () => failed || token !== generation || !available() || options.getSnapshot().layoutKey !== snapshot.layoutKey;
@@ -92,8 +94,10 @@ export function createSectionPagination(options: SectionPaginationOptions) {
     const navigation: Promise<unknown>[] = [];
     try {
       book = await options.createBook();
+      diagnostics?.bookCreated();
       if (stopped()) return;
       view = options.createView();
+      diagnostics?.viewCreated();
       view.style.cssText = 'display:block;width:100%;height:100%';
       host.append(view);
       document.body.append(host);
@@ -140,11 +144,12 @@ export function createSectionPagination(options: SectionPaginationOptions) {
       // Preserve unknown page counts; a future idle request can retry.
     } finally {
       await Promise.allSettled(navigation);
+      diagnostics?.end();
       if (view) await settleDisposal();
       try { view?.close(); } finally {
         view?.remove();
         host.remove();
-        book?.destroy();
+        try { book?.destroy(); } finally { diagnostics?.release(); }
       }
       running = false;
       if (pending && available()) schedule();

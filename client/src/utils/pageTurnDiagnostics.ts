@@ -1,13 +1,19 @@
 export interface DebugConfig { enabled: boolean; forceBackend: 'scroll' | 'compositor' | null }
 type FrameSampleSource = 'animation-frame' | 'visual-update';
+export type TurnPhase = 'prepare' | 'motion' | 'handoff' | 'busy';
+type TurnMilestone = 'neighborReady' | 'engineVerified' | 'committed';
+type InputOutcome = 'received' | 'accepted' | 'rejected' | 'committed';
+interface PhaseSpan { phase: TurnPhase; start: number; end: number | null }
 interface DiagnosticRecord {
   action: string | null; backend: string | null; inputTime: number;
   firstVisualTime: number | null; animationStartTime: number | null; endTime: number | null;
   frameTimestamps: number[]; cancelReason: string | null; samplerFrameId: number | null;
   frameSampleSource: FrameSampleSource | 'mixed' | null;
+  phases: PhaseSpan[];
+  milestones: Partial<Record<TurnMilestone, number>>;
 }
 type TerminalRecord = Omit<DiagnosticRecord, 'samplerFrameId' | 'frameTimestamps' | 'frameSampleSource'> & Omit<ReturnType<typeof summarizePageTurnFrames>, 'frameIntervalsMs'> & { frameTimestamps: readonly number[]; frameIntervalsMs: readonly number[] };
-type DiagnosticFacade = { getRecords: () => ReturnType<typeof copyRecord>[]; clear: () => void };
+type DiagnosticFacade = { getRecords: () => ReturnType<typeof copyRecord>[]; getInputCounts: () => Record<InputOutcome, number>; clear: () => void };
 interface DiagnosticsEnvironment {
   cancelAnimationFrame?: typeof cancelAnimationFrame; enabled?: boolean;
   now?: () => number; requestAnimationFrame?: typeof requestAnimationFrame;
@@ -42,6 +48,8 @@ function copyRecord(record: TerminalRecord) {
     ...record,
     frameTimestamps: [...record.frameTimestamps],
     frameIntervalsMs: [...record.frameIntervalsMs],
+    phases: record.phases.map(span => ({ ...span })),
+    milestones: { ...record.milestones },
   };
 }
 
@@ -136,6 +144,8 @@ export function createPageTurnDiagnostics({
 }: DiagnosticsEnvironment = {}) {
   const activeRecords = new Map<number, DiagnosticRecord>();
   const completedRecords: TerminalRecord[] = [];
+  // Counts logical turnPage commands, not pointermove events or drag previews.
+  const inputCounts = { received: 0, accepted: 0, rejected: 0, committed: 0 };
   let destroyed = false;
   let nextRecordId = 1;
   let facade: DiagnosticFacade | null = null;
@@ -164,7 +174,6 @@ export function createPageTurnDiagnostics({
         if (activeRecords.get(recordId) !== record || destroyed) return;
 
         record.samplerFrameId = null;
-        markVisualUpdate(recordId, timestamp);
         frame(recordId, timestamp);
         scheduleSample(recordId!, record);
       });
@@ -189,6 +198,8 @@ export function createPageTurnDiagnostics({
       frameSampleSource: null,
       cancelReason: null,
       samplerFrameId: null,
+      phases: [],
+      milestones: {},
     });
     return recordId;
   }
@@ -198,6 +209,25 @@ export function createPageTurnDiagnostics({
     if (!record || record.firstVisualTime !== null) return;
     record.firstVisualTime = readTimestamp(now, timestamp);
   }
+
+  // These spans measure application work, never compositor presentation.
+  function startPhase(recordId: number | null | undefined, phase: TurnPhase, timestamp?: number) {
+    const record = getActiveRecord(recordId);
+    if (!record || record.phases.some(span => span.phase === phase && span.end === null)) return;
+    record.phases.push({ phase, start: readTimestamp(now, timestamp), end: null });
+  }
+  function endPhase(recordId: number | null | undefined, phase: TurnPhase, timestamp?: number) {
+    const span = getActiveRecord(recordId)?.phases.slice().reverse().find(span => span.phase === phase && span.end === null);
+    if (span) span.end = readTimestamp(now, timestamp);
+  }
+  function markMilestone(recordId: number | null | undefined, milestone: TurnMilestone, timestamp?: number) {
+    const record = getActiveRecord(recordId);
+    if (record) record.milestones[milestone] ??= readTimestamp(now, timestamp);
+  }
+  function countInput(outcome: InputOutcome) {
+    if (enabled && !destroyed) inputCounts[outcome]++;
+  }
+  function getInputCounts() { return { ...inputCounts }; }
 
   function markAnimationStart(recordId: number | null | undefined, timestamp?: number, options: { sampleFrames?: boolean } = {}) {
     const record = getActiveRecord(recordId);
@@ -232,6 +262,9 @@ export function createPageTurnDiagnostics({
     const completedRecord = Object.freeze({
       ...terminalRecord,
       ...summary,
+      firstVisualMeasurement: 'application-style-or-animation-write' as const,
+      phases: terminalRecord.phases.map(span => ({ ...span })),
+      milestones: { ...terminalRecord.milestones },
       frameTimestamps: Object.freeze([...terminalRecord.frameTimestamps]),
       frameIntervalsMs: Object.freeze([...summary.frameIntervalsMs]),
     });
@@ -258,6 +291,7 @@ export function createPageTurnDiagnostics({
 
   function clear() {
     completedRecords.splice(0, completedRecords.length);
+    inputCounts.received = inputCounts.accepted = inputCounts.rejected = inputCounts.committed = 0;
   }
 
   function destroy() {
@@ -278,7 +312,7 @@ export function createPageTurnDiagnostics({
   }
 
   if (enabled && target) {
-    facade = Object.freeze({ getRecords, clear });
+    facade = Object.freeze({ getRecords, getInputCounts, clear });
     try {
       Object.defineProperty(target, DIAGNOSTICS_FACADE_NAME, {
         configurable: true,
@@ -294,6 +328,11 @@ export function createPageTurnDiagnostics({
     begin,
     markVisualUpdate,
     markAnimationStart,
+    startPhase,
+    endPhase,
+    markMilestone,
+    countInput,
+    getInputCounts,
     frame,
     finish,
     cancel,

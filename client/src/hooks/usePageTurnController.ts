@@ -105,6 +105,8 @@ export function usePageTurnController({ engine, disabled, reducedMotion, onCente
     pair.element.style.visibility = 'visible';
     engine.element.style.willChange = 'transform';
     engine.element.style.transform = translate(dx);
+    diagnostic.current?.markVisualUpdate(record.current, performance.now());
+    if (pointer.current?.horizontal) diagnostic.current?.startPhase(record.current, 'motion');
   }, [engine]);
   const prepare = useCallback((next: Direction): Promise<Preview | null> => {
     if (!engine) return Promise.resolve(null);
@@ -120,6 +122,9 @@ export function usePageTurnController({ engine, disabled, reducedMotion, onCente
       width: engine.element.clientWidth, element: null, ready: Promise.resolve(null),
     };
     preview.current = pair;
+    const diagnostics = diagnostic.current;
+    const prepareRecord = record.current;
+    diagnostics?.startPhase(prepareRecord, 'prepare');
     pair.ready = engine.prepareTurn(next).then(element => {
       if (preview.current !== pair || engine.state !== 'ready' || !element) return null;
       pair.element = element;
@@ -127,9 +132,10 @@ export function usePageTurnController({ engine, disabled, reducedMotion, onCente
       const dx = p?.horizontal && directionOf(p.dx, engine) === next ? clampDragDistance(p.dx, pair.width) : 0;
       if (p) p.visualDx = dx;
       positionPair(pair, dx);
+      diagnostic.current?.markMilestone(record.current, 'neighborReady');
       diagnostic.current?.markVisualUpdate(record.current, performance.now());
       return pair;
-    }).catch(() => null);
+    }).catch(() => null).finally(() => diagnostics?.endPhase(prepareRecord, 'prepare'));
     return pair.ready;
   }, [clearPreview, engine, positionPair]);
   const animate = useCallback(async (from: number, to: number, duration: number, pair: Preview | null) => {
@@ -144,19 +150,32 @@ export function usePageTurnController({ engine, disabled, reducedMotion, onCente
     const time = document.timeline?.currentTime;
     if (typeof time === 'number') for (const animation of list) animation.startTime = time;
     animations.current = list;
-    diagnostic.current?.markAnimationStart(record.current, performance.now(), { sampleFrames: true });
+    const diagnostics = diagnostic.current;
+    const animationRecord = record.current;
+    diagnostics?.markVisualUpdate(animationRecord, performance.now());
+    diagnostics?.startPhase(animationRecord, 'motion');
+    diagnostics?.markAnimationStart(animationRecord, performance.now(), { sampleFrames: true });
     try { await Promise.all(list.map(animation => animation.finished)); } catch { /* Lifecycle or pointer cancellation. */ }
+    finally { diagnostics?.endPhase(animationRecord, 'motion'); }
   }, [engine, reducedMotion]);
   const turnPage = useCallback(async (next: Direction, options: { action?: string; inputTime?: number } = {}, drag = 0) => {
-    if (!engine || disabled || busy.current || pointer.current || engine.state !== 'ready') return;
+    const diagnostics = diagnostic.current;
+    diagnostics?.countInput('received');
+    if (!engine || disabled || busy.current || pointer.current || engine.state !== 'ready') {
+      diagnostics?.countInput('rejected');
+      return;
+    }
+    diagnostics?.countInput('accepted');
     const version = ++generation.current;
     busy.current = true; setPhase('settling'); setDirection(next); engine.pauseMeasurement?.();
-    const diagnostics = diagnostic.current;
     record.current = diagnostics?.begin({ action: options.action ?? 'tap-' + next, backend: 'foliate-paired-views', inputTime: options.inputTime }) ?? null;
+    const turnRecord = record.current;
+    diagnostics?.startPhase(turnRecord, 'busy');
     const boundary = isBoundary(engine, next);
     try {
       const pair = !boundary && !reducedMotion ? await prepare(next) : null;
       if (version !== generation.current || engine.state !== 'ready') return;
+      if (pair) diagnostics?.markMilestone(turnRecord, 'neighborReady');
       if (boundary) { clearPreview(); await animate(drag, 0, PAGE_TURN_RULES.settleDurationMinMs, null); }
       else if (pair) {
         positionPair(pair, drag);
@@ -173,16 +192,29 @@ export function usePageTurnController({ engine, disabled, reducedMotion, onCente
         stopAnimations();
         engine.element.style.transform = '';
         if (reducedMotion) clearPreview();
+        diagnostics?.startPhase(turnRecord, 'handoff');
+        const previousPosition = engine.stable;
         await engine.turn(next);
         if (version !== generation.current || engine.state !== 'ready') return;
+        diagnostics?.endPhase(turnRecord, 'handoff');
+        // A resolved operation alone is not success. Require a new stable
+        // snapshot, and count a committed turn only when its anchor changed.
+        if (engine.stable && engine.stable !== previousPosition) {
+          diagnostics?.markMilestone(turnRecord, 'engineVerified');
+          if (engine.stable.cfi !== previousPosition?.cfi) {
+            diagnostics?.markMilestone(turnRecord, 'committed');
+            diagnostics?.countInput('committed');
+          }
+        }
         await onPageTurnCommitted?.();
       }
-      diagnostics?.finish(record.current);
+      diagnostics?.endPhase(turnRecord, 'busy');
+      diagnostics?.finish(turnRecord);
     } catch (error) {
-      if (version === generation.current) diagnostics?.cancel(record.current, 'navigation-error');
+      if (version === generation.current) diagnostics?.cancel(turnRecord, 'navigation-error');
       console.error('Page turn failed', error);
     } finally {
-      if (version === generation.current) { diagnostics?.cancel(record.current, 'interrupted'); record.current = null; reset(); }
+      if (version === generation.current) { diagnostics?.cancel(turnRecord, 'interrupted'); record.current = null; reset(); }
     }
   }, [animate, clearPreview, disabled, engine, onPageTurnCommitted, positionPair, prepare, reducedMotion, reset, stopAnimations]);
   const navigateTo = useCallback(async (target: string) => {
@@ -229,6 +261,7 @@ export function usePageTurnController({ engine, disabled, reducedMotion, onCente
         engine.element.style.transform = translate(p.visualDx);
         engine.element.style.willChange = 'transform';
         diagnostic.current?.markVisualUpdate(record.current, performance.now());
+        diagnostic.current?.startPhase(record.current, 'motion');
       } else {
         void prepare(next);
         const pair = preview.current;
@@ -259,6 +292,7 @@ export function usePageTurnController({ engine, disabled, reducedMotion, onCente
     p.dx = event.clientX - p.x;
     p.samples.push({ x: event.clientX, time: event.timeStamp });
     const delta = decidePageDelta({ distanceX: p.dx, velocityX: getRecentVelocity(p.samples), pageWidth: engine.element.clientWidth });
+    diagnostic.current?.endPhase(record.current, 'motion');
     diagnostic.current?.finish(record.current); record.current = null;
     if (disabled || engine.state !== 'ready') { cancelPageTurn('unavailable'); return; }
     if (delta) {
@@ -269,10 +303,11 @@ export function usePageTurnController({ engine, disabled, reducedMotion, onCente
     } else {
       busy.current = true; setPhase('settling'); const version = ++generation.current;
       record.current = diagnostic.current?.begin({ action: 'rebound', backend: 'foliate-paired-views', inputTime: event.timeStamp }) ?? null;
+      diagnostic.current?.startPhase(record.current, 'busy');
       const pair = preview.current?.element ? preview.current : null;
       if (!pair) clearPreview();
       void animate(p.visualDx, 0, getSettleDuration(Math.abs(p.visualDx), engine.element.clientWidth), pair).finally(() => {
-        if (version === generation.current) { diagnostic.current?.finish(record.current); record.current = null; reset(); }
+        if (version === generation.current) { diagnostic.current?.endPhase(record.current, 'busy'); diagnostic.current?.finish(record.current); record.current = null; reset(); }
       });
     }
   }, [animate, cancelPageTurn, clearPreview, disabled, engine, onCenterTap, onTap, reset, turnPage]);
