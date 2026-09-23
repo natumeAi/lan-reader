@@ -18,7 +18,18 @@ export function adjacentPageTarget(view: View, book: FoliateBook, direction: Tur
 export async function turnAdjacentView(view: View, book: FoliateBook, direction: TurnDirection) {
   if (view.isFixedLayout) {
     const before = view.lastLocation?.cfi;
+    const beforeIndex = view.lastLocation?.section?.current;
     await view.renderer[direction]();
+    const index = view.lastLocation?.section?.current;
+    if (index !== undefined && book.sections[index]?.linear === 'no') {
+      const delta = direction === 'next' ? 1 : -1;
+      let target = index + delta;
+      while (book.sections[target]?.linear === 'no') target += delta;
+      // Keep native physical spreads and original section indices. Repeating
+      // prev could skip a linear partner in the spread we just reached.
+      if (book.sections[target]) await view.renderer.goTo({ index: target });
+      else if (beforeIndex !== undefined) { await view.renderer.goTo({ index: beforeIndex }); return false; }
+    }
     return view.lastLocation?.cfi !== before;
   }
   const target = adjacentPageTarget(view, book, direction);

@@ -7,6 +7,7 @@ export interface FontOption { id: string; label: string; value: string }
 export interface ThemeOption { id: string; label: string; swatch: string; text: string; muted: string; background: string; selection: string }
 export interface LayoutSetting { id: string; label: string; value: number; valueLabel: string; min: number; max: number; step: number; onChange: (event: ChangeEvent<HTMLInputElement>) => void }
 export interface ReaderSettingsOptions {
+  applySettings?: (settings: ReaderSettings) => Promise<void>;
   beforeRenditionMutation?: () => void;
   containerRef: RefObject<HTMLElement | null>;
   currentCfiRef: RefObject<string | null>;
@@ -314,6 +315,7 @@ export function getFoliateStyles(settings: ReaderSettings, fixed = false) {
 }
 
 export function useReaderSettings({
+  applySettings,
   beforeRenditionMutation,
   isReaderReady,
   onSettingsReflow,
@@ -422,10 +424,10 @@ export function useReaderSettings({
     if (!rendition) return;
     beforeRenditionMutation?.();
     if (!settingsActiveRef.current || renditionRef.current !== rendition) return;
-    void rendition.applySettings(readerSettingsRef.current).then(() => {
+    void (applySettings ? applySettings(readerSettingsRef.current) : rendition.applySettings(readerSettingsRef.current)).then(() => {
       if (settingsActiveRef.current && renditionRef.current === rendition) onSettingsReflow?.(rendition);
     });
-  }, [isReaderReady, readerSettings, renditionRef, beforeRenditionMutation, onSettingsReflow]);
+  }, [isReaderReady, readerSettings, renditionRef, beforeRenditionMutation, onSettingsReflow, applySettings]);
 
   useEffect(() => {
     if (!hasLoadedReaderSettings) return;

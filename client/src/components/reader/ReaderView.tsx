@@ -12,6 +12,8 @@ import { usePageProgress } from '../../hooks/usePageProgress.js';
 import { usePageScrollLock } from '../../hooks/usePageScrollLock.js';
 import { useReadingProgressPersistence } from '../../hooks/useReadingProgressPersistence.js';
 import { useReaderSettings } from '../../hooks/useReaderSettings.js';
+import type { ReaderSettings } from '../../hooks/useReaderSettings.js';
+import type { ReaderController } from '../../reader/readerController';
 import { useReducedMotion } from '../../hooks/useReducedMotion.js';
 import {
   contentImageCursorAtViewportPoint,
@@ -70,7 +72,7 @@ export function ReaderView({
   const originRectRef = useRef(originRect);
   const isClosingRef = useRef(false);
   const pageEdgeRef = useRef<(HTMLDivElement) | null>(null);
-  const bookPaginationRequestRef = useRef<(() => void) | null>(null);
+  const readerControllerRef = useRef<ReaderController | null>(null);
   const cancelPageTurnRef = useRef<((reason: string) => void) | null>(null);
   const captureCurrentProgressRef = useRef<(() => Promise<boolean | undefined>) | null>(null);
   const closeAnimationFramesRef = useRef(new Set<number>());
@@ -78,8 +80,8 @@ export function ReaderView({
   const panelCloseTimerRef = useRef<(ReturnType<typeof setTimeout>) | null>(null);
   const progressSettlementRef = useRef<(Promise<void>) | null>(null);
   const unmountSettlementTimerRef = useRef<(ReturnType<typeof setTimeout>) | null>(null);
-  const cancelBeforeRenditionMutation = useCallback(() => {
-    cancelPageTurnRef.current?.('settings');
+  const applyReaderSettings = useCallback(async (settings: ReaderSettings) => {
+    await readerControllerRef.current?.applySettings(settings);
   }, []);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
@@ -160,12 +162,7 @@ export function ReaderView({
   const {
     pageProgressController,
     pageProgressLabel,
-    refreshCurrentPageProgress,
   } = usePageProgress({ renditionRef });
-  const handleReaderSettingsReflow = useCallback((rendition: SessionRendition | null) => {
-    void refreshCurrentPageProgress(rendition);
-    bookPaginationRequestRef.current?.();
-  }, [refreshCurrentPageProgress]);
 
   const {
     decreaseFontSize,
@@ -189,11 +186,10 @@ export function ReaderView({
     resetReaderSettingsLoad,
     themeOptions,
   } = useReaderSettings({
-    beforeRenditionMutation: cancelBeforeRenditionMutation,
+    applySettings: applyReaderSettings,
     containerRef,
     currentCfiRef,
     isReaderReady: !isLoading && !error,
-    onSettingsReflow: handleReaderSettingsReflow,
     renditionRef,
   });
 
@@ -235,11 +231,11 @@ export function ReaderView({
     currentChapter,
     currentHref,
     engine,
+    controller,
     retry,
     startChapter,
     canFallback,
     progress,
-    requestBookPagination,
     toc,
   } = useFoliateReader({
     book,
@@ -257,7 +253,7 @@ export function ReaderView({
     setError,
     setIsLoading,
   });
-  bookPaginationRequestRef.current = requestBookPagination;
+  readerControllerRef.current = controller;
   captureCurrentProgressRef.current = captureCurrentProgress;
   const handleExportDiagnostics = () => exportReaderDiagnostics(engine, readerSettingsRef.current);
   const handleStartDiagnostics = () => {
@@ -288,6 +284,7 @@ export function ReaderView({
   }, [closePanel]);
 
   const handleReaderTap = useCallback(({ clientX, clientY }: { clientX: number; clientY: number }) => {
+    if (readerControllerRef.current?.snapshot.phase !== 'idle') return false;
     const image = findContentImageAtViewportPoint(
       renditionRef.current?.getContents() ?? [],
       clientX,
@@ -308,21 +305,18 @@ export function ReaderView({
     phase: pageTurnPhase,
     turnPage,
   } = usePageTurnController({
-    engine,
-    currentCfiRef,
+    controller,
     disabled: Boolean(activePanel) || isImageViewerOpen || isLoading || Boolean(error),
     edgeRef: pageEdgeRef,
     onCenterTap: handleCenterTap,
-    onNavigationSettled: captureCurrentProgress,
-    onPageTurnCommitted: refreshCurrentPageProgress,
     onTap: handleReaderTap,
     reducedMotion,
-    renditionRef,
   });
 
   const handleGesturePointerMove = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     handlePagePointerMove(event);
     if (event.pointerType !== 'mouse' || event.buttons) return;
+    if (readerControllerRef.current?.snapshot.phase !== 'idle') return;
     const cursor = contentImageCursorAtViewportPoint(
       renditionRef.current?.getContents() ?? [],
       event.clientX,
