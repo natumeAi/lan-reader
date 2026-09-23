@@ -20,7 +20,7 @@ export interface SurfaceRequest {
 export interface PreparedSurface {
   readonly element: HTMLElement;
   readonly origin: PositionKey;
-  readonly target: { readonly sectionIndex: number; readonly page: number; readonly cfi: string };
+  readonly target: { readonly sectionIndex: number; readonly page: number; readonly total: number; readonly cfi: string };
 }
 export interface SurfaceOwner {
   readonly id: string;

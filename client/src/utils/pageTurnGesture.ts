@@ -8,9 +8,10 @@ export const PAGE_TURN_RULES = Object.freeze({
   velocityWindowMs: 100,
   edgeDampingMaxPx: 28,
   edgeDampingFactor: 0.25,
-  tapDurationMs: 240,
-  settleDurationMinMs: 160,
-  settleDurationMaxMs: 280,
+  tapDurationMs: 360,
+  dragCatchUpDurationMs: 80,
+  settleDurationMinMs: 260,
+  settleDurationMaxMs: 420,
   relocatedTimeoutMs: 1200,
 });
 

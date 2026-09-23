@@ -14,6 +14,7 @@ import { turnAdjacentView } from './foliateNavigation';
 import { createFoliateSurfaceProvider, observeFoliateSurface } from './foliateSurfaceProvider';
 import { createPageBuffer } from './pageBuffer';
 import { waitForFrameOrTimeout } from '../utils/animationFrame';
+import { getVisiblePageTextAnchor } from './visiblePageAnchor';
 
 // Layout settlement waits two frames, each bounded by a timer so a visible page
 // that delivers no frames still opens (instead of hitting the operation deadline).
@@ -61,8 +62,17 @@ export class FoliateEngine implements ReaderEngine {
       configure: (view, request) => this.configure(view, request.settings, request.width),
       onInvalidated: ownerId => { if (buffer.isCurrentOwner(ownerId)) this.onLayoutInvalidated?.(); },
     });
-    const buffer = createPageBuffer(provider);
-    this.pagination = createSectionPagination({ container, createBook: () => this.createBook(), createView: () => new View(), configure: view => this.configure(view), getSnapshot: () => ({ layoutKey: this.layout(), currentSectionIndex: this.stable?.location.start?.index, readingSections: this.readingSections }), canMeasure: () => this.optionalWorkAllowed && this.state === 'ready', isBusy: () => buffer.busy, onPages: (section, ranges) => this.onPages?.(section, ranges), onInvalidate: () => this.onInvalidatePages?.() });
+    const buffer = createPageBuffer(provider, { canWarm: () => !this.pagination.hasPendingCurrentPages });
+    this.pagination = createSectionPagination({
+      container, createBook: () => this.createBook(), createView: () => new View(), configure: view => this.configure(view),
+      getSnapshot: () => ({
+        layoutKey: this.layout(), currentSectionIndex: this.stable?.location.start?.index,
+        currentReadingSectionId: this.stable ? this.currentChapter(this.stable.cfi, this.stable.location.start?.href)?.href : undefined,
+        readingSections: this.readingSections,
+      }),
+      canMeasure: () => this.optionalWorkAllowed && this.state === 'ready', isBusy: () => buffer.busy,
+      onPages: (section, ranges) => this.onPages?.(section, ranges), onInvalidate: () => this.onInvalidatePages?.(),
+    });
     this.session = {
       engine: this, foreground: this.element, buffer, pagination: this.pagination,
       createRequest: (position, key, direction, viewport) => ({ key, cfi: position.cfi, page: position.page, ...viewport, direction, readingDirection: this.direction, settings: { ...this.settings } }),
@@ -339,29 +349,9 @@ export class FoliateEngine implements ReaderEngine {
     if (visible) {
       // Pick a point inside the actual visible range, never halfway through an
       // entire paragraph (which may span several pages).
-      const walker = visible.startContainer.ownerDocument!.createTreeWalker(visible.commonAncestorContainer, NodeFilter.SHOW_TEXT);
-      const nodes: Text[] = [];
-      if (visible.commonAncestorContainer.nodeType === 3) nodes.push(visible.commonAncestorContainer as Text);
-      else { while (walker.nextNode()) if (visible.intersectsNode(walker.currentNode)) nodes.push(walker.currentNode as Text); }
-      const pieces = nodes.map(node => ({ node, start: node === visible.startContainer ? visible.startOffset : 0, end: node === visible.endContainer ? visible.endOffset : node.length })).filter(p => p.end > p.start && /\S/.test(p.node.data.slice(p.start, p.end)));
-      let middle = Math.floor(pieces.reduce((sum, p) => sum + p.end - p.start, 0) / 2);
-      for (const p of pieces) {
-        if (middle < p.end - p.start) {
-          let offset = p.start + middle;
-          // Stay within the visible slice, avoiding zero-width wrap spaces in
-          // newly saved CFIs without shifting historic anchors on restoration.
-          for (let distance = 0; distance < p.end - p.start; distance++) {
-            const next = offset + distance;
-            const previous = offset - distance;
-            if (next < p.end && /\S/.test(p.node.data[next]!)) { offset = next; break; }
-            if (previous >= p.start && /\S/.test(p.node.data[previous]!)) { offset = previous; break; }
-          }
-          const anchor = visible.cloneRange(); anchor.setStart(p.node, offset); anchor.collapse(true);
-          cfi = this.element.getCFI(location.start!.index!, anchor); break;
-        }
-        middle -= p.end - p.start;
-      }
-      if (!pieces.length) {
+      const textAnchor = getVisiblePageTextAnchor(visible);
+      if (textAnchor) cfi = this.element.getCFI(location.start!.index!, textAnchor);
+      else {
         // Image-only covers still contain XML indentation text. Save a verified
         // element CFI instead of a zero-area whitespace point. Keep checking
         // both the visible range and actual geometry, including on restoration.

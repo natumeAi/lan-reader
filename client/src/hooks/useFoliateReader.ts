@@ -92,7 +92,11 @@ export function useFoliateReader(options: Options) {
         owned = new FoliateEngine(containerRef.current!, settings);
         renditionRef.current = owned; setEngine(owned);
         const hadSavedPosition = Boolean(saved);
-        coordinator = createReaderController(owned.session, { onAccepted: event => {
+        coordinator = createReaderController(owned.session, { onPageDisplayed: location => {
+          if (disposed || !owned) return;
+          const chapter = location?.start?.cfi ? owned.currentChapter(location.start.cfi, location.start.href) : null;
+          pageProgressController.setPageProgressPreview(location, { readingSectionId: chapter?.href });
+        }, onAccepted: event => {
           displayPosition(event.position, event.reason !== 'layout-restored');
           if (disposed || !owned || !coordinator) return;
           // Statistics observe accepted positions only; their failure never affects reading.
