@@ -82,7 +82,7 @@ export interface ReadingChartBar {
   isToday: boolean;
   /** Bar height as a fraction `0..1` of the plot; `0` is drawn as the flat zero dash. */
   heightFraction: number;
-  /** Short visible label under the bar: `今` for today, otherwise the weekday. */
+  /** Short visible label under the bar: `M/D`, e.g. `9/23`; today is emphasized by the card. */
   shortLabel: string;
   /** Exact date and duration for assistive technology, e.g. `9月23日 周三（今天）：5 分 2 秒`. */
   accessibleLabel: string;
@@ -113,7 +113,7 @@ export function buildReadingChart(
       durationMs: day.durationMs,
       isToday,
       heightFraction: day.durationMs > 0 ? Math.min(1, day.durationMs / scale) : 0,
-      shortLabel: isToday ? '今' : weekdayName,
+      shortLabel: `${month}/${dayOfMonth}`,
       accessibleLabel: `${month}月${dayOfMonth}日 周${weekdayName}${isToday ? '（今天）' : ''}：${formatSpokenDuration(day.durationMs)}`,
     };
   });

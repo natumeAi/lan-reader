@@ -570,8 +570,10 @@ body[data-main-view="home"] {
 .reading-week-day-label {
   color: rgba(29, 29, 31, 0.42);
   font-size: 11px;
+  font-variant-numeric: tabular-nums;
   line-height: 14px;
   text-align: center;
+  white-space: nowrap;
 }
 
 .reading-week-day.is-today .reading-week-day-label {
