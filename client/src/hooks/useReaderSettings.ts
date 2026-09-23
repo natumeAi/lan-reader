@@ -280,7 +280,7 @@ function getReaderLayoutCss({
     }
 
     /* Keep the full illustration visible instead of rounding or cropping it. */
-    img {
+    img, svg {
       border-radius: 0 !important;
       object-fit: contain !important;
     }
@@ -421,8 +421,9 @@ export function useReaderSettings({
     const rendition = renditionRef.current;
     if (!rendition) return;
     beforeRenditionMutation?.();
+    if (!settingsActiveRef.current || renditionRef.current !== rendition) return;
     void rendition.applySettings(readerSettingsRef.current).then(() => {
-      if (renditionRef.current === rendition) onSettingsReflow?.(rendition);
+      if (settingsActiveRef.current && renditionRef.current === rendition) onSettingsReflow?.(rendition);
     });
   }, [isReaderReady, readerSettings, renditionRef, beforeRenditionMutation, onSettingsReflow]);
 
