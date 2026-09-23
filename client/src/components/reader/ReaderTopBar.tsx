@@ -4,7 +4,7 @@ export function ReaderTopBar({ onClose, title }: { onClose: () => void; title?: 
       <button
         className="reader-close-button"
         type="button"
-        aria-label="返回书架"
+        aria-label="返回"
         onClick={onClose}
       >
         <span aria-hidden="true" />

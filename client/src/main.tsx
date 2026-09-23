@@ -4,6 +4,7 @@ import App from './App.js';
 import './styles/base.css';
 import './styles/bookshelf.css';
 import './styles/folders.css';
+import './styles/home.css';
 import './styles/pwa.css';
 
 const root = document.getElementById('root');

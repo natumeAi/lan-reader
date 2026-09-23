@@ -17,6 +17,7 @@ import {
   contentImageCursorAtViewportPoint,
   findContentImageAtViewportPoint,
 } from '../../utils/contentImage.js';
+import { findVisibleBookCoverRect } from '../../utils/coverOrigin.js';
 import { readerBookIdFromHistoryState } from '../../utils/readerHistoryState.js';
 import { ImageViewer } from './ImageViewer.js';
 import { ReaderBottomBar } from './ReaderBottomBar.js';
@@ -397,12 +398,9 @@ export function ReaderView({
       return;
     }
 
-    const targetEl = book?.id
-      ? document.querySelector(`[data-book-id="${book.id}"] .book-cover`)
-      : null;
-    const targetRect = targetEl?.getBoundingClientRect();
+    const targetRect = book?.id ? findVisibleBookCoverRect(book.id) : null;
 
-    if (targetRect && targetRect.width > 0 && targetRect.height > 0) {
+    if (targetRect) {
       setFlipTransitionEnabled(true);
       const firstFrame = requestAnimationFrame(() => {
         closeAnimationFramesRef.current.delete(firstFrame);

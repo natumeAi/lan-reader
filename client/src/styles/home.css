@@ -1,0 +1,327 @@
+/* Main view shell, 首页 cards and the bottom navigation. Selectors are scoped to the home
+   view and navigation so the bookshelf's geometry and drag measurements are untouched. */
+
+:root {
+  --home-canvas: #f2f2f4;
+  --home-card-surface: #ffffff;
+  --home-card-radius: 20px;
+  --home-card-pad: 20px;
+  --main-navigation-height: 64px;
+  --main-navigation-gap: max(12px, env(safe-area-inset-bottom));
+}
+
+body[data-main-view="home"] {
+  background: var(--home-canvas);
+}
+
+/* Reserve room so no content ever sits behind the floating tab bar. The shelf's own
+   min-height is derived from --app-pad-bottom, so the total page height is unchanged. */
+.app-shell.has-main-navigation {
+  --app-pad-bottom: calc(var(--main-navigation-height) + var(--main-navigation-gap) + 24px);
+}
+
+/* The views set their own display values; [hidden] must always win. */
+.main-view[hidden] {
+  display: none !important;
+}
+
+.main-view:focus {
+  outline: none;
+}
+
+/* ---------- 首页 ---------- */
+
+.reading-home {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.reading-home-header {
+  display: flex;
+  align-items: center;
+  min-height: 46px;
+  padding: 4px 0 2px;
+}
+
+.reading-home-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.home-card {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 14px;
+  padding: var(--home-card-pad);
+  border-radius: var(--home-card-radius);
+  background: var(--home-card-surface);
+  box-shadow: 0 1px 2px rgba(29, 29, 31, 0.04);
+}
+
+.home-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 28px;
+}
+
+.home-card-title {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 22px;
+  font-weight: 780;
+  line-height: 1.15;
+}
+
+.home-card-title-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: -4px -6px;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.home-card-title-button:focus-visible,
+.home-card-action:focus-visible,
+.current-reading-book:focus-visible {
+  outline: 3px solid rgba(0, 122, 255, 0.32);
+  outline-offset: 2px;
+}
+
+.home-card-chevron {
+  display: block;
+  width: 9px;
+  height: 9px;
+  margin-left: 2px;
+  border-top: 2.4px solid currentColor;
+  border-right: 2.4px solid currentColor;
+  border-radius: 1px;
+  transform: rotate(45deg);
+}
+
+.home-card-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0 8px;
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+.home-card-state p {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.45;
+}
+
+.home-card-action {
+  min-height: 40px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(118, 118, 128, 0.12);
+  color: var(--text-primary);
+  font-size: 15px;
+  font-weight: 650;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.home-card-action:active {
+  transform: scale(0.98);
+}
+
+/* 正在读 */
+
+.current-reading-list {
+  display: flex;
+  gap: 12px;
+  margin: 0 calc(var(--home-card-pad) * -1);
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  padding: 2px var(--home-card-pad) 4px;
+  scroll-padding-inline: var(--home-card-pad);
+  scroll-snap-type: x proximity;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+.current-reading-list::-webkit-scrollbar {
+  display: none;
+}
+
+.current-reading-book {
+  display: grid;
+  width: min(72vw, 280px);
+  min-height: 116px;
+  flex: 0 0 min(72vw, 280px);
+  min-width: 0;
+  grid-template-columns: 64px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  padding: 10px;
+  border: 0;
+  border-radius: 14px;
+  background: #f6f6f8;
+  color: inherit;
+  cursor: pointer;
+  scroll-snap-align: start;
+  text-align: left;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.current-reading-book .current-reading-cover {
+  align-self: start;
+  width: 64px;
+  height: 96px;
+  box-shadow:
+    0 10px 18px rgba(38, 31, 24, 0.16),
+    0 2px 5px rgba(38, 31, 24, 0.12),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.2);
+}
+
+.current-reading-book:active .current-reading-cover {
+  transform: translateY(2px) scale(0.985);
+}
+
+.current-reading-content {
+  display: grid;
+  min-width: 0;
+  align-content: center;
+  gap: 9px;
+}
+
+.current-reading-title {
+  display: -webkit-box;
+  overflow: hidden;
+  color: rgba(29, 29, 31, 0.88);
+  font-size: 15px;
+  font-weight: 680;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.current-reading-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.25;
+  font-variant-numeric: tabular-nums;
+}
+
+.current-reading-track {
+  display: block;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(118, 118, 128, 0.16);
+}
+
+.current-reading-track > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+}
+
+/* ---------- Bottom navigation ---------- */
+
+.main-navigation {
+  position: fixed;
+  left: 50%;
+  bottom: var(--main-navigation-gap);
+  z-index: 40;
+  display: grid;
+  width: min(calc(100% - 36px), 340px);
+  height: var(--main-navigation-height);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  padding: 5px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.86);
+  box-shadow:
+    0 12px 32px rgba(29, 29, 31, 0.12),
+    inset 0 0 0 1px rgba(29, 29, 31, 0.07);
+  transform: translateX(-50%);
+  -webkit-backdrop-filter: blur(20px) saturate(1.2);
+  backdrop-filter: blur(20px) saturate(1.2);
+}
+
+.main-navigation-item {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: rgba(29, 29, 31, 0.78);
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.1;
+  cursor: pointer;
+  transition: background-color 160ms ease, color 160ms ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.main-navigation-item svg {
+  display: block;
+  flex: 0 0 auto;
+}
+
+.main-navigation-item.is-active {
+  background: rgba(118, 118, 128, 0.16);
+  color: var(--text-primary);
+}
+
+.main-navigation-item:focus-visible {
+  outline: 3px solid rgba(0, 122, 255, 0.4);
+  outline-offset: 1px;
+}
+
+@media (min-width: 720px) {
+  .home-card {
+    --home-card-pad: 24px;
+  }
+
+  .current-reading-book {
+    width: 300px;
+    flex-basis: 300px;
+  }
+}
+
+@media (max-width: 374px) {
+  .home-card {
+    --home-card-pad: 16px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .main-navigation-item {
+    transition: none;
+  }
+
+  .current-reading-book:active .current-reading-cover,
+  .home-card-action:active {
+    transform: none;
+  }
+}

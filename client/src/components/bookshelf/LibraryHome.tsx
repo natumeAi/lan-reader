@@ -1,10 +1,9 @@
 import type { ChangeEventHandler, RefObject } from 'react';
-import type { CatalogBook, RecentReadingItem, ShelfItem } from '../../types/library.js';
+import type { CatalogBook, ShelfItem } from '../../types/library.js';
 import type { DragIntent, ShelfMutationFeedback } from '../../hooks/useLibraryDrag.js';
 import type { ShelfItemActions } from './ReadOnlyShelfItem.js';
 import { useCallback, useRef } from 'react';
 import { useLibraryView } from '../../hooks/useLibraryView.js';
-import { ContinueReadingSection } from './ContinueReadingSection.js';
 import { LibraryGrid } from './LibraryGrid.js';
 import { LibrarySearchBar } from './LibrarySearchBar.js';
 import { LibraryViewToolbar } from './LibraryViewToolbar.js';
@@ -26,7 +25,6 @@ interface LibraryHomeProps extends ShelfItemActions {
   onRetryCatalog: () => void;
   onRetryShelf: () => void;
   operationError: string;
-  recentReadingItems: RecentReadingItem[];
   shelfError: string;
   shelfItems: ShelfItem[];
   uploadProgress: string;
@@ -52,7 +50,6 @@ export function LibraryHome({
   onRetryCatalog,
   onRetryShelf,
   operationError,
-  recentReadingItems,
   shelfError,
   shelfItems,
   uploadProgress,
@@ -161,12 +158,6 @@ export function LibraryHome({
       >
         {operationStatus}
       </p>
-
-      <ContinueReadingSection
-        items={recentReadingItems}
-        onOpenBook={onOpenBook}
-        searchMode={libraryView.searchMode}
-      />
 
       <LibraryViewToolbar
         controlsDisabled={catalogControlsDisabled}
