@@ -24,11 +24,12 @@ async function imageReady(image: HTMLImageElement) {
   // Broken images are settled resources too; they do not justify an endless wait.
   if (image.naturalWidth && typeof image.decode === 'function') await image.decode().catch(() => {});
 }
-async function resources(view: View, onStage: (stage: string) => void) {
+async function resources(view: View, onStage: (stage: string) => void, beforeFrames?: () => void) {
   onStage('fonts-images');
   const pending = view.renderer.getContents().flatMap(({ doc }) => [doc.fonts?.ready, ...Array.from(doc.images, imageReady)]);
   // One rejected font cannot release an owner while a sibling image is decoding.
   const settled = await Promise.allSettled(pending);
+  beforeFrames?.();
   // Real frame callbacks must finish before motion, not merely a timeout winning.
   onStage('frames');
   await frames();
@@ -144,13 +145,21 @@ export function createFoliateSurfaceProvider(options: Options): SurfaceProvider 
       let view: View | undefined;
       let book: FoliateBook | undefined;
       let disposal: Promise<void> | undefined;
+      let workRevision = 0; let drainedRevision = -1;
+      let frameDrain: Promise<void> | undefined;
       const cleanups: (() => void)[] = [];
       const sections = new WeakMap<Document, number>();
       const diagnostics = beginReaderWork('preview');
       const unobserve = () => { for (const cleanup of cleanups.splice(0)) cleanup(); };
       const invalidate = (reason: string) => {
-        if (stopped || !published || invalidated) return;
+        if (stopped || !published) return;
+        ++workRevision;
+        if (invalidated) return;
         invalidated = true; options.onInvalidated?.(id, reason);
+      };
+      const stop = () => {
+        if (!stopped) { stopped = true; ++workRevision; }
+        unobserve();
       };
       const ready: Promise<PreparedSurface | null> = (async () => {
         try {
@@ -183,28 +192,43 @@ export function createFoliateSurfaceProvider(options: Options): SurfaceProvider 
           diagnostics?.stage('target-navigation');
           if (!await turnAdjacentView(view, book, frozen.direction)) { diagnostics?.fail('target-boundary'); return null; }
           diagnostics?.stage('target-resources');
-          await resources(view, stage => diagnostics?.stage(`target-${stage}`)); if (stopped) return null;
-          diagnostics?.stage('observation-frames');
-          cleanups.push(observeFoliateSurface(view, invalidate)); await frames(); if (stopped) return null;
+          await resources(view, stage => diagnostics?.stage(`target-${stage}`), () => {
+            // Establish ResizeObserver baselines during the same two real frames
+            // that settle target resources, then verify the resulting position.
+            if (view && !stopped) cleanups.push(observeFoliateSurface(view, invalidate));
+          }); if (stopped) return null;
           diagnostics?.stage('target-proof');
           const target = targetProof(view, options.container.getBoundingClientRect(), sections);
           if (!target) { diagnostics?.fail('target-not-visible'); return null; }
           published = true;
+          drainedRevision = workRevision;
           diagnostics?.stage('ready');
           return { element: view, origin: frozen.key, target };
         } catch (error) { diagnostics?.fail(error instanceof Error ? error.message : String(error)); return null; }
         finally { diagnostics?.end(); }
       })();
+      const drainWork = async () => {
+        await ready;
+        // Successful readiness already drained its frames. Null readiness may
+        // have exited before that barrier; stop/late resources require a new one.
+        while (view && drainedRevision !== workRevision) {
+          const revision = workRevision;
+          frameDrain ??= frames().then(() => { drainedRevision = revision; frameDrain = undefined; });
+          await frameDrain;
+        }
+      };
       return {
         id, ready,
-        stop() { stopped = true; unobserve(); },
+        stop,
         async drain() {
           await ready;
-          if (disposal) await disposal; else if (view) await frames();
+          if (disposal) { await disposal; return; }
+          await drainWork();
+          if (disposal) await disposal;
         },
         dispose() {
           if (disposal) return disposal;
-          stopped = true; unobserve();
+          stop();
           disposal = (async () => {
             await ready;
             // Never close while navigation/fonts/images or upstream frames run.

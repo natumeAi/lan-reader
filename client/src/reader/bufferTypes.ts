@@ -27,7 +27,7 @@ export interface SurfaceOwner {
   readonly ready: Promise<PreparedSurface | null>;
   /** Stop future work/publication; never implies pending upstream work settled. */
   stop(): void;
-  /** Actual preparation work, including uncancellable navigation/font/image waits. */
+  /** Actual navigation/font/image/frame work; reuse a completed drain until work changes. */
   drain(): Promise<void>;
   /** Idempotent; resolves after work and frame-only disposal have completed. */
   dispose(): Promise<void>;
