@@ -29,6 +29,8 @@ export interface SurfaceOwner {
   stop(): void;
   /** Actual navigation/font/image/frame work; reuse a completed drain until work changes. */
   drain(): Promise<void>;
+  /** Reprepare an already stopped and drained independent Book/View. */
+  retarget?(request: SurfaceRequest): boolean;
   /** Idempotent; resolves after work and frame-only disposal have completed. */
   dispose(): Promise<void>;
 }

@@ -138,10 +138,11 @@ export function createFoliateSurfaceProvider(options: Options): SurfaceProvider 
   return {
     create(request): SurfaceOwner {
       const id = `foliate-surface-${++sequence}`;
-      const frozen: SurfaceRequest = { ...request, key: { ...request.key }, settings: { ...request.settings } };
+      let frozen: SurfaceRequest = { ...request, key: { ...request.key }, settings: { ...request.settings } };
       let stopped = false;
       let published = false;
       let invalidated = false;
+      let generation = 0;
       let view: View | undefined;
       let book: FoliateBook | undefined;
       let disposal: Promise<void> | undefined;
@@ -151,62 +152,72 @@ export function createFoliateSurfaceProvider(options: Options): SurfaceProvider 
       const sections = new WeakMap<Document, number>();
       const diagnostics = beginReaderWork('preview');
       const unobserve = () => { for (const cleanup of cleanups.splice(0)) cleanup(); };
-      const invalidate = (reason: string) => {
-        if (stopped || !published) return;
+      const invalidate = (reason: string, preparedGeneration: number) => {
+        if (stopped || !published || preparedGeneration !== generation) return;
         ++workRevision;
         if (invalidated) return;
         invalidated = true; options.onInvalidated?.(id, reason);
       };
       const stop = () => {
-        if (!stopped) { stopped = true; ++workRevision; }
+        if (!stopped) { stopped = true; ++generation; ++workRevision; }
         unobserve();
       };
-      const ready: Promise<PreparedSurface | null> = (async () => {
+      const prepare = (snapshot: SurfaceRequest, preparedGeneration: number): Promise<PreparedSurface | null> => (async () => {
+        const active = () => !stopped && generation === preparedGeneration;
         try {
-          diagnostics?.stage('create-book');
-          book = await options.createBook(); diagnostics?.bookCreated();
-          if (stopped) return null;
-          view = options.createView(); diagnostics?.viewCreated();
-          view.style.cssText = `display:block;position:absolute;inset:0;width:${frozen.width}px;height:${frozen.height}px;z-index:2;visibility:hidden;pointer-events:none;contain:layout paint;background:var(--reader-bg,#fff)`;
+          if (!book) {
+            diagnostics?.stage('create-book');
+            book = await options.createBook(); diagnostics?.bookCreated();
+          }
+          if (!active()) return null;
+          const fresh = !view;
+          if (!view) { view = options.createView(); diagnostics?.viewCreated(); }
+          view.style.cssText = `display:block;position:absolute;inset:0;width:${snapshot.width}px;height:${snapshot.height}px;z-index:2;visibility:hidden;pointer-events:none;contain:layout paint;background:var(--reader-bg,#fff)`;
           view.setAttribute('aria-hidden', 'true');
           const loaded = (event: Event) => {
             const detail = (event as CustomEvent<{ doc: Document; index: number }>).detail;
             if (detail?.doc && Number.isInteger(detail.index)) sections.set(detail.doc, detail.index);
           };
           view.addEventListener('load', loaded); cleanups.push(() => view?.removeEventListener('load', loaded));
-          options.container.append(view);
-          diagnostics?.stage('open-view');
-          await view.open(book); if (stopped) return null;
+          if (fresh) {
+            options.container.append(view);
+            diagnostics?.stage('open-view');
+            await view.open(book);
+          }
+          if (!active()) return null;
           diagnostics?.stage('configure');
-          options.configure(view, frozen);
-          const origin = view.resolveNavigation(frozen.cfi);
+          options.configure(view, snapshot);
+          const origin = view.resolveNavigation(snapshot.cfi);
           if (!origin) { diagnostics?.fail('origin-unresolved'); return null; }
           diagnostics?.stage('origin-navigation');
           await view.renderer.goTo(origin);
+          if (!active()) return null;
           diagnostics?.stage('origin-resources');
-          await resources(view, stage => diagnostics?.stage(`origin-${stage}`)); if (stopped) return null;
+          await resources(view, stage => diagnostics?.stage(`origin-${stage}`)); if (!active()) return null;
           diagnostics?.stage('origin-proof');
           const viewport = options.container.getBoundingClientRect();
-          if (!visibleAnchor(view, frozen.cfi, viewport, sections)) { diagnostics?.fail('origin-cfi-not-visible'); return null; }
-          if (!view.isFixedLayout && view.renderer.page !== frozen.page) { diagnostics?.fail('origin-page-mismatch'); return null; }
+          if (!visibleAnchor(view, snapshot.cfi, viewport, sections)) { diagnostics?.fail('origin-cfi-not-visible'); return null; }
+          if (!view.isFixedLayout && view.renderer.page !== snapshot.page) { diagnostics?.fail('origin-page-mismatch'); return null; }
           diagnostics?.stage('target-navigation');
-          if (!await turnAdjacentView(view, book, frozen.direction)) { diagnostics?.fail('target-boundary'); return null; }
+          if (!await turnAdjacentView(view, book, snapshot.direction)) { diagnostics?.fail('target-boundary'); return null; }
+          if (!active()) return null;
           diagnostics?.stage('target-resources');
           await resources(view, stage => diagnostics?.stage(`target-${stage}`), () => {
             // Establish ResizeObserver baselines during the same two real frames
             // that settle target resources, then verify the resulting position.
-            if (view && !stopped) cleanups.push(observeFoliateSurface(view, invalidate));
-          }); if (stopped) return null;
+            if (view && active()) cleanups.push(observeFoliateSurface(view, reason => invalidate(reason, preparedGeneration)));
+          }); if (!active()) return null;
           diagnostics?.stage('target-proof');
           const target = targetProof(view, options.container.getBoundingClientRect(), sections);
           if (!target) { diagnostics?.fail('target-not-visible'); return null; }
           published = true;
           drainedRevision = workRevision;
           diagnostics?.stage('ready');
-          return { element: view, origin: frozen.key, target };
+          return { element: view, origin: snapshot.key, target };
         } catch (error) { diagnostics?.fail(error instanceof Error ? error.message : String(error)); return null; }
         finally { diagnostics?.end(); }
       })();
+      let ready = prepare(frozen, generation);
       const drainWork = async () => {
         await ready;
         // Successful readiness already drained its frames. Null readiness may
@@ -218,8 +229,18 @@ export function createFoliateSurfaceProvider(options: Options): SurfaceProvider 
         }
       };
       return {
-        id, ready,
+        id, get ready() { return ready; },
         stop,
+        retarget(request) {
+          if (!stopped || !published || invalidated || !view || !book || disposal || drainedRevision !== workRevision) return false;
+          unobserve();
+          frozen = { ...request, key: { ...request.key }, settings: { ...request.settings } };
+          stopped = false; published = false; invalidated = false;
+          ++generation; ++workRevision; drainedRevision = -1;
+          diagnostics?.nextPreparation();
+          ready = prepare(frozen, generation);
+          return true;
+        },
         async drain() {
           await ready;
           if (disposal) { await disposal; return; }
