@@ -1,5 +1,6 @@
 import type { Book, Folder } from './types/library.js';
 import type { MainView } from './utils/mainViewPreference.js';
+import type { GoalKind } from './utils/readingStatsFormat.js';
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef } from 'react';
 import {
   DndContext,
@@ -19,6 +20,7 @@ import { useLibraryDrag } from './hooks/useLibraryDrag.js';
 import { useMainView } from './hooks/useMainView.js';
 import { useReaderSession } from './hooks/useReaderSession.js';
 import { useReadingActivityDelivery } from './hooks/useReadingActivityDelivery.js';
+import { useReadingDashboard } from './hooks/useReadingDashboard.js';
 import { useReducedMotion } from './hooks/useReducedMotion.js';
 import { useShelfData } from './hooks/useShelfData.js';
 import { dropAnimationConfig } from './utils/dragMotion.js';
@@ -49,9 +51,23 @@ function App() {
     restoreReaderBook,
   } = useReaderSession();
   const { mainView, selectMainView } = useMainView({ readerActive: Boolean(readingBook) });
-  // Delivers reading activity independently of any open reader. Its status is
-  // for the dashboard (`useReadingActivityStatus`); the shell never subscribes.
+  // Delivers reading activity independently of any open reader. Only the dashboard observes
+  // its status (while active); the shell never subscribes.
   const readingActivityDelivery = useReadingActivityDelivery();
+  // 首页 statistics. Active only while 首页 is shown with no reader over it, so entering 首页
+  // and closing a reader onto it refresh, and delivery status is observed only then.
+  const readingDashboard = useReadingDashboard({
+    active: mainView === MAIN_VIEW.HOME && !readingBook,
+    delivery: readingActivityDelivery,
+  });
+  const {
+    closeGoalDialog,
+    goalDialog,
+    invalidate: invalidateReadingDashboard,
+    openGoalDialog,
+    refresh: refreshReadingDashboard,
+    saveGoals: saveReadingGoals,
+  } = readingDashboard;
   const homeViewRef = useRef<HTMLDivElement>(null);
   const shelfViewRef = useRef<HTMLDivElement>(null);
   const previousMainViewRef = useRef(mainView);
@@ -122,6 +138,7 @@ function App() {
   } = useBookDeletion({
     clearReaderBookIfDeleted,
     loadShelf,
+    onBookDeleted: invalidateReadingDashboard,
     openFolder,
     refreshOpenFolderBooksOrClose,
     setError: setOperationError,
@@ -164,15 +181,20 @@ function App() {
     setShelfItems,
     shelfItems,
   });
-  // The reader, an open/closing Folder, the delete dialog and an active drag each own
-  // interaction; the main views cannot be switched underneath them.
+  // The reader, an open/closing Folder, the delete and goal dialogs and an active drag each
+  // own interaction; the main views cannot be switched underneath them.
   const isMainNavigationBlocked = Boolean(
     readingBook ||
     openFolder ||
     isFolderClosing ||
     deleteCandidateBook ||
+    goalDialog ||
     activeDragPreview,
   );
+
+  const handleSaveReadingGoal = useCallback((kind: GoalKind, value: number) => (
+    saveReadingGoals(kind === 'daily' ? { dailyMinutes: value } : { annualBooks: value })
+  ), [saveReadingGoals]);
 
   const handleSelectMainView = useCallback((view: MainView) => {
     if (isMainNavigationBlocked) return;
@@ -288,10 +310,18 @@ function App() {
           tabIndex={-1}
         >
           <ReadingHome
+            goalDialog={goalDialog}
             hasLoadedRecentReading={hasLoadedShelf}
+            onCloseGoalDialog={closeGoalDialog}
+            onEditGoal={openGoalDialog}
             onOpenBook={handleOpenBook}
             onOpenShelf={handleOpenShelf}
+            onRetryReadingStats={refreshReadingDashboard}
             onRetryRecentReading={loadShelf}
+            onSaveGoal={handleSaveReadingGoal}
+            readingActivityNotice={readingDashboard.deliveryNotice}
+            readingStats={readingDashboard.stats}
+            readingStatsError={readingDashboard.error}
             recentReadingError={shelfError}
             recentReadingItems={recentReadingItems}
           />
