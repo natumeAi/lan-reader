@@ -1,4 +1,7 @@
-import { clampDragDistance, classifyDirection, dampBoundaryDistance, decidePageDelta, getRecentVelocity, getSettleDuration } from '../utils/pageTurnGesture';
+import { PAGE_TURN_RULES, clampDragDistance, classifyDirection, dampBoundaryDistance, decidePageDelta, getRecentVelocity, getSettleDuration } from '../utils/pageTurnGesture';
+
+/** Guards a same-timestamp sample storm; 100 ms at 240 Hz needs about 25. */
+const MAX_SAMPLES = 256;
 
 export type GestureDirection = 'next' | 'prev';
 export interface GestureSnapshot {
@@ -56,8 +59,17 @@ export function createPageTurnEngine(snapshot: GestureSnapshot) {
         if (axis === 'pending') return { phase: 'tracking', direction: null, distance, visualDistance: 0, boundary: false };
         horizontal = true;
       }
-      samples.push({ x: input.x, time: input.time });
-      samples = samples.slice(-20);
+      // Velocity reads only the first and the newest sample of one timestamp.
+      const length = samples.length;
+      if (length >= 2 && samples[length - 1]!.time === input.time && samples[length - 2]!.time === input.time) samples[length - 1] = { x: input.x, time: input.time };
+      else samples.push({ x: input.x, time: input.time });
+      // Keep the whole velocity window at any event rate (a fixed count shrinks
+      // it at high refresh rates); older samples can never affect the velocity.
+      const cutoff = input.time - PAGE_TURN_RULES.velocityWindowMs;
+      let stale = 0;
+      while (stale < samples.length - 1 && samples[stale]!.time < cutoff) stale++;
+      stale = Math.max(stale, samples.length - MAX_SAMPLES);
+      if (stale > 0) samples.splice(0, stale);
       const next = logicalDirection(distance);
       const atBoundary = boundary(next);
       visualDistance = atBoundary ? dampBoundaryDistance(distance) : clampDragDistance(distance, width);

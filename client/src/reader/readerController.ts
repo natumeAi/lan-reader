@@ -1,5 +1,5 @@
 import type { ReaderSession, StablePosition, NavigationCommand, NavigationResult } from './types';
-import type { PositionKey, SurfaceLease } from './bufferTypes';
+import type { PositionKey, SurfaceLease, SurfaceRequest } from './bufferTypes';
 import { samePositionKey } from './bufferTypes';
 import type { ReaderSettings } from '../hooks/useReaderSettings';
 import type { ReaderLocation } from '../types/epub';
@@ -29,7 +29,17 @@ interface InputOptions {
   onPageTurnCommitted?: () => Promise<void>;
 }
 interface Snapshot extends GestureSnapshot { left: number; height: number }
-interface Pair { direction: Direction; width: number; sign: -1 | 1; element: HTMLElement | null; ready: Promise<Pair | null>; lease?: SurfaceLease }
+/** One leased neighbor; `sign` is its physical side (LTR next: -1, to the right of current). */
+interface Side { direction: Direction; sign: -1 | 1; element: HTMLElement; lease: SurfaceLease }
+/**
+ * One motion admission: the leases of every neighbor bound with the foreground.
+ * `demand` is the direction that must be leased (null: pointerdown pre-admission
+ * of already ready neighbors); `pending` lists directions this admission may
+ * still bind and is empty once admission ended.
+ */
+interface Pair { width: number; rtl: boolean; demand: Direction | null; pending: Set<Direction>; sides: Partial<Record<Direction, Side>>; ready: Promise<Pair | null> }
+const DIRECTIONS = ['next', 'prev'] as const;
+const sideSign = (direction: Direction, rtl: boolean): -1 | 1 => (direction === 'next') !== rtl ? -1 : 1;
 let nextSessionId = 0;
 const copyPosition = (position: StablePosition): StablePosition => ({
   ...position, location: { ...position.location, start: position.location.start ? {
@@ -65,7 +75,8 @@ export function createReaderController(session: ReaderSession, options: Options 
   let lifecycle = 0;
   // Diagnostic id of the latest started logical input; null whenever diagnostics are disabled.
   let interaction: number | null = null;
-  let pointer: { id: number; snapshot: Snapshot; gesture: ReturnType<typeof createPageTurnEngine>; latest: GestureMoveResult | null; visual: number; start: number; interaction: number | null; boundaryPending?: boolean; catchUp?: { from: number; startTime: number | null } } | null = null;
+  // `visual` is the rendered distance; `drawn` marks the first drag-frame write, `readyMarked` the diagnostic readiness at lock.
+  let pointer: { id: number; snapshot: Snapshot; gesture: ReturnType<typeof createPageTurnEngine>; latest: GestureMoveResult | null; visual: number; start: number; interaction: number | null; boundaryPending?: boolean; catchUp?: { from: number; startTime: number | null }; drawn?: boolean; readyMarked?: boolean } | null = null;
   const setPhase = (phase: ReaderPhase, direction: Direction | null = ui.direction) => {
     if (ui.phase === phase && ui.direction === direction) return;
     ui = { phase, direction }; for (const listener of listeners) listener();
@@ -106,7 +117,8 @@ export function createReaderController(session: ReaderSession, options: Options 
     const previous = pair; pair = null; renderer.release(); binding = null;
     if (pointer) pointer.catchUp = undefined;
     if (displayingPreview) { displayingPreview = false; options.onPageDisplayed?.(null); }
-    buffer.endMotion(); previous?.lease?.release();
+    buffer.endMotion();
+    if (previous) for (const direction of DIRECTIONS) previous.sides[direction]?.lease.release();
     ++optionalEpoch; quiet = null; motionReady = false;
   };
   const bounded = (work: Promise<unknown>) => new Promise<boolean>(resolve => {
@@ -212,21 +224,35 @@ export function createReaderController(session: ReaderSession, options: Options 
   };
   const bind = (nextPair: Pair | null) => {
     if (binding?.pair === nextPair) return binding.value;
-    const value = renderer.bind({ current: foreground, incoming: nextPair?.element, width: nextPair?.width ?? 0, sign: nextPair?.sign ?? 1 });
+    const neighbors = nextPair ? DIRECTIONS.flatMap(direction => {
+      const side = nextPair.sides[direction];
+      return side ? [{ element: side.element, sign: side.sign }] : [];
+    }) : [];
+    const value = renderer.bind({ current: foreground, width: nextPair?.width ?? 0, neighbors });
     binding = { pair: nextPair, value }; return value;
   };
   // Motion admission, always outside frames: the drained buffer locks
   // preparation/disposal, then the renderer binds will-change/visibility and
   // places the surfaces at the distance already shown. Frames never admit.
-  const place = (nextPair: Pair | null, distance: number) => {
+  // A pointerdown pre-admission places at 0 before any motion: `visible` false.
+  const place = (nextPair: Pair | null, distance: number, visible = true) => {
     if (binding?.pair !== nextPair) {
       if (!motionReady || !buffer.beginMotion()) return false;
       bind(nextPair);
     }
-    binding!.value.update(distance); diagnostics.markVisualUpdate(record);
-    diagnostics.startPhase(record, 'motion');
-    if (pointer) diagnostics.startPhase(record, 'drag');
+    binding!.value.update(distance);
+    if (visible) {
+      diagnostics.markVisualUpdate(record); diagnostics.startPhase(record, 'motion');
+      if (pointer) diagnostics.startPhase(record, 'drag');
+    }
     return true;
+  };
+  // The binding already covers this drag target: a bound side, or any binding
+  // for the damped boundary distance (a missing side stays hidden).
+  const covers = (latest: GestureMoveResult | null) => {
+    const bound = binding;
+    if (!bound || latest?.phase !== 'dragging' || !latest.direction) return false;
+    return latest.boundary || Boolean(bound.pair?.sides[latest.direction]);
   };
   // The only drag frame work: read the latest numeric sample and move the
   // already bound surfaces. No preparation, drain, binding, geometry or React.
@@ -235,10 +261,9 @@ export function createReaderController(session: ReaderSession, options: Options 
     frame = requestAnimationFrame(time => {
       frame = null; if (pointer !== current || disposed || suspended) return;
       const latest = current.latest; const bound = binding;
-      if (!latest?.direction || !bound) return;
-      // A changed target waits for syncDrag() to rebind outside frames.
-      if (latest.boundary ? bound.pair !== null : bound.pair?.direction !== latest.direction) return;
-      let distance = latest.visualDistance;
+      // A target outside the binding waits for syncDrag() to rebind outside frames.
+      if (!bound || !covers(latest)) return;
+      let distance = latest!.visualDistance;
       if (current.catchUp && bound.pair) {
         current.catchUp.startTime ??= time;
         const progress = Math.min(1, Math.max(0, (time - current.catchUp.startTime) / PAGE_TURN_RULES.dragCatchUpDurationMs));
@@ -246,29 +271,74 @@ export function createReaderController(session: ReaderSession, options: Options 
         if (progress === 1) { current.catchUp = undefined; diagnostics.endPhase(record, 'catch-up'); }
       }
       bound.value.update(distance); current.visual = distance;
+      if (!current.drawn) {
+        // A pre-admitted binding was placed before this drag record existed.
+        current.drawn = true;
+        diagnostics.markVisualUpdate(record); diagnostics.startPhase(record, 'motion'); diagnostics.startPhase(record, 'drag');
+      }
       // A held finger emits no more pointermoves. Finish a late preview's short
       // catch-up on real frames, always following the latest input position.
       if (current.catchUp) scheduleDragFrame(current);
     });
   };
-  const prepare = (next: Direction, ruler: Snapshot) => {
-    if (pair?.direction === next) return pair.ready;
+  /**
+   * Leases neighbors of the accepted origin and admits them to motion together.
+   * `demand` must be leased; null pre-admits only neighbors that are ready now
+   * (pointerdown) and never prepares. During a gesture every other reachable,
+   * already ready neighbor is leased too, so a warm reversal only changes
+   * transforms. Discrete turns lease only their demand.
+   */
+  const prepare = (demand: Direction | null, ruler: Snapshot): Promise<Pair | null> => {
+    // A drag waits for a pending side. A released turn toward a side that is
+    // only pending opportunistically behind another (cold) demand does not:
+    // that admission would not lease it without a pointer, and waiting for the
+    // cold side delays a ready turn.
+    if (pair && (demand === null || pair.sides[demand]
+      || (pair.pending.has(demand) && (pointer !== null || pair.demand === null || pair.demand === demand)))) return pair.ready;
+    const origin = committed; const requestKey = key();
+    const viewport = { width: ruler.width, height: ruler.height };
+    const gesture = demand === null || pointer !== null;
+    const requests: Partial<Record<Direction, SurfaceRequest>> = {};
+    if (origin) {
+      for (const direction of DIRECTIONS) {
+        const reachable = direction === 'next' ? ruler.canNext : ruler.canPrev;
+        if (direction === demand || (gesture && reachable)) requests[direction] = session.createRequest(origin, requestKey, direction, viewport);
+      }
+    }
+    // Read-only: only these other neighbors can join this admission.
+    const warm = DIRECTIONS.filter(direction => {
+      const request = direction === demand ? undefined : requests[direction];
+      return request !== undefined && buffer.isReady(request);
+    });
+    if (demand === null && !warm.length) return Promise.resolve(null);
     clearPair(); stopOptional();
     if (pointer) pointer.visual = 0;
-    const nextPair: Pair = { direction: next, width: ruler.width, sign: (next === 'next') !== (ruler.direction === 'rtl') ? -1 : 1, element: null, ready: Promise.resolve(null) };
+    const nextPair: Pair = { width: ruler.width, rtl: ruler.direction === 'rtl', demand, pending: new Set(demand ? [demand, ...warm] : warm), sides: {}, ready: Promise.resolve(null) };
     pair = nextPair;
     const prepareRecord = record; const prepareInteraction = interaction;
     diagnostics.startPhase(prepareRecord, 'prepare');
-    const origin = committed;
-    if (!origin) return nextPair.ready;
-    const request = session.createRequest(origin, key(), next, { width: ruler.width, height: ruler.height });
-    const wasReady = buffer.isReady(request);
+    const demandRequest = demand ? requests[demand] : undefined;
+    if (!origin) { nextPair.pending.clear(); return nextPair.ready; }
+    const wasReady = demandRequest ? buffer.isReady(demandRequest) : true;
     const started = performance.now();
-    const preparation = diagnostics.enabled ? diagnostics.startPreparation(prepareInteraction, next, slotState(next), started) : null;
-    const stale = () => disposed || suspended || pair !== nextPair || !samePositionKey(request.key, key());
+    // Diagnostics: the demand, or each neighbor a pre-admission may lease.
+    const preparations = diagnostics.enabled
+      ? (demand ? [demand] : warm).map(direction => ({ direction, index: diagnostics.startPreparation(prepareInteraction, direction, slotState(direction), started) }))
+      : [];
+    const stale = () => disposed || suspended || pair !== nextPair || !samePositionKey(requestKey, key());
+    const lease = (direction: Direction) => {
+      const request = requests[direction];
+      const acquired = request ? buffer.acquire(request) : null;
+      if (acquired) nextPair.sides[direction] = { direction, sign: sideSign(direction, nextPair.rtl), element: acquired.prepared.element, lease: acquired };
+      return acquired !== null;
+    };
+    const releaseSides = () => {
+      for (const direction of DIRECTIONS) nextPair.sides[direction]?.lease.release();
+      nextPair.sides = {};
+    };
     let leased = false;
     nextPair.ready = (async () => {
-      if (!await bounded(buffer.prepare(request))) return null;
+      if (demandRequest && !await bounded(buffer.prepare(demandRequest))) return null;
       // Provider readiness and drains settle on real frame callbacks. Drain and
       // admit from control tasks, never from those frames' microtasks. An
       // already ready exact proof resolved within this control task.
@@ -278,18 +348,21 @@ export function createReaderController(session: ReaderSession, options: Options 
       const drained = await drainForMotion();
       diagnostics.endPhase(prepareRecord, 'drain');
       if (!drained || stale() || !motionReady || engine.state !== 'ready') return null;
-      const lease = buffer.acquire(request); if (!lease) return null;
-      nextPair.lease = lease; nextPair.element = lease.prepared.element;
+      if (demand && !lease(demand)) return null;
+      // Opportunistic: only lease a neighbor that is still ready, never prepare it.
+      if (demand === null || pointer) for (const direction of warm) if (buffer.isReady(requests[direction]!)) lease(direction);
+      if (!nextPair.sides.next && !nextPair.sides.prev) return null;
       const current = pointer;
       const latest = current?.latest;
-      const following = Boolean(current && latest?.phase === 'dragging' && latest.direction === next && !latest.boundary);
-      if (!place(nextPair, following ? current!.visual : 0)) return null;
+      const following = Boolean(current && latest?.phase === 'dragging' && latest.direction && (latest.boundary || nextPair.sides[latest.direction]));
+      if (!place(nextPair, following ? current!.visual : 0, demand !== null || following)) { releaseSides(); return null; }
       if (following) {
         // Cached pages follow input directly. Only a cold preview (or a slow
         // resource-drain barrier) bridges the missing motion instead of jumping.
-        if (!input.reducedMotion && (!wasReady || performance.now() - started > 32)) {
+        if (!latest!.boundary && !input.reducedMotion && (!wasReady || performance.now() - started > 32)) {
           current!.catchUp = { from: current!.visual, startTime: null };
-          diagnostics.startPhase(record, 'catch-up'); diagnostics.markCatchUp(prepareInteraction, preparation);
+          diagnostics.startPhase(record, 'catch-up');
+          for (const entry of preparations) if (entry.direction === latest!.direction) diagnostics.markCatchUp(prepareInteraction, entry.index);
         }
         scheduleDragFrame(current!);
       }
@@ -297,10 +370,17 @@ export function createReaderController(session: ReaderSession, options: Options 
       leased = true;
       return nextPair;
     })().catch(() => null).finally(() => {
+      nextPair.pending.clear();
       diagnostics.endPhase(prepareRecord, 'prepare');
-      if (preparation !== null) {
-        diagnostics.endPreparation(prepareInteraction, preparation, leased ? 'ready' : stale() ? 'stale' : 'unavailable');
+      for (const { direction, index } of preparations) {
+        diagnostics.endPreparation(prepareInteraction, index, leased && nextPair.sides[direction] ? 'ready' : stale() ? 'stale' : 'unavailable');
       }
+      // The drag turned toward a side this admission did not bind (locked
+      // elsewhere during a pre-admission, or an opportunistic side went stale):
+      // reconcile from a control task. A failed demand is never retried here.
+      const current = pointer; const latest = current?.latest;
+      if (current && pair === nextPair && latest?.phase === 'dragging' && latest.direction && !latest.boundary
+        && !nextPair.sides[latest.direction] && latest.direction !== demand) postControl(() => { syncDrag(current); });
     });
     return nextPair.ready;
   };
@@ -310,15 +390,22 @@ export function createReaderController(session: ReaderSession, options: Options 
     if (pointer !== current || disposed || suspended || latest?.phase !== 'dragging' || !latest.direction) return;
     setPhase('dragging', latest.direction);
     if (!latest.boundary) {
-      // Lock or reversal; a same-direction pair is already ready or preparing.
-      if (pair?.direction !== latest.direction) void prepare(latest.direction, current.snapshot);
-      else if (binding && binding.pair === pair) scheduleDragFrame(current);
+      const direction = latest.direction;
+      const bound = Boolean(pair && binding?.pair === pair && pair.sides[direction]);
+      const pending = Boolean(pair?.pending.has(direction));
+      if ((bound || pending) && diagnostics.enabled && !current.readyMarked) {
+        current.readyMarked = true; diagnostics.markInteractionReady(current.interaction, slotState(direction));
+      }
+      // A bound side needs only frames; a pending one waits for its admission.
+      if (bound) scheduleDragFrame(current);
+      else if (!pending) void prepare(direction, current.snapshot);
       return;
     }
-    current.catchUp = undefined;
-    // Leave a moving pair stationary before bouncing at the boundary.
-    if (pair) { clearPair(); current.visual = 0; }
+    // Any binding damps the boundary distance; a missing side stays hidden.
     if (binding) { scheduleDragFrame(current); return; }
+    current.catchUp = undefined;
+    // An unadmitted pair cannot move: drop it and bounce with no neighbor.
+    if (pair) { clearPair(); current.visual = 0; }
     if (current.boundaryPending) return;
     current.boundaryPending = true;
     const drainRecord = record;
@@ -330,8 +417,8 @@ export function createReaderController(session: ReaderSession, options: Options 
       if (place(null, current.visual)) scheduleDragFrame(current);
     });
   };
-  const showPreviewPage = (nextPair: Pair | null) => {
-    const lease = nextPair?.lease;
+  const showPreviewPage = (nextPair: Pair | null, direction: Direction) => {
+    const lease = nextPair?.sides[direction]?.lease;
     if (!lease || pair !== nextPair || !samePositionKey(lease.request.key, key())) return false;
     if (!displayingPreview) {
       const { sectionIndex, page, total, cfi } = lease.prepared.target;
@@ -400,8 +487,9 @@ export function createReaderController(session: ReaderSession, options: Options 
     const result = await execute(request);
     if (!alive(version)) return;
     diagnostics.endPhase(turnRecord, 'handoff');
-    const proof = pair?.lease?.prepared.target;
-    if (result.kind === 'verified' && (request.kind !== 'turn' || !proof || (samePositionKey(pair!.lease!.request.key, key()) && result.position.location.start?.index === proof.sectionIndex && result.position.page === proof.page))) {
+    const lease = request.kind === 'turn' ? pair?.sides[request.direction]?.lease : undefined;
+    const proof = lease?.prepared.target;
+    if (result.kind === 'verified' && (request.kind !== 'turn' || !lease || !proof || (samePositionKey(lease.request.key, key()) && result.position.location.start?.index === proof.sectionIndex && result.position.page === proof.page))) {
       diagnostics.markMilestone(turnRecord, 'engineVerified');
       diagnostics.startPhase(turnRecord, 'accept');
       accept(result.position, 'navigation');
@@ -426,6 +514,8 @@ export function createReaderController(session: ReaderSession, options: Options 
         if (gestureInteraction !== undefined) diagnostics.resolveInteraction(gestureInteraction, 'no-turn', blockReason());
         else diagnostics.blockInteraction({ source: commandOptions.source ?? 'command', inputTime: commandOptions.inputTime, phaseAtInput: ui.phase, direction: next }, blockReason());
       }
+      // A rejected pointer tap/release must not leave its pre-admission locked into idle.
+      if (gestureInteraction !== undefined && !navigation) { clearPair(); idle(); }
       return;
     }
     const version = ++command; const ruler = frozen ?? snapshot();
@@ -446,21 +536,27 @@ export function createReaderController(session: ReaderSession, options: Options 
     const framed = !input.reducedMotion;
     try {
       const reduced = !boundary && !framed;
-      const nextPair = !boundary && !reduced ? await prepare(next, ruler) : null;
+      let nextPair = !boundary && !reduced ? await prepare(next, ruler) : null;
       // A cancellation already recorded its own result; the first result wins.
       if (!alive(version) || engine.state !== 'ready') { diagnostics.resolveInteraction(turnInteraction, 'failed', 'not-ready'); return; }
+      // A pre-admission whose side for this direction went stale cannot animate it.
+      if (nextPair && !nextPair.sides[next]) { clearPair(); nextPair = null; }
+      const side = nextPair?.sides[next];
       if (turnInteraction !== null && !boundary && !nextPair) diagnostics.markFallback(turnInteraction, reduced ? 'reduced-motion' : 'prepare-unavailable');
       setPhase('settling', next);
       if (boundary) {
         if (pair) clearPair();
         if (await animate(distance, 0, PAGE_TURN_RULES.settleDurationMinMs, null) === 'cancelled') { diagnostics.resolveInteraction(turnInteraction, 'cancelled', 'motion-cancelled'); return; }
-      } else if (nextPair) {
-        place(nextPair, distance); diagnostics.markMilestone(turnRecord, 'neighborReady');
-        const duration = commandOptions.action === 'release' ? getSettleDuration(ruler.width - Math.abs(distance), ruler.width) : PAGE_TURN_RULES.tapDurationMs;
-        if (await animate(distance, nextPair.sign * ruler.width, duration, nextPair, visibleDistance => {
-          if (Math.abs(visibleDistance) < ruler.width / 2) return false;
+      } else if (nextPair && side) {
+        const settlePair = nextPair;
+        place(settlePair, distance); diagnostics.markMilestone(turnRecord, 'neighborReady');
+        const target = side.sign * ruler.width;
+        // A reversal can release from the opposite side: the remaining distance may exceed one width.
+        const duration = commandOptions.action === 'release' ? getSettleDuration(Math.abs(target - distance), ruler.width) : PAGE_TURN_RULES.tapDurationMs;
+        if (await animate(distance, target, duration, settlePair, visibleDistance => {
+          if (Math.abs(visibleDistance) < ruler.width / 2 || Math.sign(visibleDistance) !== side.sign) return false;
           // The label is a React update: the progress frame only posts it.
-          postControl(() => { showPreviewPage(nextPair); });
+          postControl(() => { showPreviewPage(settlePair, next); });
           return true;
         }) === 'cancelled') { diagnostics.resolveInteraction(turnInteraction, 'cancelled', 'motion-cancelled'); return; }
       }
@@ -474,7 +570,7 @@ export function createReaderController(session: ReaderSession, options: Options 
         // starts here; release and parking stay in control tasks. The label was
         // normally posted by the progress frame already; this fallback (frames
         // skipped) must precede acceptance, which invalidates the preview key.
-        showPreviewPage(nextPair);
+        showPreviewPage(nextPair, next);
         if (input.reducedMotion) clearPair();
         await commitNavigation({ kind: 'turn', direction: next }, version, turnRecord, turnInteraction);
       } else if (turnInteraction !== null) diagnostics.resolveInteraction(turnInteraction, 'boundary', next === 'next' ? 'at-end' : 'at-start');
@@ -588,7 +684,11 @@ export function createReaderController(session: ReaderSession, options: Options 
         : null;
       pointer = { id, snapshot: ruler, gesture, latest: null, visual: 0, start: sample.time, interaction: gestureInteraction };
       interaction = gestureInteraction;
-      stopOptional(); setPhase('tracking', null); return true;
+      stopOptional(); setPhase('tracking', null);
+      // A discrete event: admit the neighbors that are ready now while the page
+      // is still stationary, so a warm lock or reversal only moves transforms.
+      void prepare(null, ruler);
+      return true;
     },
     pointerMove(id: number, sample: GestureInput) {
       const current = pointer; if (!current || current.id !== id) return false;
@@ -600,11 +700,12 @@ export function createReaderController(session: ReaderSession, options: Options 
       const retarget = previous?.phase !== 'dragging' || previous.direction !== motion.direction || previous.boundary !== motion.boundary;
       if (retarget && previous?.direction !== motion.direction) diagnostics.setInteractionDirection(current.interaction, motion.direction);
       // Chromium dispatches coalesced pointermoves inside the rendering frame:
-      // only record the sample here. Direction lock, reversal and boundary
-      // changes start preparation from a control task (one task after the
-      // lock, not a frame); an unchanged, bound target needs only its frame.
+      // only record the sample here. A target the binding already covers needs
+      // only its frame, even across a warm reversal; direction lock, reversal
+      // and boundary changes still reconcile (phase, preparation) from a
+      // control task, never a frame.
+      if (covers(motion)) scheduleDragFrame(current);
       if (retarget) postControl(() => { syncDrag(current); });
-      else if (binding) scheduleDragFrame(current);
       return true;
     },
     pointerUp(id: number, sample: GestureInput) {
@@ -614,21 +715,25 @@ export function createReaderController(session: ReaderSession, options: Options 
       diagnostics.endPhase(record, 'motion'); diagnostics.endPhase(record, 'drag'); diagnostics.close(record); record = null;
       setPhase('idle', null);
       if (result.kind === 'tap') {
-        idle();
-        if (input.onTap?.({ clientX: sample.x, clientY: sample.y })) { diagnostics.resolveInteraction(current.interaction, 'no-turn', 'image'); return; }
+        // Only a tap zone turn consumes the pre-admission; any other tap
+        // releases it before idle so no motion lock survives.
+        if (input.onTap?.({ clientX: sample.x, clientY: sample.y })) { clearPair(); idle(); diagnostics.resolveInteraction(current.interaction, 'no-turn', 'image'); return; }
         const zone = getTapZone(sample.x, current.snapshot.left, current.snapshot.width);
-        if (zone === 'center') { input.onCenterTap?.(); diagnostics.resolveInteraction(current.interaction, 'no-turn', 'center'); }
+        if (zone === 'center') { clearPair(); idle(); input.onCenterTap?.(); diagnostics.resolveInteraction(current.interaction, 'no-turn', 'center'); }
         else void turnPage(zone, { inputTime: current.start }, 0, current.snapshot, current.interaction);
       } else if (result.kind === 'commit') {
-        const sign = (result.direction === 'next') !== (current.snapshot.direction === 'rtl') ? -1 : 1;
-        const distance = Math.sign(current.visual) === sign && (!pair || pair.direction === result.direction) ? current.visual : 0;
+        // A bound side settles from the rendered distance, even from the
+        // opposite side after a velocity-led reversal: every neighbor moves.
+        const sign = sideSign(result.direction, current.snapshot.direction === 'rtl');
+        const bound = Boolean(pair?.sides[result.direction] && binding?.pair === pair);
+        const distance = bound || (Math.sign(current.visual) === sign && !pair) ? current.visual : 0;
         void turnPage(result.direction, { action: 'release', inputTime: sample.time }, distance, current.snapshot, current.interaction);
       } else if (result.kind === 'rebound') {
         const version = ++command; setPhase('settling', result.direction);
         diagnostics.setInteractionDirection(current.interaction, result.direction);
         record = diagnostics.begin({ action: 'rebound', backend: 'foliate-paired-views', inputTime: sample.time, interactionId: current.interaction }); const reboundRecord = record;
         diagnostics.startPhase(record, 'busy');
-        const prepared = pair?.element ? pair : null; if (!prepared && pair) clearPair();
+        const prepared = pair && binding?.pair === pair ? pair : null; if (!prepared && pair) clearPair();
         void animate(current.visual, 0, getSettleDuration(Math.abs(current.visual), current.snapshot.width), prepared).finally(async () => {
           // Any settle end returns to the origin page; a cancellation already recorded its own result.
           diagnostics.resolveInteraction(current.interaction, 'rebound');
@@ -637,6 +742,11 @@ export function createReaderController(session: ReaderSession, options: Options 
           finish(version, reboundRecord);
         });
       } else { resetVisual(); idle(); diagnostics.resolveInteraction(current.interaction, 'no-turn', 'hold'); }
+    },
+    /** Cancels only the tracked gesture; another pointer's cancellation never touches a running turn. */
+    pointerCancel(id: number, reason = 'pointercancel') {
+      if (pointer?.id !== id) return Promise.resolve();
+      return cancel(reason);
     },
     destroy() {
       if (disposed) return;

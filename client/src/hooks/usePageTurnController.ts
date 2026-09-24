@@ -61,8 +61,13 @@ export function usePageTurnController({ controller: supplied, session, disabled,
     if (controller?.pointerMove(event.pointerId, sample(event))) event.preventDefault();
   }, [controller]);
   const handlePointerUp = useCallback((event: ReactPointerEvent<HTMLDivElement>) => { controller?.pointerUp(event.pointerId, sample(event)); }, [controller]);
-  const handleLostPointerCapture = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
-    if (pointer.current?.id === event.pointerId) cancelPageTurn('capture-lost');
-  }, [cancelPageTurn]);
-  return { ...state, cancelPageTurn, turnPage, navigateTo, handlePointerDown, handlePointerMove, handlePointerUp, handleLostPointerCapture, handlePointerCancel: () => cancelPageTurn('pointercancel') };
+  // Only the tracked gesture's own cancellation or capture loss cancels it; an
+  // untracked pointer (another finger) never rolls back a running turn.
+  const cancelPointer = useCallback((event: ReactPointerEvent<HTMLDivElement>, reason: string) => {
+    if (pointer.current?.id !== event.pointerId) return;
+    void controller?.pointerCancel(event.pointerId, reason); release();
+  }, [controller, release]);
+  const handleLostPointerCapture = useCallback((event: ReactPointerEvent<HTMLDivElement>) => { cancelPointer(event, 'capture-lost'); }, [cancelPointer]);
+  const handlePointerCancel = useCallback((event: ReactPointerEvent<HTMLDivElement>) => { cancelPointer(event, 'pointercancel'); }, [cancelPointer]);
+  return { ...state, cancelPageTurn, turnPage, navigateTo, handlePointerDown, handlePointerMove, handlePointerUp, handleLostPointerCapture, handlePointerCancel };
 }
