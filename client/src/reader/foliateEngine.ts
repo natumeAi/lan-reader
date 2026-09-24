@@ -8,6 +8,7 @@ import type { ReaderLocation, TocItem, ReadingSection, PageRanges } from '../typ
 import type { ReaderSettings } from '../hooks/useReaderSettings';
 import { getFoliateStyles } from '../hooks/useReaderSettings';
 import { createReadingSections, findCurrentTocItem, flattenTocItems, prepareTocItems } from '../utils/epubToc';
+import { createChapterBoundaries, chapterProgressAt } from '../utils/chapterProgress';
 import { createSectionPagination } from './sectionPagination';
 import { protectBookDocument } from './contentSecurity';
 import { turnAdjacentView } from './foliateNavigation';
@@ -28,6 +29,8 @@ export class FoliateEngine implements ReaderEngine {
   stable: StablePosition | null = null;
   toc: TocItem[] = [];
   readingSections: ReadingSection[] = [];
+  private chapterBoundaries: string[] | null = null;
+  chapterProgress(cfi: string) { return chapterProgressAt(this.chapterBoundaries, cfi, compare); }
   restoreTarget: string | number = 0;
   private book: FoliateBook | null = null;
   private documentSections = new WeakMap<Document, number>();
@@ -177,12 +180,14 @@ export class FoliateEngine implements ReaderEngine {
         try {
         const resolved = this.resolve(item.href);
         if (this.element.isFixedLayout) {
+          if (item.href.split('#')[1]) continue;
           item.startCfi = book.sections[resolved.index]!.cfi;
           item.startProgress = fractions[resolved.index] ?? 0;
           continue;
         }
         const doc = await book.sections[resolved.index]!.createDocument();
         const anchor = typeof resolved.anchor === 'function' ? resolved.anchor(doc) : doc.body;
+        if (item.href.split('#')[1] && !anchor) continue;
         const range = doc.createRange();
         if (anchor && typeof anchor !== 'number' && 'startContainer' in anchor) range.setStart(anchor.startContainer, anchor.startOffset);
         else range.selectNodeContents(!anchor || typeof anchor === 'number' ? doc.body : anchor);
@@ -193,6 +198,7 @@ export class FoliateEngine implements ReaderEngine {
         item.startProgress = (fractions[resolved.index] ?? 0) + ratio * ((fractions[resolved.index + 1] ?? 1) - (fractions[resolved.index] ?? 0));
         } catch { /* A malformed TOC entry must not invalidate a valid saved CFI. */ }
       }
+      this.chapterBoundaries = createChapterBoundaries(this.toc, this.readingSections, compare);
     });
   }
   private configure(view: View, settings: Readonly<ReaderSettings> = this.settings, width = this.container.clientWidth) {

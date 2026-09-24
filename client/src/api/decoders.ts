@@ -1,5 +1,5 @@
 import {
-  WireDecodeError, decodeLibrarySnapshot as decodeSnapshotReferences,
+  decodeChapterProgress, WireDecodeError, decodeLibrarySnapshot as decodeSnapshotReferences,
   requireRecord, requireArray, requireInteger, requireNumber,
 } from '@lan-reader/shared';
 import type {
@@ -70,6 +70,7 @@ export function decodeCatalogBook(value: unknown): CatalogBookDto {
 export function decodeReadingPosition(value: unknown): ReadingPositionDto {
   const p = requireRecord(value, 'progress');
   return {
+    ...decodeChapterProgress({ chapterCount: p['chapterCount'], chapterIndex: p['chapterIndex'] }),
     bookId: requireInteger(p['bookId'], 'progress.bookId'),
     progress: requireNumber(p['progress'], 'progress.progress'),
     cfi: nullableString(p['cfi'], 'progress.cfi'),

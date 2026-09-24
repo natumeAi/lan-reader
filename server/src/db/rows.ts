@@ -58,6 +58,8 @@ export interface ReadingProgressRow {
   progress: number;
   chapter_href: string | null;
   chapter_label: string | null;
+  chapter_count: number | null;
+  chapter_index: number | null;
   updated_at: string;
 }
 
@@ -86,6 +88,8 @@ export type RecentReadingRow = BookRow & {
   progress_value: number;
   progress_chapter_href: string | null;
   progress_chapter_label: string | null;
+  progress_chapter_count: number | null;
+  progress_chapter_index: number | null;
   progress_updated_at: string;
 };
 

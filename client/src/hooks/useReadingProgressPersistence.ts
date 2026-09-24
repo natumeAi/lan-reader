@@ -73,6 +73,8 @@ export function useReadingProgressPersistence({
             progress: snapshot.progress,
             chapterHref: snapshot.chapterHref,
             chapterLabel: snapshot.chapterLabel,
+            chapterCount: snapshot.chapterCount,
+            chapterIndex: snapshot.chapterIndex,
           }, { keepalive });
         } catch (error) {
           if (isPermanentFailure(error)) {

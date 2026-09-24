@@ -16,8 +16,9 @@ export interface DashboardDeliverySource {
 export interface UseReadingDashboardOptions {
   /** 首页 is the shown main view and no reader covers it. Refresh work runs only while true. */
   active: boolean;
+  selectedBookId?: number | null;
   delivery?: DashboardDeliverySource | null;
-  fetchStats?: (date: string, options: { signal: AbortSignal }) => Promise<ReadingStatsDto>;
+  fetchStats?: (date: string, options: { signal: AbortSignal; bookId?: number | null }) => Promise<ReadingStatsDto>;
   saveGoals?: (update: ReadingGoalsUpdate) => Promise<ReadingGoalsDto>;
   now?: () => Date;
 }
@@ -43,7 +44,7 @@ export interface ReadingDashboard {
   saveGoals: (update: ReadingGoalsUpdate) => Promise<void>;
 }
 
-const defaultFetchStats = (date: string, options: { signal: AbortSignal }) => getReadingStats(date, options);
+const defaultFetchStats = (date: string, options: { signal: AbortSignal; bookId?: number | null }) => getReadingStats(date, options);
 const defaultNow = () => new Date();
 
 function deliveryNoticeOf(status: ReadingActivityStatus): string {
@@ -64,6 +65,7 @@ function deliveryNoticeOf(status: ReadingActivityStatus): string {
  */
 export function useReadingDashboard({
   active,
+  selectedBookId = null,
   delivery = null,
   fetchStats = defaultFetchStats,
   saveGoals: saveGoalsRequest = updateReadingGoals,
@@ -86,8 +88,8 @@ export function useReadingDashboard({
   const acceptedSeenRef = useRef<number | null>(null);
   const activeRef = useRef(active);
   const mountedRef = useRef(true);
-  const optionsRef = useRef({ delivery, fetchStats, now, saveGoalsRequest });
-  optionsRef.current = { delivery, fetchStats, now, saveGoalsRequest };
+  const optionsRef = useRef({ delivery, fetchStats, now, saveGoalsRequest, selectedBookId });
+  optionsRef.current = { delivery, fetchStats, now, saveGoalsRequest, selectedBookId };
 
   const cancelRequest = useCallback(() => {
     controllerRef.current?.abort();
@@ -109,8 +111,9 @@ export function useReadingDashboard({
     setToday(date);
     setIsRefreshing(true);
 
-    const isCurrent = () => mountedRef.current && requestIdRef.current === requestId;
-    void fetchRequest(date, { signal: controller.signal }).then((next) => {
+    const bookId = optionsRef.current.selectedBookId;
+    const isCurrent = () => mountedRef.current && requestIdRef.current === requestId && optionsRef.current.selectedBookId === bookId;
+    void fetchRequest(date, { signal: controller.signal, bookId }).then((next) => {
       if (!isCurrent()) return;
       const savedGoals = savedGoalsRef.current;
       setStats(goalsRevision !== goalsRevisionRef.current && savedGoals ? { ...next, goals: savedGoals } : next);
@@ -124,6 +127,14 @@ export function useReadingDashboard({
       setIsRefreshing(false);
     });
   }, []);
+
+  // Selection refresh is independent of the active-home lifetime and goal dialog.
+  const previousSelection = useRef(selectedBookId);
+  useEffect(() => {
+    if (previousSelection.current === selectedBookId) return;
+    previousSelection.current = selectedBookId;
+    if (active) refresh();
+  }, [active, selectedBookId, refresh]);
 
   const invalidate = useCallback(() => {
     if (activeRef.current) refresh();
@@ -200,7 +211,7 @@ export function useReadingDashboard({
   }, [active, cancelRequest, delivery, refresh]);
 
   return {
-    stats,
+    stats: stats && stats.currentBook?.bookId !== selectedBookId ? { ...stats, currentBook: null } : stats,
     today,
     isRefreshing,
     error,

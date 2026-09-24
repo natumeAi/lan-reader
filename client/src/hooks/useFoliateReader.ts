@@ -70,7 +70,7 @@ export function useFoliateReader(options: Options) {
       setCurrentChapter(chapter ?? null); setCurrentHref(location.start?.href ?? null);
       setProgress(location.start?.percentage ?? 0);
       pageProgressController.updatePageProgressFromLocation(location, { readingSectionId: chapter?.href });
-      if (persist) enqueueProgress({ cfi: position.cfi, progress: location.start?.percentage ?? 0, chapterHref: chapter?.href ?? location.start?.href ?? null, chapterLabel: chapter?.label ?? null });
+      if (persist) enqueueProgress({ ...owned.chapterProgress(position.cfi), cfi: position.cfi, progress: location.start?.percentage ?? 0, chapterHref: chapter?.href ?? location.start?.href ?? null, chapterLabel: chapter?.label ?? null });
     };
     void (async () => {
       try {

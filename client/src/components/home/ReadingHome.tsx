@@ -3,12 +3,18 @@ import type { Book, RecentReadingItem } from '../../types/library.js';
 import type { GoalKind } from '../../utils/readingStatsFormat.js';
 import { findVisibleBookCoverRect } from '../../utils/coverOrigin.js';
 import { AnnualBooksCard } from './AnnualBooksCard.js';
+import { RandomRecommendationsCard } from './RandomRecommendationsCard.js';
 import { CurrentReadingCard } from './CurrentReadingCard.js';
 import { ReadingGoalDialog } from './ReadingGoalDialog.js';
 import { ReadingSummaryCard } from './ReadingSummaryCard.js';
 import { TodayGoalCard } from './TodayGoalCard.js';
 
 export interface ReadingHomeProps {
+  catalogBooks: Book[];
+  catalogError: string;
+  hasLoadedCatalog: boolean;
+  onRetryCatalog: () => void;
+  onOpenRecent: () => void;
   /** Open goal editor, owned by the dashboard hook so App can block navigation. */
   goalDialog: GoalKind | null;
   /** False until a cached or network library snapshot has been applied. */
@@ -37,6 +43,7 @@ export interface ReadingHomeProps {
  * 近 7 日/totals → 今年读完的书. Cards are presentational; data and actions come from App.
  */
 export function ReadingHome({
+  catalogBooks, catalogError, hasLoadedCatalog, onRetryCatalog, onOpenRecent,
   goalDialog,
   hasLoadedRecentReading,
   onCloseGoalDialog,
@@ -72,6 +79,8 @@ export function ReadingHome({
       </header>
       <div className="reading-home-cards">
         <CurrentReadingCard
+          currentBook={readingStats?.currentBook ?? null}
+          onOpenRecent={onOpenRecent}
           error={recentReadingError}
           hasLoaded={hasLoadedRecentReading}
           items={recentReadingItems}
@@ -79,6 +88,8 @@ export function ReadingHome({
           onOpenShelf={onOpenShelf}
           onRetry={onRetryRecentReading}
         />
+        <RandomRecommendationsCard books={catalogBooks} error={catalogError} hasLoaded={hasLoadedCatalog}
+          onRetry={onRetryCatalog} onOpenBook={onOpenBook} />
         {staleNotice || readingActivityNotice ? (
           <div className="reading-stats-notice" role="status">
             {staleNotice ? (
