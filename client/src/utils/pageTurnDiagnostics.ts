@@ -19,7 +19,9 @@ interface DiagnosticRecord {
   firstVisualTime: number | null; animationStartTime: number | null; endTime: number | null;
   frameTimestamps: number[]; omittedFrameSamples: number; cancelReason: string | null; samplerFrameId: number | null;
   frameSampleSource: FrameSampleSource | 'mixed' | null;
-  phases: PhaseSpan[];
+  phases: PhaseSpan[]; omittedPhaseSpans: number;
+  /** Starts dropped at the span cap and not yet ended, so their end cannot close an older span. */
+  omittedOpenPhases: Partial<Record<TurnPhase, number>>;
   milestones: Partial<Record<TurnMilestone, number>>;
   summary: ReturnType<typeof summarizePageTurnFrames> | null;
 }
@@ -50,8 +52,10 @@ interface DiagnosticsEnvironment {
 }
 export const PAGE_TURN_DEBUG_STORAGE_KEY = 'epub-reader:page-turn-debug';
 export const PAGE_TURN_DIAGNOSTIC_LIMITS = Object.freeze({
-  records: 200, interactions: 1000, frameSamplesPerRecord: 2048, preparationsPerInteraction: 16,
+  records: 200, interactions: 1000, frameSamplesPerRecord: 2048, preparationsPerInteraction: 16, phaseSpansPerRecord: 256,
 });
+// Distinguishes controllers (and reopened books) in one page; allocated only when enabled.
+let nextDiagnosticsInstance = 0;
 
 const DIAGNOSTICS_FACADE_NAME = '__EPUB_READER_PAGE_TURN_DIAGNOSTICS__';
 const TARGET_REFRESH_RATE_HZ = 120;
@@ -74,9 +78,14 @@ function readTimestamp(now: () => number, value?: number | null) {
   }
 }
 
-/** User Timing name of the nth span (1-based) of `phase` in a record; trace clocks align by these names. */
-export function pageTurnMeasureName(interactionId: number, recordId: number, phase: TurnPhase, occurrence = 1) {
-  return `lr:i${interactionId}:r${recordId}:${phase}${occurrence > 1 ? `#${occurrence}` : ''}`;
+/**
+ * User Timing name of the nth span (1-based) of `phase` in a record of one
+ * diagnostics instance; trace clocks align by these names. Interaction and
+ * record ids restart per instance, so the instance prefix keeps a reopened
+ * book in the same page from reusing names.
+ */
+export function pageTurnMeasureName(instanceId: number, interactionId: number, recordId: number, phase: TurnPhase, occurrence = 1) {
+  return `lr:s${instanceId}:i${interactionId}:r${recordId}:${phase}${occurrence > 1 ? `#${occurrence}` : ''}`;
 }
 
 const emptyInteractionCounts = () => ({
@@ -86,8 +95,8 @@ const emptyInteractionCounts = () => ({
 
 // Percentiles are computed on export, never while a record is still sampling motion.
 function exportRecord(record: DiagnosticRecord) {
-  const { samplerFrameId, summary: cachedSummary, ...terminalRecord } = record;
-  void samplerFrameId; void cachedSummary; // Internal handles do not belong in debug records.
+  const { samplerFrameId, summary: cachedSummary, omittedOpenPhases, ...terminalRecord } = record;
+  void samplerFrameId; void cachedSummary; void omittedOpenPhases; // Internal handles do not belong in debug records.
   const summary = record.summary ??= summarizePageTurnFrames(record);
   return {
     ...terminalRecord,
@@ -212,6 +221,7 @@ export function createPageTurnDiagnostics({
   const interactionCounts = emptyInteractionCounts();
   const omitted = { records: 0, interactions: 0 };
   const timing = enabled && typeof userTiming?.measure === 'function' && typeof userTiming.clearMeasures === 'function' ? userTiming : null;
+  const instance = enabled ? ++nextDiagnosticsInstance : 0;
   const userTimingStatus: 'available' | 'unavailable' = timing ? 'available' : 'unavailable';
   let destroyed = false;
   let nextRecordId = 1;
@@ -266,7 +276,7 @@ export function createPageTurnDiagnostics({
         const occurrence = (occurrences.get(span.phase) ?? 0) + 1;
         occurrences.set(span.phase, occurrence);
         if (span.end === null) continue;
-        const name = pageTurnMeasureName(state.entry.id, record.id, span.phase, occurrence);
+        const name = pageTurnMeasureName(instance, state.entry.id, record.id, span.phase, occurrence);
         try {
           timing.measure(name, { start: span.start, end: span.end });
           timing.clearMeasures(name);
@@ -297,6 +307,8 @@ export function createPageTurnDiagnostics({
       cancelReason: null,
       samplerFrameId: null,
       phases: [],
+      omittedPhaseSpans: 0,
+      omittedOpenPhases: {},
       milestones: {},
       summary: null,
     };
@@ -320,12 +332,23 @@ export function createPageTurnDiagnostics({
   function startPhase(recordId: number | null | undefined, phase: TurnPhase, timestamp?: number) {
     const record = getActiveRecord(recordId);
     // A dropped catch-up stays unfinished; a later catch-up opens its own span.
-    if (!record || (phase !== 'catch-up' && record.phases.some(span => span.phase === phase && span.end === null))) return;
+    if (!record || (phase !== 'catch-up' && (record.omittedOpenPhases[phase]
+      || record.phases.some(span => span.phase === phase && span.end === null)))) return;
+    // Bounded: count spans past the cap (e.g. repeated reversals) instead of keeping them.
+    if (record.phases.length >= PAGE_TURN_DIAGNOSTIC_LIMITS.phaseSpansPerRecord) {
+      record.omittedPhaseSpans += 1;
+      record.omittedOpenPhases[phase] = (record.omittedOpenPhases[phase] ?? 0) + 1;
+      return;
+    }
     record.phases.push({ phase, start: readTimestamp(now, timestamp), end: null });
   }
   function endPhase(recordId: number | null | undefined, phase: TurnPhase, timestamp?: number) {
-    const phases = getActiveRecord(recordId)?.phases;
-    if (!phases) return;
+    const record = getActiveRecord(recordId);
+    if (!record) return;
+    // The latest start of this phase was dropped at the cap: it owns this end.
+    const dropped = record.omittedOpenPhases[phase];
+    if (dropped) { record.omittedOpenPhases[phase] = dropped - 1; return; }
+    const phases = record.phases;
     for (let index = phases.length - 1; index >= 0; index -= 1) {
       const span = phases[index]!;
       if (span.phase === phase && span.end === null) { span.end = readTimestamp(now, timestamp); return; }
@@ -551,7 +574,7 @@ export function createPageTurnDiagnostics({
   if (enabled && target) {
     facade = Object.freeze({
       getRecords, getInputCounts, getInteractions, getInteractionCounts, getOmitted, clear,
-      userTiming: userTimingStatus,
+      userTiming: userTimingStatus, instance,
     });
     try {
       Object.defineProperty(target, DIAGNOSTICS_FACADE_NAME, {
@@ -568,6 +591,8 @@ export function createPageTurnDiagnostics({
     /** False when disabled or destroyed; callers guard costly diagnostic reads with it. */
     get enabled() { return enabled && !destroyed; },
     userTiming: userTimingStatus,
+    /** Measure-name prefix id; 0 when disabled. */
+    instance,
     begin,
     markVisualUpdate,
     markAnimationStart,

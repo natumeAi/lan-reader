@@ -237,6 +237,8 @@ export function createSectionPagination(options: SectionPaginationOptions) {
     }, delayMs);
   };
   return {
+    // stopAndDrain() only awaits a running measurement.
+    get quiet() { return !actualPromise; },
     get hasPendingCurrentPages() {
       if (!pending && !actualPromise && draining === 0) return false;
       const snapshot = options.getSnapshot();

@@ -55,7 +55,7 @@ export function exportReaderDiagnostics(engine: FoliateEngine | null, settings: 
   const pageTurns = Reflect.get(window, '__EPUB_READER_PAGE_TURN_DIAGNOSTICS__') as {
     getRecords?: () => unknown; getInputCounts?: () => unknown;
     getInteractions?: () => unknown; getInteractionCounts?: () => unknown; getOmitted?: () => unknown;
-    userTiming?: 'available' | 'unavailable';
+    userTiming?: 'available' | 'unavailable'; instance?: number;
   } | undefined;
   const report = {
     createdAt: new Date().toISOString(),
@@ -71,8 +71,11 @@ export function exportReaderDiagnostics(engine: FoliateEngine | null, settings: 
     interactionCounts: pageTurns?.getInteractionCounts?.() ?? null,
     omitted: pageTurns?.getOmitted?.() ?? null,
     limits: PAGE_TURN_DIAGNOSTIC_LIMITS,
-    // Phase spans are also emitted as User Timing measures named `lr:i<interaction>:r<record>:<phase>`.
+    // Phase spans are also emitted as User Timing measures named
+    // `lr:s<instance>:i<interaction>:r<record>:<phase>`, plus `#<n>` from the
+    // second span of the same phase in one record.
     userTiming: pageTurns?.userTiming ?? 'unavailable',
+    diagnosticsInstance: pageTurns?.instance ?? null,
     backgroundWork: getReaderWorkDiagnostics(),
   };
   const url = URL.createObjectURL(new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' }));

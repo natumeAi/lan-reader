@@ -173,6 +173,12 @@ export function createPageBuffer(provider: SurfaceProvider, options: { canWarm?:
   };
   return {
     prepare, acquire, invalidate, stopWarm, stopAndDrain,
+    /** Read-only: an exact drained proof can be leased now. Never prepares or retargets. */
+    isReady(request: SurfaceRequest) {
+      if (destroyed || (current && (!samePositionKey(request.key, current.key) || request.cfi !== current.cfi))) return false;
+      const entry = find(requestKey(request));
+      return Boolean(entry?.prepared && entry.state === 'ready' && !entry.working);
+    },
     isCurrentOwner(id: string) {
       const origin = current;
       return !destroyed && Boolean(origin && [...entries].some(entry => entry.owner.id === id
@@ -181,6 +187,8 @@ export function createPageBuffer(provider: SurfaceProvider, options: { canWarm?:
     },
     setCurrent(key: PositionKey, cfi: string) { current = { key: { ...key }, cfi }; },
     get busy() { return draining > 0 || reservations.size > 0 || [...entries].some(entry => entry.working || entry.state === 'retiring'); },
+    /** Nothing to wait for: `stopAndDrain()` settles in microtasks. Stale owners would start frame-drained parking. */
+    get quiet() { return !destroyed && !draining && !reservations.size && [...entries].every(entry => !entry.working && entry.state !== 'retiring' && entry.state !== 'stale'); },
     beginMotion() {
       if (destroyed || draining || reservations.size || [...entries].some(entry => entry.working || entry.state === 'retiring' || entry.state === 'stale')) return false;
       stopWarm(); motion = true; return true;

@@ -42,6 +42,8 @@ export interface SurfaceLease {
   release(): void;
 }
 export interface OptionalPagination {
+  /** No actual work outstanding: `stopAndDrain()` settles in microtasks, never on a frame. Absent means unknown. */
+  readonly quiet?: boolean;
   request(): void;
   pause(): void;
   stopAndDrain(): Promise<void>;

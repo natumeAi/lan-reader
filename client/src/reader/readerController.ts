@@ -70,6 +70,25 @@ export function createReaderController(session: ReaderSession, options: Options 
     if (ui.phase === phase && ui.direction === direction) return;
     ui = { phase, direction }; for (const listener of listeners) listener();
   };
+  // Control work (preparation, drains, motion admission, optional-work
+  // resumption, React-facing labels and handoff) runs in ordinary tasks. Never
+  // in a frame: Chromium dispatches coalesced pointermoves inside the rendering
+  // frame, and preparation/WAAPI promises can resolve from frame callbacks.
+  const controlTasks: (() => void)[] = [];
+  let controlTimer: ReturnType<typeof setTimeout> | undefined;
+  const runControl = () => {
+    controlTimer = undefined;
+    // Tasks posted while this batch runs wait for the next task.
+    for (const task of controlTasks.splice(0)) task();
+  };
+  const postControl = (task: () => void) => {
+    controlTasks.push(task);
+    controlTimer ??= setTimeout(runControl, 0);
+  };
+  /** Resolves in a fresh control task; awaiting it leaves any frame microtask checkpoint. */
+  const controlTask = () => new Promise<void>(resolve => { postControl(resolve); });
+  // Optional-work resumption token; every stop invalidates a pending resumption.
+  let optionalRun = 0;
   const alive = (version: number) => !disposed && !suspended && version === command;
   const snapshot = (): Snapshot => {
     const location = committed?.location ?? engine.currentLocation();
@@ -82,7 +101,7 @@ export function createReaderController(session: ReaderSession, options: Options 
   const blockReason = (source: 'gesture' | 'navigation' = 'gesture') => disposed || suspended || engine.state !== 'ready' || recovery || settingsWork || resumeWork
     || resizeTimer !== undefined || ui.phase === 'recovering' || ui.phase === 'suspended' || ui.phase === 'failed'
     ? 'not-ready' : source === 'gesture' && input.disabled ? 'disabled' : 'busy';
-  const stopOptional = () => { session.setOptionalWorkAllowed(false); buffer.stopWarm(); pagination.pause(); };
+  const stopOptional = () => { ++optionalRun; session.setOptionalWorkAllowed(false); buffer.stopWarm(); pagination.pause(); };
   const clearPair = () => {
     const previous = pair; pair = null; renderer.release(); binding = null;
     if (pointer) pointer.catchUp = undefined;
@@ -105,6 +124,15 @@ export function createReaderController(session: ReaderSession, options: Options 
     });
     return quiet;
   };
+  // Drain before motion. Outstanding owner/measurement work can settle on frame
+  // callbacks, so admission then resumes in a control task. A drain started
+  // with nothing outstanding settles in this task's microtasks and needs no hop.
+  const drainForMotion = async () => {
+    const immediate = !quiet && buffer.quiet && pagination.quiet === true;
+    const drained = await ensureMotion();
+    if (drained && !immediate) await controlTask();
+    return drained;
+  };
   const invalidateResources = () => {
     ++layoutGeneration; ++optionalEpoch; quiet = null; motionReady = false;
     buffer.invalidate(); pagination.invalidate();
@@ -116,13 +144,21 @@ export function createReaderController(session: ReaderSession, options: Options 
   const idle = () => {
     if (!disposed && !suspended && !navigation && !recovery && !settingsWork && !resumeWork && resizeTimer === undefined && ui.phase !== 'failed') {
       setPhase('idle', null); session.setOptionalWorkAllowed(true);
-      if (committed) {
-        const viewport = { width: foreground.clientWidth, height: foreground.clientHeight };
-        const requests = (['next', 'prev'] as const).filter(direction => direction === 'next' ? !committed!.location.atEnd : !committed!.location.atStart)
-          .map(direction => session.createRequest(committed!, key(), direction, viewport));
-        buffer.warm(requests);
-      }
-      pagination.request();
+      // idle() also runs from settle-finish and navigation continuations. Warm
+      // requests read viewport geometry, so resume optional work from a control
+      // task; any input that stops optional work before it runs wins.
+      const run = optionalRun;
+      postControl(() => {
+        if (run !== optionalRun || disposed || suspended || pointer || ui.phase !== 'idle') return;
+        ++optionalRun;
+        if (committed) {
+          const viewport = { width: foreground.clientWidth, height: foreground.clientHeight };
+          const requests = (['next', 'prev'] as const).filter(direction => direction === 'next' ? !committed!.location.atEnd : !committed!.location.atStart)
+            .map(direction => session.createRequest(committed!, key(), direction, viewport));
+          buffer.warm(requests);
+        }
+        pagination.request();
+      });
     }
   };
   const accept = (position: StablePosition, reason: AcceptedPosition['reason']) => {
@@ -179,43 +215,37 @@ export function createReaderController(session: ReaderSession, options: Options 
     const value = renderer.bind({ current: foreground, incoming: nextPair?.element, width: nextPair?.width ?? 0, sign: nextPair?.sign ?? 1 });
     binding = { pair: nextPair, value }; return value;
   };
-  const update = (nextPair: Pair | null, distance: number) => {
-    if (!motionReady || !buffer.beginMotion()) return false;
-    bind(nextPair).update(distance); diagnostics.markVisualUpdate(record);
+  // Motion admission, always outside frames: the drained buffer locks
+  // preparation/disposal, then the renderer binds will-change/visibility and
+  // places the surfaces at the distance already shown. Frames never admit.
+  const place = (nextPair: Pair | null, distance: number) => {
+    if (binding?.pair !== nextPair) {
+      if (!motionReady || !buffer.beginMotion()) return false;
+      bind(nextPair);
+    }
+    binding!.value.update(distance); diagnostics.markVisualUpdate(record);
     diagnostics.startPhase(record, 'motion');
     if (pointer) diagnostics.startPhase(record, 'drag');
     return true;
   };
+  // The only drag frame work: read the latest numeric sample and move the
+  // already bound surfaces. No preparation, drain, binding, geometry or React.
   const scheduleDragFrame = (current: NonNullable<typeof pointer>) => {
     if (frame !== null) return;
     frame = requestAnimationFrame(time => {
       frame = null; if (pointer !== current || disposed || suspended) return;
-      const latest = current.latest; if (!latest?.direction) return;
-      if (latest.boundary) {
-        if (pair) clearPair();
-        if (!current.boundaryPending) {
-          current.boundaryPending = true;
-          const drainRecord = record;
-          diagnostics.startPhase(drainRecord, 'drain');
-          void ensureMotion().then(drained => {
-            diagnostics.endPhase(drainRecord, 'drain');
-            current.boundaryPending = false;
-            if (!drained || pointer !== current || !current.latest?.boundary) return;
-            const distance = current.latest.visualDistance;
-            if (update(null, distance)) current.visual = distance;
-          });
-        }
-        return;
-      }
-      if (!pair?.element || pair.direction !== latest.direction) return;
+      const latest = current.latest; const bound = binding;
+      if (!latest?.direction || !bound) return;
+      // A changed target waits for syncDrag() to rebind outside frames.
+      if (latest.boundary ? bound.pair !== null : bound.pair?.direction !== latest.direction) return;
       let distance = latest.visualDistance;
-      if (current.catchUp) {
+      if (current.catchUp && bound.pair) {
         current.catchUp.startTime ??= time;
         const progress = Math.min(1, Math.max(0, (time - current.catchUp.startTime) / PAGE_TURN_RULES.dragCatchUpDurationMs));
         distance = current.catchUp.from + (distance - current.catchUp.from) * easeOutCubic(progress);
         if (progress === 1) { current.catchUp = undefined; diagnostics.endPhase(record, 'catch-up'); }
       }
-      if (update(pair, distance)) current.visual = distance;
+      bound.value.update(distance); current.visual = distance;
       // A held finger emits no more pointermoves. Finish a late preview's short
       // catch-up on real frames, always following the latest input position.
       if (current.catchUp) scheduleDragFrame(current);
@@ -232,44 +262,73 @@ export function createReaderController(session: ReaderSession, options: Options 
     const origin = committed;
     if (!origin) return nextPair.ready;
     const request = session.createRequest(origin, key(), next, { width: ruler.width, height: ruler.height });
-    const slot = slotState(next);
-    const wasReady = slot === 'ready';
+    const wasReady = buffer.isReady(request);
     const started = performance.now();
-    const preparation = diagnostics.startPreparation(prepareInteraction, next, slot, started);
+    const preparation = diagnostics.enabled ? diagnostics.startPreparation(prepareInteraction, next, slotState(next), started) : null;
+    const stale = () => disposed || suspended || pair !== nextPair || !samePositionKey(request.key, key());
     let leased = false;
     nextPair.ready = (async () => {
       if (!await bounded(buffer.prepare(request))) return null;
-      if (disposed || suspended || pair !== nextPair || !samePositionKey(request.key, key())) return null;
+      // Provider readiness and drains settle on real frame callbacks. Drain and
+      // admit from control tasks, never from those frames' microtasks. An
+      // already ready exact proof resolved within this control task.
+      if (!wasReady) await controlTask();
+      if (stale()) return null;
       diagnostics.startPhase(prepareRecord, 'drain');
-      const drained = await ensureMotion();
+      const drained = await drainForMotion();
       diagnostics.endPhase(prepareRecord, 'drain');
-      if (!drained) return null;
-      if (disposed || suspended || pair !== nextPair || engine.state !== 'ready' || !samePositionKey(request.key, key())) return null;
+      if (!drained || stale() || !motionReady || engine.state !== 'ready') return null;
       const lease = buffer.acquire(request); if (!lease) return null;
       nextPair.lease = lease; nextPair.element = lease.prepared.element;
       const current = pointer;
       const latest = current?.latest;
-      if (current && latest?.phase === 'dragging' && latest.direction === next && !latest.boundary) {
+      const following = Boolean(current && latest?.phase === 'dragging' && latest.direction === next && !latest.boundary);
+      if (!place(nextPair, following ? current!.visual : 0)) return null;
+      if (following) {
         // Cached pages follow input directly. Only a cold preview (or a slow
         // resource-drain barrier) bridges the missing motion instead of jumping.
         if (!input.reducedMotion && (!wasReady || performance.now() - started > 32)) {
-          current.catchUp = { from: current.visual, startTime: null };
+          current!.catchUp = { from: current!.visual, startTime: null };
           diagnostics.startPhase(record, 'catch-up'); diagnostics.markCatchUp(prepareInteraction, preparation);
         }
-        update(nextPair, current.visual);
-        scheduleDragFrame(current);
-      } else update(nextPair, 0);
+        scheduleDragFrame(current!);
+      }
       diagnostics.markMilestone(record, 'neighborReady');
       leased = true;
       return nextPair;
     })().catch(() => null).finally(() => {
       diagnostics.endPhase(prepareRecord, 'prepare');
       if (preparation !== null) {
-        diagnostics.endPreparation(prepareInteraction, preparation, leased ? 'ready'
-          : disposed || suspended || pair !== nextPair || !samePositionKey(request.key, key()) ? 'stale' : 'unavailable');
+        diagnostics.endPreparation(prepareInteraction, preparation, leased ? 'ready' : stale() ? 'stale' : 'unavailable');
       }
     });
     return nextPair.ready;
+  };
+  // Control task: reconcile the latest drag target with preparation and binding.
+  const syncDrag = (current: NonNullable<typeof pointer>) => {
+    const latest = current.latest;
+    if (pointer !== current || disposed || suspended || latest?.phase !== 'dragging' || !latest.direction) return;
+    setPhase('dragging', latest.direction);
+    if (!latest.boundary) {
+      // Lock or reversal; a same-direction pair is already ready or preparing.
+      if (pair?.direction !== latest.direction) void prepare(latest.direction, current.snapshot);
+      else if (binding && binding.pair === pair) scheduleDragFrame(current);
+      return;
+    }
+    current.catchUp = undefined;
+    // Leave a moving pair stationary before bouncing at the boundary.
+    if (pair) { clearPair(); current.visual = 0; }
+    if (binding) { scheduleDragFrame(current); return; }
+    if (current.boundaryPending) return;
+    current.boundaryPending = true;
+    const drainRecord = record;
+    diagnostics.startPhase(drainRecord, 'drain');
+    void drainForMotion().then(drained => {
+      diagnostics.endPhase(drainRecord, 'drain');
+      current.boundaryPending = false;
+      if (!drained || pointer !== current || !current.latest?.boundary || pair) return;
+      if (place(null, current.visual)) scheduleDragFrame(current);
+    });
   };
   const showPreviewPage = (nextPair: Pair | null) => {
     const lease = nextPair?.lease;
@@ -277,7 +336,8 @@ export function createReaderController(session: ReaderSession, options: Options 
     if (!displayingPreview) {
       const { sectionIndex, page, total, cfi } = lease.prepared.target;
       displayingPreview = true;
-      // Marks the display-only React label update, which can run inside the settle window.
+      // Marks the display-only React label update: a control task that can run
+      // inside the settle window, never inside a frame callback.
       diagnostics.markMilestone(record, 'previewLabel');
       options.onPageDisplayed?.({ start: { index: sectionIndex, cfi, displayed: { page, total } } });
     }
@@ -289,11 +349,11 @@ export function createReaderController(session: ReaderSession, options: Options 
     if (!motionReady) {
       const drainRecord = record;
       diagnostics.startPhase(drainRecord, 'drain');
-      const drained = await ensureMotion();
+      const drained = await drainForMotion();
       diagnostics.endPhase(drainRecord, 'drain');
       if (!drained) return 'cancelled' as const;
     }
-    if (!alive(version) || epoch !== optionalEpoch || (nextPair && pair !== nextPair)) return 'cancelled' as const;
+    if (!alive(version) || epoch !== optionalEpoch || !motionReady || (nextPair && pair !== nextPair)) return 'cancelled' as const;
     if (!buffer.beginMotion()) return 'cancelled' as const;
     const animationRecord = record; const time = document.timeline?.currentTime;
     const motion = bind(nextPair);
@@ -381,8 +441,11 @@ export function createReaderController(session: ReaderSession, options: Options 
     stopOptional(); setPhase('preparing', next);
     const turnRecord = diagnostics.begin({ action: commandOptions.action ?? 'tap-' + next, backend: 'foliate-paired-views', inputTime: commandOptions.inputTime, interactionId: turnInteraction }); record = turnRecord;
     diagnostics.startPhase(turnRecord, 'busy');
+    // Preparation results and WAAPI completion resolve from frame callbacks;
+    // finishing resumes in a control task. Reduced motion awaits neither.
+    const framed = !input.reducedMotion;
     try {
-      const reduced = !boundary && Boolean(input.reducedMotion);
+      const reduced = !boundary && !framed;
       const nextPair = !boundary && !reduced ? await prepare(next, ruler) : null;
       // A cancellation already recorded its own result; the first result wins.
       if (!alive(version) || engine.state !== 'ready') { diagnostics.resolveInteraction(turnInteraction, 'failed', 'not-ready'); return; }
@@ -392,16 +455,25 @@ export function createReaderController(session: ReaderSession, options: Options 
         if (pair) clearPair();
         if (await animate(distance, 0, PAGE_TURN_RULES.settleDurationMinMs, null) === 'cancelled') { diagnostics.resolveInteraction(turnInteraction, 'cancelled', 'motion-cancelled'); return; }
       } else if (nextPair) {
-        update(nextPair, distance); diagnostics.markMilestone(turnRecord, 'neighborReady');
+        place(nextPair, distance); diagnostics.markMilestone(turnRecord, 'neighborReady');
         const duration = commandOptions.action === 'release' ? getSettleDuration(ruler.width - Math.abs(distance), ruler.width) : PAGE_TURN_RULES.tapDurationMs;
-        if (await animate(distance, nextPair.sign * ruler.width, duration, nextPair, visibleDistance => (
-          Math.abs(visibleDistance) >= ruler.width / 2 && showPreviewPage(nextPair)
-        )) === 'cancelled') { diagnostics.resolveInteraction(turnInteraction, 'cancelled', 'motion-cancelled'); return; }
+        if (await animate(distance, nextPair.sign * ruler.width, duration, nextPair, visibleDistance => {
+          if (Math.abs(visibleDistance) < ruler.width / 2) return false;
+          // The label is a React update: the progress frame only posts it.
+          postControl(() => { showPreviewPage(nextPair); });
+          return true;
+        }) === 'cancelled') { diagnostics.resolveInteraction(turnInteraction, 'cancelled', 'motion-cancelled'); return; }
       }
       if (!alive(version) || engine.state !== 'ready') { diagnostics.resolveInteraction(turnInteraction, 'failed', 'not-ready'); return; }
       if (!boundary) {
         binding?.value.holdIncoming();
-        // Completion is also a fallback when the browser skips frame callbacks.
+        // Handoff starts in the settle's completion (inside the finishing
+        // frame, motion already over, the incoming page covering): the engine's
+        // first frame wait then still catches this frame; a control-task hop
+        // here cost one frame per turn (S2 re-measurement). Only navigation
+        // starts here; release and parking stay in control tasks. The label was
+        // normally posted by the progress frame already; this fallback (frames
+        // skipped) must precede acceptance, which invalidates the preview key.
         showPreviewPage(nextPair);
         if (input.reducedMotion) clearPair();
         await commitNavigation({ kind: 'turn', direction: next }, version, turnRecord, turnInteraction);
@@ -412,7 +484,9 @@ export function createReaderController(session: ReaderSession, options: Options 
         diagnostics.resolveInteraction(turnInteraction, 'failed', 'navigation-error');
       }
     }
-    finally { finish(version, turnRecord); }
+    // Releasing the pair clears the label (React) and starts parking; never
+    // from a settle or navigation continuation that resumed inside a frame.
+    finally { if (framed) await controlTask(); finish(version, turnRecord); }
   };
   const navigateTo = async (target: string) => {
     if (!admit('navigation')) {
@@ -518,17 +592,19 @@ export function createReaderController(session: ReaderSession, options: Options 
     },
     pointerMove(id: number, sample: GestureInput) {
       const current = pointer; if (!current || current.id !== id) return false;
+      const previous = current.latest;
       const motion = current.gesture.move(sample); current.latest = motion;
       if (motion.phase === 'cancelled') { void cancel('vertical'); return false; }
       if (motion.phase !== 'dragging') return false;
       if (record === null) { record = diagnostics.begin({ action: 'drag', backend: 'foliate-paired-views', inputTime: sample.time, interactionId: current.interaction }); diagnostics.markAnimationStart(record, undefined, { sampleFrames: true }); }
-      if (motion.direction !== ui.direction) diagnostics.setInteractionDirection(current.interaction, motion.direction);
-      setPhase('dragging', motion.direction);
-      // Start loading on direction lock; waiting for rAF first adds latency
-      // before any of the real document/font/frame work can even begin.
-      if (!motion.boundary && motion.direction) void prepare(motion.direction, current.snapshot);
-      else current.catchUp = undefined;
-      scheduleDragFrame(current);
+      const retarget = previous?.phase !== 'dragging' || previous.direction !== motion.direction || previous.boundary !== motion.boundary;
+      if (retarget && previous?.direction !== motion.direction) diagnostics.setInteractionDirection(current.interaction, motion.direction);
+      // Chromium dispatches coalesced pointermoves inside the rendering frame:
+      // only record the sample here. Direction lock, reversal and boundary
+      // changes start preparation from a control task (one task after the
+      // lock, not a frame); an unchanged, bound target needs only its frame.
+      if (retarget) postControl(() => { syncDrag(current); });
+      else if (binding) scheduleDragFrame(current);
       return true;
     },
     pointerUp(id: number, sample: GestureInput) {
@@ -553,9 +629,11 @@ export function createReaderController(session: ReaderSession, options: Options 
         record = diagnostics.begin({ action: 'rebound', backend: 'foliate-paired-views', inputTime: sample.time, interactionId: current.interaction }); const reboundRecord = record;
         diagnostics.startPhase(record, 'busy');
         const prepared = pair?.element ? pair : null; if (!prepared && pair) clearPair();
-        void animate(current.visual, 0, getSettleDuration(Math.abs(current.visual), current.snapshot.width), prepared).finally(() => {
+        void animate(current.visual, 0, getSettleDuration(Math.abs(current.visual), current.snapshot.width), prepared).finally(async () => {
           // Any settle end returns to the origin page; a cancellation already recorded its own result.
           diagnostics.resolveInteraction(current.interaction, 'rebound');
+          // The settle ends inside a frame; release and resume from a control task.
+          await controlTask();
           finish(version, reboundRecord);
         });
       } else { resetVisual(); idle(); diagnostics.resolveInteraction(current.interaction, 'no-turn', 'hold'); }
