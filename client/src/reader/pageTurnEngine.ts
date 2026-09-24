@@ -34,7 +34,7 @@ export type GestureReleaseResult = ReleaseMotion & (
  * pointer capture, async preparation, command admission and navigation. */
 export function createPageTurnEngine(snapshot: GestureSnapshot) {
   // Copy once: layout changes cancel this gesture, never alter its ruler mid-drag.
-  const { width, direction, canPrev, canNext } = snapshot;
+  let { width, direction, canPrev, canNext } = snapshot;
   let origin: GestureInput | null = null;
   let horizontal = false;
   let visualDistance = 0;
@@ -45,6 +45,8 @@ export function createPageTurnEngine(snapshot: GestureSnapshot) {
   const cancel = () => { origin = null; horizontal = false; visualDistance = 0; samples = []; };
   const cancelledMove = (): GestureMoveResult => ({ phase: 'cancelled', direction: null, distance: 0, visualDistance: 0, boundary: false });
   return {
+    /** A waiting gesture is promoted at a new accepted origin, before it renders. */
+    rebase(next: GestureSnapshot) { ({ width, direction, canPrev, canNext } = next); },
     begin(input: GestureInput) {
       cancel();
       origin = { ...input };

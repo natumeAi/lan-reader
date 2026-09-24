@@ -15,6 +15,8 @@ export type ReaderPhase = 'idle' | 'tracking' | 'dragging' | 'preparing' | 'sett
 export interface AcceptedPosition { reason: 'opened' | 'navigation' | 'layout-restored' | 'snapshot'; position: StablePosition; revision: number }
 /** `source` only labels diagnostics; admission and motion never depend on it. */
 export interface TurnCommandOptions { action?: string; inputTime?: number; source?: 'keyboard' | 'tap' | 'command' }
+export interface TurnResult { kind: 'committed' | 'boundary' | 'cancelled' | 'failed' | 'blocked' | 'queue-full' | 'no-turn' | 'rebound'; reason?: string }
+export const TURN_QUEUE_CAPACITY = 8;
 interface Options {
   onAccepted?: (event: AcceptedPosition) => void;
   /** Display-only metadata when the verified preview becomes dominant; null restores accepted metadata. */
@@ -25,10 +27,15 @@ interface Options {
 interface InputOptions {
   disabled?: boolean; reducedMotion?: boolean;
   onCenterTap?: () => void; onTap?: (point: { clientX: number; clientY: number }) => boolean;
-  onReleasePointer?: () => void;
+  onReleasePointer?: (id: number) => void;
   onPageTurnCommitted?: () => Promise<void>;
 }
 interface Snapshot extends GestureSnapshot { left: number; height: number }
+interface Intent {
+  direction: Direction | null; options: TurnCommandOptions; interaction: number | null;
+  queueRecord: number | null; resolve: (result: TurnResult) => void; promise: Promise<TurnResult>;
+  result: TurnResult | null; committed?: boolean;
+}
 /** One leased neighbor; `sign` is its physical side (LTR next: -1, to the right of current). */
 interface Side { direction: Direction; sign: -1 | 1; element: HTMLElement; lease: SurfaceLease }
 /**
@@ -56,7 +63,7 @@ export function createReaderController(session: ReaderSession, options: Options 
   const diagnostics = options.diagnostics ?? createPageTurnDiagnostics({ enabled: readPageTurnDebugConfig().enabled });
   const renderer = createPageRenderer();
   const listeners = new Set<() => void>();
-  let ui: { phase: ReaderPhase; direction: Direction | null } = { phase: 'idle', direction: null };
+  let ui: { phase: ReaderPhase; direction: Direction | null; queueDepth: number } = { phase: 'idle', direction: null, queueDepth: 0 };
   let input: InputOptions = {};
   let disposed = false; let suspended = false; let command = 0; let revision = 0;
   let committed = engine.stable ? copyPosition(engine.stable) : null;
@@ -75,11 +82,17 @@ export function createReaderController(session: ReaderSession, options: Options 
   let lifecycle = 0;
   // Diagnostic id of the latest started logical input; null whenever diagnostics are disabled.
   let interaction: number | null = null;
+  const queue: Intent[] = [];
+  let activeIntent: Intent | null = null;
+  let viewportCache: Snapshot | null = null;
   // `visual` is the rendered distance; `drawn` marks the first drag-frame write, `readyMarked` the diagnostic readiness at lock.
-  let pointer: { id: number; snapshot: Snapshot; gesture: ReturnType<typeof createPageTurnEngine>; latest: GestureMoveResult | null; visual: number; start: number; interaction: number | null; boundaryPending?: boolean; catchUp?: { from: number; startTime: number | null }; drawn?: boolean; readyMarked?: boolean } | null = null;
+  type Pointer = { id: number; snapshot: Snapshot; gesture: ReturnType<typeof createPageTurnEngine>; latest: GestureMoveResult | null; visual: number; start: number; interaction: number | null; boundaryPending?: boolean; catchUp?: { from: number; startTime: number | null }; drawn?: boolean; readyMarked?: boolean; intent?: Intent };
+  let pointer: Pointer | null = null;
+  let pendingPointer: { pointer: Pointer; intent: Intent; sample: GestureInput } | null = null;
+  const publishQueue = () => { ui = { ...ui, queueDepth: queue.length }; for (const listener of listeners) listener(); };
   const setPhase = (phase: ReaderPhase, direction: Direction | null = ui.direction) => {
     if (ui.phase === phase && ui.direction === direction) return;
-    ui = { phase, direction }; for (const listener of listeners) listener();
+    ui = { phase, direction, queueDepth: queue.length }; for (const listener of listeners) listener();
   };
   // Control work (preparation, drains, motion admission, optional-work
   // resumption, React-facing labels and handoff) runs in ordinary tasks. Never
@@ -104,15 +117,17 @@ export function createReaderController(session: ReaderSession, options: Options 
   const snapshot = (): Snapshot => {
     const location = committed?.location ?? engine.currentLocation();
     const rect = foreground.getBoundingClientRect();
-    return { width: foreground.clientWidth, height: foreground.clientHeight, left: rect.left, direction: engine.direction ?? 'ltr', canPrev: !location?.atStart, canNext: !location?.atEnd };
+    viewportCache = { width: foreground.clientWidth, height: foreground.clientHeight, left: rect.left, direction: engine.direction ?? 'ltr', canPrev: !location?.atStart, canNext: !location?.atEnd };
+    return { ...viewportCache };
   };
   const key = (): PositionKey => ({ sessionId, positionRevision: revision, layoutGeneration, appearanceGeneration });
   const slotState = (direction: Direction) => buffer.snapshot()[direction === 'next' ? 'next' : 'previous'].state;
+  const ownTurnHandoff = () => engine.state === 'recovering' && activeIntent !== null && ui.phase === 'committing';
   // Diagnostic-only classification; callers evaluate it only when diagnostics are enabled.
-  const blockReason = (source: 'gesture' | 'navigation' = 'gesture') => disposed || suspended || engine.state !== 'ready' || recovery || settingsWork || resumeWork
+  const blockReason = (source: 'gesture' | 'navigation' = 'gesture') => disposed || suspended || (engine.state !== 'ready' && !ownTurnHandoff()) || recovery || settingsWork || resumeWork
     || resizeTimer !== undefined || ui.phase === 'recovering' || ui.phase === 'suspended' || ui.phase === 'failed'
     ? 'not-ready' : source === 'gesture' && input.disabled ? 'disabled' : 'busy';
-  const stopOptional = () => { ++optionalRun; session.setOptionalWorkAllowed(false); buffer.stopWarm(); pagination.pause(); };
+  const stopOptional = () => { ++optionalRun; diagnostics.deferUserTiming(); session.setOptionalWorkAllowed(false); buffer.stopWarm(); pagination.pause(); };
   const clearPair = () => {
     const previous = pair; pair = null; renderer.release(); binding = null;
     if (pointer) pointer.catchUp = undefined;
@@ -151,17 +166,22 @@ export function createReaderController(session: ReaderSession, options: Options 
   };
   const resetVisual = () => {
     if (frame !== null) cancelAnimationFrame(frame); frame = null;
-    pointer?.gesture.cancel(); pointer = null; input.onReleasePointer?.(); clearPair();
+    const previous = pointer; previous?.gesture.cancel(); pointer = null;
+    if (previous) input.onReleasePointer?.(previous.id);
+    clearPair();
   };
   const idle = () => {
+    if (activeIntent) return;
     if (!disposed && !suspended && !navigation && !recovery && !settingsWork && !resumeWork && resizeTimer === undefined && ui.phase !== 'failed') {
+      diagnostics.flushUserTiming();
+      if (queue.length) { advanceQueue(); return; }
       setPhase('idle', null); session.setOptionalWorkAllowed(true);
       // idle() also runs from settle-finish and navigation continuations. Warm
       // requests read viewport geometry, so resume optional work from a control
       // task; any input that stops optional work before it runs wins.
       const run = optionalRun;
       postControl(() => {
-        if (run !== optionalRun || disposed || suspended || pointer || ui.phase !== 'idle') return;
+        if (run !== optionalRun || disposed || suspended || pointer || queue.length || activeIntent || ui.phase !== 'idle') return;
         ++optionalRun;
         if (committed) {
           const viewport = { width: foreground.clientWidth, height: foreground.clientHeight };
@@ -211,6 +231,8 @@ export function createReaderController(session: ReaderSession, options: Options 
   };
   const cancel = (reason = 'cancelled') => {
     if (disposed) return Promise.resolve();
+    if (pointer?.intent) resolveIntent(pointer.intent, { kind: 'cancelled', reason });
+    clearIntents('cancelled', reason);
     // Repeated cancellation shares the same rollback. Only a lifecycle stop
     // invalidates a recovery that is already restoring the committed origin.
     if (!recovery || suspended || disposed) ++command;
@@ -218,6 +240,12 @@ export function createReaderController(session: ReaderSession, options: Options 
     resetVisual();
     // After motion stopped; an input that already has its result keeps it.
     diagnostics.resolveInteraction(interaction, 'cancelled', reason);
+    // Cancellation has stopped renderer motion, including failed/suspended exits
+    // that never return through idle(). Flush in a control task, not a frame.
+    const cancelledVersion = command;
+    postControl(() => {
+      if (command === cancelledVersion && !disposed && !pointer && !activeIntent && ui.phase !== 'settling' && ui.phase !== 'dragging') diagnostics.flushUserTiming();
+    });
     if (navigation) return recover(navigation, committed);
     if (!recovery) idle();
     return recovery ?? Promise.resolve();
@@ -256,7 +284,7 @@ export function createReaderController(session: ReaderSession, options: Options 
   };
   // The only drag frame work: read the latest numeric sample and move the
   // already bound surfaces. No preparation, drain, binding, geometry or React.
-  const scheduleDragFrame = (current: NonNullable<typeof pointer>) => {
+  const scheduleDragFrame = (current: Pointer) => {
     if (frame !== null) return;
     frame = requestAnimationFrame(time => {
       frame = null; if (pointer !== current || disposed || suspended) return;
@@ -338,11 +366,12 @@ export function createReaderController(session: ReaderSession, options: Options 
     };
     let leased = false;
     nextPair.ready = (async () => {
-      if (demandRequest && !await bounded(buffer.prepare(demandRequest))) return null;
+      const prepared = demandRequest ? await bounded(buffer.prepare(demandRequest)) : true;
       // Provider readiness and drains settle on real frame callbacks. Drain and
       // admit from control tasks, never from those frames' microtasks. An
       // already ready exact proof resolved within this control task.
       if (!wasReady) await controlTask();
+      if (!prepared) return null;
       if (stale()) return null;
       diagnostics.startPhase(prepareRecord, 'drain');
       const drained = await drainForMotion();
@@ -385,7 +414,7 @@ export function createReaderController(session: ReaderSession, options: Options 
     return nextPair.ready;
   };
   // Control task: reconcile the latest drag target with preparation and binding.
-  const syncDrag = (current: NonNullable<typeof pointer>) => {
+  const syncDrag = (current: Pointer) => {
     const latest = current.latest;
     if (pointer !== current || disposed || suspended || latest?.phase !== 'dragging' || !latest.direction) return;
     setPhase('dragging', latest.direction);
@@ -470,54 +499,141 @@ export function createReaderController(session: ReaderSession, options: Options 
   };
   // Panels disable gestures, but may themselves request programmatic navigation.
   // Both paths still require a ready, idle session with no outstanding work.
-  const admissible = (source: 'gesture' | 'navigation' = 'gesture') => !disposed && !suspended && (source === 'navigation' || !input.disabled) && !pointer && !navigation && !recovery && !settingsWork && !resumeWork && resizeTimer === undefined && ui.phase === 'idle' && engine.state === 'ready';
+  const admissible = (source: 'gesture' | 'navigation' = 'gesture') => !disposed && !suspended && (source === 'navigation' || !input.disabled) && !pointer && !activeIntent && !queue.length && !navigation && !recovery && !settingsWork && !resumeWork && resizeTimer === undefined && ui.phase === 'idle' && engine.state === 'ready';
   const admit = (source: 'gesture' | 'navigation' = 'gesture') => {
     diagnostics.countInput('received');
     if (!admissible(source)) { diagnostics.countInput('rejected'); return false; }
     diagnostics.countInput('accepted'); return true;
   };
+  // A non-ready engine is expected during this controller's own turn handoff.
+  // Display/open/recovery operations never acquire a turn intent and cannot queue.
+  const canQueue = () => !disposed && !suspended && !input.disabled && !recovery && !settingsWork && !resumeWork
+    && resizeTimer === undefined && !['recovering', 'suspended', 'failed'].includes(ui.phase)
+    && (engine.state === 'ready' || ownTurnHandoff())
+    && (activeIntent !== null || pointer !== null || queue.length > 0 || ui.phase === 'settling');
+  const newIntent = (direction: Direction | null, commandOptions: TurnCommandOptions, id: number | null): Intent => {
+    let resolve!: (result: TurnResult) => void;
+    const promise = new Promise<TurnResult>(done => { resolve = done; });
+    return { direction, options: commandOptions, interaction: id, queueRecord: null, resolve, promise, result: null };
+  };
+  const endQueueWait = (intent: Intent) => {
+    diagnostics.endPhase(intent.queueRecord, 'queue'); diagnostics.close(intent.queueRecord); intent.queueRecord = null;
+  };
+  const resolveIntent = (intent: Intent, result: TurnResult) => {
+    if (intent.result) return;
+    // Acceptance is irreversible even if a post-commit callback fails or a
+    // lifecycle cancellation arrives while that callback is still pending.
+    if (intent.committed) result = { kind: 'committed' };
+    intent.result = result;
+    diagnostics.resolveInteraction(intent.interaction, result.kind === 'queue-full' ? 'overflow' : result.kind, result.reason);
+    endQueueWait(intent); intent.resolve(result);
+  };
+  const clearIntents = (kind: 'cancelled' | 'failed', reason: string, current = true) => {
+    const pending = pendingPointer; pendingPointer = null;
+    if (pending) { pending.pointer.gesture.cancel(); input.onReleasePointer?.(pending.pointer.id); }
+    const waiting = queue.splice(0);
+    for (const intent of waiting) resolveIntent(intent, { kind, reason });
+    if (current && activeIntent) { resolveIntent(activeIntent, { kind, reason }); activeIntent = null; }
+    if (waiting.length) publishQueue();
+  };
+  const cancelPendingPointer = (reason: string) => {
+    const pending = pendingPointer; if (!pending) return;
+    pendingPointer = null; pending.pointer.gesture.cancel(); input.onReleasePointer?.(pending.pointer.id);
+    const index = queue.indexOf(pending.intent); if (index !== -1) queue.splice(index, 1);
+    resolveIntent(pending.intent, { kind: 'cancelled', reason }); publishQueue();
+  };
+  const enqueue = (intent: Intent) => {
+    queue.push(intent);
+    diagnostics.markQueued(intent.interaction, queue.length);
+    intent.queueRecord = diagnostics.begin({ action: 'queue', inputTime: intent.options.inputTime, interactionId: intent.interaction });
+    diagnostics.startPhase(intent.queueRecord, 'queue');
+    publishQueue(); stopOptional();
+  };
+  const runIntent = (intent: Intent, distance = 0, frozen?: Snapshot) => {
+    activeIntent = intent; diagnostics.endPhase(intent.queueRecord, 'queue');
+    void performTurn(intent.direction!, intent.options, distance, frozen, intent.interaction, intent.queueRecord).then(result => {
+      resolveIntent(intent, result);
+      if (activeIntent !== intent) return;
+      activeIntent = null;
+      if (result.kind === 'failed' || result.kind === 'cancelled') clearIntents(result.kind, result.reason ?? result.kind);
+      idle();
+    });
+  };
+  const advanceQueue = () => {
+    if (activeIntent || pointer || !queue.length) return;
+    if (engine.state !== 'ready') { clearIntents('failed', 'not-ready'); return; }
+    const intent = queue.shift()!; publishQueue();
+    if (pendingPointer?.intent === intent) {
+      const pending = pendingPointer; pendingPointer = null;
+      const current = pending.pointer;
+      current.snapshot = snapshot(); current.gesture.rebase(current.snapshot);
+      if (diagnostics.enabled) diagnostics.markInteractionStart(current.interaction, key(), { width: current.snapshot.width, height: current.snapshot.height });
+      current.latest = current.gesture.move(pending.sample);
+      pointer = current; interaction = current.interaction;
+      // Promotion starts a held gesture at its new origin; it has no turn yet.
+      endQueueWait(intent); current.intent = intent;
+      setPhase('tracking', null); stopOptional(); void prepare(null, current.snapshot);
+      if (current.latest.phase === 'dragging') {
+        record = diagnostics.begin({ action: 'drag', backend: 'foliate-paired-views', inputTime: current.start, interactionId: current.interaction });
+        diagnostics.markAnimationStart(record, undefined, { sampleFrames: true });
+        syncDrag(current);
+      }
+    } else runIntent(intent);
+  };
+  const turnPage = (next: Direction, commandOptions: TurnCommandOptions = {}, distance = 0, frozen?: Snapshot, gestureInteraction?: number | null): Promise<TurnResult> => {
+    diagnostics.countInput('received');
+    const immediate = admissible(); const queued = !immediate && canQueue();
+    const full = queued && queue.length >= TURN_QUEUE_CAPACITY;
+    if ((!immediate && !queued) || full) {
+      diagnostics.countInput('rejected');
+      const reason = full ? 'queue-full' : blockReason();
+      if (gestureInteraction !== undefined) diagnostics.resolveInteraction(gestureInteraction, full ? 'overflow' : 'blocked', reason);
+      else if (diagnostics.enabled) diagnostics.blockInteraction({ source: commandOptions.source ?? 'command', inputTime: commandOptions.inputTime, phaseAtInput: ui.phase, direction: next }, reason);
+      return Promise.resolve({ kind: full ? 'queue-full' : 'blocked', reason });
+    }
+    diagnostics.countInput('accepted');
+    const id = gestureInteraction !== undefined ? gestureInteraction : diagnostics.enabled
+      ? diagnostics.beginInteraction({ source: commandOptions.source ?? 'command', inputTime: commandOptions.inputTime, phaseAtInput: ui.phase, direction: next }) : null;
+    const intent = newIntent(next, commandOptions, id);
+    if (immediate) runIntent(intent, distance, frozen); else enqueue(intent);
+    return intent.promise;
+  };
   const finish = (version: number, turnRecord: number | null) => {
     diagnostics.endPhase(turnRecord, 'busy'); diagnostics.close(turnRecord);
-    if (alive(version)) { record = null; resetVisual(); idle(); }
+    if (alive(version)) { record = null; resetVisual(); diagnostics.flushUserTiming(); idle(); }
   };
   const commitNavigation = async (request: NavigationCommand, version: number, turnRecord: number | null, turnInteraction: number | null) => {
     buffer.endMotion();
     setPhase('committing'); diagnostics.startPhase(turnRecord, 'handoff');
     const origin = committed;
     const result = await execute(request);
-    if (!alive(version)) return;
+    if (!alive(version)) return { kind: 'cancelled' as const };
     diagnostics.endPhase(turnRecord, 'handoff');
     const lease = request.kind === 'turn' ? pair?.sides[request.direction]?.lease : undefined;
     const proof = lease?.prepared.target;
     if (result.kind === 'verified' && (request.kind !== 'turn' || !lease || !proof || (samePositionKey(lease.request.key, key()) && result.position.location.start?.index === proof.sectionIndex && result.position.page === proof.page))) {
       diagnostics.markMilestone(turnRecord, 'engineVerified');
       diagnostics.startPhase(turnRecord, 'accept');
+      if (request.kind === 'turn' && activeIntent) activeIntent.committed = true;
       accept(result.position, 'navigation');
       diagnostics.markMilestone(turnRecord, 'committed'); diagnostics.countInput('committed');
       diagnostics.resolveInteraction(turnInteraction, 'committed');
       await input.onPageTurnCommitted?.();
       diagnostics.endPhase(turnRecord, 'accept');
+      return { kind: 'committed' as const };
     } else {
       if (turnInteraction !== null) {
         diagnostics.resolveInteraction(turnInteraction, result.kind === 'boundary' ? 'boundary' : result.kind === 'cancelled' ? 'cancelled' : 'failed',
           result.kind === 'verified' ? 'proof-mismatch' : result.kind);
       }
       if (result.kind !== 'boundary' && result.kind !== 'unavailable') {
+        clearIntents('failed', result.kind === 'verified' ? 'proof-mismatch' : result.kind, false);
         setPhase('recovering'); if (origin) await restore(origin, version); else setPhase('failed');
       }
+      return { kind: result.kind === 'boundary' ? 'boundary' as const : result.kind === 'cancelled' ? 'cancelled' as const : 'failed' as const, reason: result.kind };
     }
   };
-  const turnPage = async (next: Direction, commandOptions: TurnCommandOptions = {}, distance = 0, frozen?: Snapshot, gestureInteraction?: number | null) => {
-    if (!admit()) {
-      if (diagnostics.enabled) {
-        // A tap/release belongs to its already started pointer input; commands are new inputs.
-        if (gestureInteraction !== undefined) diagnostics.resolveInteraction(gestureInteraction, 'no-turn', blockReason());
-        else diagnostics.blockInteraction({ source: commandOptions.source ?? 'command', inputTime: commandOptions.inputTime, phaseAtInput: ui.phase, direction: next }, blockReason());
-      }
-      // A rejected pointer tap/release must not leave its pre-admission locked into idle.
-      if (gestureInteraction !== undefined && !navigation) { clearPair(); idle(); }
-      return;
-    }
+  const performTurn = async (next: Direction, commandOptions: TurnCommandOptions = {}, distance = 0, frozen?: Snapshot, gestureInteraction?: number | null, queuedRecord: number | null = null): Promise<TurnResult> => {
     const version = ++command; const ruler = frozen ?? snapshot();
     const boundary = next === 'next' ? !ruler.canNext : !ruler.canPrev;
     const turnInteraction = gestureInteraction !== undefined ? gestureInteraction : diagnostics.enabled
@@ -525,11 +641,12 @@ export function createReaderController(session: ReaderSession, options: Options 
       : null;
     interaction = turnInteraction;
     if (diagnostics.enabled) {
+      diagnostics.markInteractionStart(turnInteraction, key(), { width: ruler.width, height: ruler.height });
       diagnostics.setInteractionDirection(turnInteraction, next);
       if (!boundary) diagnostics.markInteractionReady(turnInteraction, slotState(next));
     }
     stopOptional(); setPhase('preparing', next);
-    const turnRecord = diagnostics.begin({ action: commandOptions.action ?? 'tap-' + next, backend: 'foliate-paired-views', inputTime: commandOptions.inputTime, interactionId: turnInteraction }); record = turnRecord;
+    const turnRecord = queuedRecord ?? diagnostics.begin({ action: commandOptions.action ?? 'tap-' + next, backend: 'foliate-paired-views', inputTime: commandOptions.inputTime, interactionId: turnInteraction }); record = turnRecord;
     diagnostics.startPhase(turnRecord, 'busy');
     // Preparation results and WAAPI completion resolve from frame callbacks;
     // finishing resumes in a control task. Reduced motion awaits neither.
@@ -538,7 +655,7 @@ export function createReaderController(session: ReaderSession, options: Options 
       const reduced = !boundary && !framed;
       let nextPair = !boundary && !reduced ? await prepare(next, ruler) : null;
       // A cancellation already recorded its own result; the first result wins.
-      if (!alive(version) || engine.state !== 'ready') { diagnostics.resolveInteraction(turnInteraction, 'failed', 'not-ready'); return; }
+      if (!alive(version) || engine.state !== 'ready') { diagnostics.resolveInteraction(turnInteraction, 'failed', 'not-ready'); return { kind: alive(version) ? 'failed' : 'cancelled', reason: 'not-ready' }; }
       // A pre-admission whose side for this direction went stale cannot animate it.
       if (nextPair && !nextPair.sides[next]) { clearPair(); nextPair = null; }
       const side = nextPair?.sides[next];
@@ -546,7 +663,7 @@ export function createReaderController(session: ReaderSession, options: Options 
       setPhase('settling', next);
       if (boundary) {
         if (pair) clearPair();
-        if (await animate(distance, 0, PAGE_TURN_RULES.settleDurationMinMs, null) === 'cancelled') { diagnostics.resolveInteraction(turnInteraction, 'cancelled', 'motion-cancelled'); return; }
+        if (await animate(distance, 0, PAGE_TURN_RULES.settleDurationMinMs, null) === 'cancelled') { diagnostics.resolveInteraction(turnInteraction, 'cancelled', 'motion-cancelled'); return { kind: 'cancelled', reason: 'motion-cancelled' }; }
       } else if (nextPair && side) {
         const settlePair = nextPair;
         place(settlePair, distance); diagnostics.markMilestone(turnRecord, 'neighborReady');
@@ -558,9 +675,9 @@ export function createReaderController(session: ReaderSession, options: Options 
           // The label is a React update: the progress frame only posts it.
           postControl(() => { showPreviewPage(settlePair, next); });
           return true;
-        }) === 'cancelled') { diagnostics.resolveInteraction(turnInteraction, 'cancelled', 'motion-cancelled'); return; }
+        }) === 'cancelled') { diagnostics.resolveInteraction(turnInteraction, 'cancelled', 'motion-cancelled'); return { kind: 'cancelled', reason: 'motion-cancelled' }; }
       }
-      if (!alive(version) || engine.state !== 'ready') { diagnostics.resolveInteraction(turnInteraction, 'failed', 'not-ready'); return; }
+      if (!alive(version) || engine.state !== 'ready') { diagnostics.resolveInteraction(turnInteraction, 'failed', 'not-ready'); return { kind: alive(version) ? 'failed' : 'cancelled', reason: 'not-ready' }; }
       if (!boundary) {
         binding?.value.holdIncoming();
         // Handoff starts in the settle's completion (inside the finishing
@@ -572,13 +689,15 @@ export function createReaderController(session: ReaderSession, options: Options 
         // skipped) must precede acceptance, which invalidates the preview key.
         showPreviewPage(nextPair, next);
         if (input.reducedMotion) clearPair();
-        await commitNavigation({ kind: 'turn', direction: next }, version, turnRecord, turnInteraction);
-      } else if (turnInteraction !== null) diagnostics.resolveInteraction(turnInteraction, 'boundary', next === 'next' ? 'at-end' : 'at-start');
+        return await commitNavigation({ kind: 'turn', direction: next }, version, turnRecord, turnInteraction);
+      }
+      return { kind: 'boundary', reason: next === 'next' ? 'at-end' : 'at-start' };
     } catch {
       if (alive(version)) {
         diagnostics.close(turnRecord, { cancelReason: 'navigation-error' }); setPhase('failed');
         diagnostics.resolveInteraction(turnInteraction, 'failed', 'navigation-error');
       }
+      return { kind: alive(version) ? 'failed' : 'cancelled', reason: 'navigation-error' };
     }
     // Releasing the pair clears the label (React) and starts parking; never
     // from a settle or navigation continuation that resumed inside a frame.
@@ -644,7 +763,7 @@ export function createReaderController(session: ReaderSession, options: Options 
     return pending;
   };
   engine.onLayoutInvalidated = () => {
-    void cancel('layout'); setPhase('recovering', null);
+    viewportCache = null; void cancel('layout'); setPhase('recovering', null);
     stopOptional(); invalidateResources();
     clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { resizeTimer = undefined; void resume(); }, 150);
   };
@@ -674,15 +793,25 @@ export function createReaderController(session: ReaderSession, options: Options 
       return true;
     },
     pointerDown(id: number, sample: GestureInput, details?: { pointerType?: string }) {
-      if (!admissible()) {
-        if (diagnostics.enabled) diagnostics.blockInteraction({ source: 'pointer', pointerType: details?.pointerType, inputTime: sample.time, phaseAtInput: ui.phase }, blockReason());
+      const immediate = admissible();
+      const waiting = !immediate && !pointer && !pendingPointer && canQueue() && viewportCache !== null;
+      if ((!immediate && !waiting) || (waiting && queue.length >= TURN_QUEUE_CAPACITY)) {
+        if (diagnostics.enabled) diagnostics.blockInteraction({ source: 'pointer', pointerType: details?.pointerType, inputTime: sample.time, phaseAtInput: ui.phase }, waiting ? 'queue-full' : blockReason());
         return false;
       }
-      const ruler = snapshot(); const gesture = createPageTurnEngine(ruler); gesture.begin(sample);
+      // No transformed geometry or old-origin boundary decisions while waiting.
+      const ruler = waiting ? { ...viewportCache!, canPrev: true, canNext: true } : snapshot();
+      const gesture = createPageTurnEngine(ruler); gesture.begin(sample);
       const gestureInteraction = diagnostics.enabled
         ? diagnostics.beginInteraction({ source: 'pointer', pointerType: details?.pointerType, inputTime: sample.time, phaseAtInput: ui.phase, origin: key(), viewport: { width: ruler.width, height: ruler.height } })
         : null;
-      pointer = { id, snapshot: ruler, gesture, latest: null, visual: 0, start: sample.time, interaction: gestureInteraction };
+      const current = { id, snapshot: ruler, gesture, latest: null, visual: 0, start: sample.time, interaction: gestureInteraction };
+      if (waiting) {
+        const intent = newIntent(null, { source: 'tap', inputTime: sample.time }, gestureInteraction);
+        pendingPointer = { pointer: current, intent, sample };
+        enqueue(intent); return true;
+      }
+      pointer = current;
       interaction = gestureInteraction;
       stopOptional(); setPhase('tracking', null);
       // A discrete event: admit the neighbors that are ready now while the page
@@ -691,6 +820,12 @@ export function createReaderController(session: ReaderSession, options: Options 
       return true;
     },
     pointerMove(id: number, sample: GestureInput) {
+      if (pendingPointer?.pointer.id === id) {
+        const pending = pendingPointer; pending.sample = sample;
+        const motion = pending.pointer.gesture.move(sample); pending.pointer.latest = motion;
+        if (motion.phase === 'cancelled') { cancelPendingPointer('vertical'); return false; }
+        return motion.phase === 'dragging';
+      }
       const current = pointer; if (!current || current.id !== id) return false;
       const previous = current.latest;
       const motion = current.gesture.move(sample); current.latest = motion;
@@ -709,48 +844,79 @@ export function createReaderController(session: ReaderSession, options: Options 
       return true;
     },
     pointerUp(id: number, sample: GestureInput) {
+      if (pendingPointer?.pointer.id === id) {
+        const pending = pendingPointer; pendingPointer = null;
+        const result = pending.pointer.gesture.release(sample); input.onReleasePointer?.(id);
+        const zone = result.kind === 'tap' ? getTapZone(sample.x, pending.pointer.snapshot.left, pending.pointer.snapshot.width) : null;
+        const next = result.kind === 'commit' ? result.direction : zone && zone !== 'center' ? zone : null;
+        if (next) {
+          pending.intent.direction = next; pending.intent.options.action = result.kind === 'commit' ? 'release' : 'tap-' + next;
+          diagnostics.setInteractionDirection(pending.intent.interaction, next);
+          diagnostics.countInput('received'); diagnostics.countInput('accepted');
+        } else {
+          const index = queue.indexOf(pending.intent); if (index !== -1) queue.splice(index, 1);
+          resolveIntent(pending.intent, { kind: result.kind === 'rebound' ? 'rebound' : 'no-turn', reason: zone === 'center' ? 'center' : 'hold' }); publishQueue();
+        }
+        return pending.intent.promise;
+      }
       const current = pointer; if (!current || current.id !== id) return;
       const result = current.gesture.release(sample); pointer = null;
-      if (frame !== null) cancelAnimationFrame(frame); frame = null; input.onReleasePointer?.();
+      if (frame !== null) cancelAnimationFrame(frame); frame = null; input.onReleasePointer?.(id);
       diagnostics.endPhase(record, 'motion'); diagnostics.endPhase(record, 'drag'); diagnostics.close(record); record = null;
-      setPhase('idle', null);
+      const releaseTurn = (next: Direction, commandOptions: TurnCommandOptions, distance = 0) => {
+        diagnostics.countInput('received'); diagnostics.countInput('accepted');
+        const intent = current.intent ?? newIntent(next, commandOptions, current.interaction);
+        intent.direction = next; intent.options = commandOptions;
+        runIntent(intent, distance, current.snapshot); return intent.promise;
+      };
+      const noTurn = (kind: 'no-turn' | 'rebound', reason?: string) => {
+        if (current.intent) resolveIntent(current.intent, { kind, reason });
+        else diagnostics.resolveInteraction(current.interaction, kind, reason);
+      };
       if (result.kind === 'tap') {
         // Only a tap zone turn consumes the pre-admission; any other tap
         // releases it before idle so no motion lock survives.
-        if (input.onTap?.({ clientX: sample.x, clientY: sample.y })) { clearPair(); idle(); diagnostics.resolveInteraction(current.interaction, 'no-turn', 'image'); return; }
+        if (!queue.length && !current.intent) setPhase('idle', null);
+        if (!current.intent && !queue.length && input.onTap?.({ clientX: sample.x, clientY: sample.y })) { clearPair(); noTurn('no-turn', 'image'); idle(); return; }
         const zone = getTapZone(sample.x, current.snapshot.left, current.snapshot.width);
-        if (zone === 'center') { clearPair(); idle(); input.onCenterTap?.(); diagnostics.resolveInteraction(current.interaction, 'no-turn', 'center'); }
-        else void turnPage(zone, { inputTime: current.start }, 0, current.snapshot, current.interaction);
+        if (zone === 'center') { clearPair(); noTurn('no-turn', 'center'); idle(); if (!current.intent) input.onCenterTap?.(); }
+        else return releaseTurn(zone, { inputTime: current.start });
       } else if (result.kind === 'commit') {
         // A bound side settles from the rendered distance, even from the
         // opposite side after a velocity-led reversal: every neighbor moves.
         const sign = sideSign(result.direction, current.snapshot.direction === 'rtl');
         const bound = Boolean(pair?.sides[result.direction] && binding?.pair === pair);
         const distance = bound || (Math.sign(current.visual) === sign && !pair) ? current.visual : 0;
-        void turnPage(result.direction, { action: 'release', inputTime: sample.time }, distance, current.snapshot, current.interaction);
+        return releaseTurn(result.direction, { action: 'release', inputTime: current.start }, distance);
       } else if (result.kind === 'rebound') {
+        if (current.intent) activeIntent = current.intent;
         const version = ++command; setPhase('settling', result.direction);
         diagnostics.setInteractionDirection(current.interaction, result.direction);
         record = diagnostics.begin({ action: 'rebound', backend: 'foliate-paired-views', inputTime: sample.time, interactionId: current.interaction }); const reboundRecord = record;
         diagnostics.startPhase(record, 'busy');
         const prepared = pair && binding?.pair === pair ? pair : null; if (!prepared && pair) clearPair();
         void animate(current.visual, 0, getSettleDuration(Math.abs(current.visual), current.snapshot.width), prepared).finally(async () => {
-          // Any settle end returns to the origin page; a cancellation already recorded its own result.
-          diagnostics.resolveInteraction(current.interaction, 'rebound');
           // The settle ends inside a frame; release and resume from a control task.
           await controlTask();
           finish(version, reboundRecord);
+          // Resolve a reservation only after stationary cleanup. A lifecycle
+          // cancellation that already completed it keeps its first result.
+          noTurn('rebound');
+          if (current.intent && activeIntent === current.intent) { activeIntent = null; idle(); }
         });
-      } else { resetVisual(); idle(); diagnostics.resolveInteraction(current.interaction, 'no-turn', 'hold'); }
+      } else { resetVisual(); noTurn('no-turn', 'hold'); idle(); }
+      return current.intent?.promise;
     },
     /** Cancels only the tracked gesture; another pointer's cancellation never touches a running turn. */
     pointerCancel(id: number, reason = 'pointercancel') {
+      if (pendingPointer?.pointer.id === id) { cancelPendingPointer(reason); return Promise.resolve(); }
       if (pointer?.id !== id) return Promise.resolve();
       return cancel(reason);
     },
     destroy() {
       if (disposed) return;
-      disposed = true; ++command; ++lifecycle; clearTimeout(resizeTimer); resizeTimer = undefined; resetVisual();
+      if (pointer?.intent) resolveIntent(pointer.intent, { kind: 'cancelled', reason: 'destroy' });
+      clearIntents('cancelled', 'destroy'); disposed = true; ++command; ++lifecycle; clearTimeout(resizeTimer); resizeTimer = undefined; resetVisual();
       stopOptional(); buffer.invalidate();
       engine.onLayoutInvalidated = undefined; diagnostics.destroy(); listeners.clear();
     },

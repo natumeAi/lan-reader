@@ -14,7 +14,7 @@ interface Options {
   onPageTurnCommitted?: () => Promise<void>;
   edgeRef: RefObject<HTMLElement | null>;
 }
-const idleSnapshot = { phase: 'idle' as const, direction: null };
+const idleSnapshot = { phase: 'idle' as const, direction: null, queueDepth: 0 };
 const sample = (event: ReactPointerEvent<HTMLDivElement>) => ({ x: event.clientX, y: event.clientY, time: event.timeStamp });
 
 /** React adapts events/capture and subscribes to low-frequency controller UI. */
@@ -22,7 +22,8 @@ export function usePageTurnController({ controller: supplied, session, disabled,
   const [local, setLocal] = useState<ReaderController | null>(null);
   const controller = supplied ?? local;
   const pointer = useRef<{ id: number; element: HTMLElement } | null>(null);
-  const release = useCallback(() => {
+  const release = useCallback((id?: number) => {
+    if (id !== undefined && pointer.current?.id !== id) return;
     const current = pointer.current; pointer.current = null;
     try { if (current?.element.hasPointerCapture(current.id)) current.element.releasePointerCapture(current.id); } catch { /* Capture already released by browser. */ }
   }, []);
@@ -48,15 +49,15 @@ export function usePageTurnController({ controller: supplied, session, disabled,
   const getSnapshot = useCallback(() => controller?.snapshot ?? idleSnapshot, [controller]);
   const state = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   const cancelPageTurn = useCallback((reason = 'cancelled') => { void controller?.cancel(reason); release(); }, [controller, release]);
-  const turnPage = useCallback((direction: 'next' | 'prev', options?: TurnCommandOptions) => controller?.turnPage(direction, options) ?? Promise.resolve(), [controller]);
+  const turnPage = useCallback((direction: 'next' | 'prev', options?: TurnCommandOptions) => controller?.turnPage(direction, options) ?? Promise.resolve({ kind: 'blocked' as const, reason: 'not-ready' }), [controller]);
   const navigateTo = useCallback((target: string) => controller?.navigateTo(target) ?? Promise.resolve(), [controller]);
   const handlePointerDown = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     if (!event.isPrimary || event.button !== 0 || pointer.current) return;
     if (event.pointerType !== 'mouse' && (event.clientX < 20 || event.clientX > innerWidth - 20)) return;
     if (!controller?.pointerDown(event.pointerId, sample(event), { pointerType: event.pointerType })) return;
     pointer.current = { id: event.pointerId, element: event.currentTarget };
-    try { event.currentTarget.setPointerCapture(event.pointerId); } catch { cancelPageTurn('capture-failed'); }
-  }, [controller, cancelPageTurn]);
+    try { event.currentTarget.setPointerCapture(event.pointerId); } catch { void controller.pointerCancel(event.pointerId, 'capture-failed'); release(event.pointerId); }
+  }, [controller, release]);
   const handlePointerMove = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     if (controller?.pointerMove(event.pointerId, sample(event))) event.preventDefault();
   }, [controller]);
@@ -65,7 +66,7 @@ export function usePageTurnController({ controller: supplied, session, disabled,
   // untracked pointer (another finger) never rolls back a running turn.
   const cancelPointer = useCallback((event: ReactPointerEvent<HTMLDivElement>, reason: string) => {
     if (pointer.current?.id !== event.pointerId) return;
-    void controller?.pointerCancel(event.pointerId, reason); release();
+    void controller?.pointerCancel(event.pointerId, reason); release(event.pointerId);
   }, [controller, release]);
   const handleLostPointerCapture = useCallback((event: ReactPointerEvent<HTMLDivElement>) => { cancelPointer(event, 'capture-lost'); }, [cancelPointer]);
   const handlePointerCancel = useCallback((event: ReactPointerEvent<HTMLDivElement>) => { cancelPointer(event, 'pointercancel'); }, [cancelPointer]);

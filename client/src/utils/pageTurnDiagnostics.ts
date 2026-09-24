@@ -1,14 +1,13 @@
 export interface DebugConfig { enabled: boolean; forceBackend: 'scroll' | 'compositor' | null }
 type FrameSampleSource = 'animation-frame' | 'visual-update';
-/** Application work spans, never compositor presentation. 'queue' is reserved for the planned input FIFO. */
+/** Application work spans, never compositor presentation. */
 export type TurnPhase = 'prepare' | 'drain' | 'drag' | 'catch-up' | 'motion' | 'settle' | 'handoff' | 'accept' | 'busy' | 'queue';
 type TurnMilestone = 'neighborReady' | 'previewLabel' | 'engineVerified' | 'committed';
 type InputOutcome = 'received' | 'accepted' | 'rejected' | 'committed';
 type Direction = 'next' | 'prev';
 export type InteractionSource = 'pointer' | 'keyboard' | 'tap' | 'command' | 'navigation';
-/** 'queued' and 'overflow' are reserved for the planned input FIFO and are never recorded yet. */
-export type InteractionResult = 'committed' | 'boundary' | 'rebound' | 'cancelled' | 'failed' | 'blocked' | 'no-turn' | 'queued' | 'overflow';
-type StartedResult = Exclude<InteractionResult, 'blocked' | 'queued' | 'overflow'>;
+export type InteractionResult = 'committed' | 'boundary' | 'rebound' | 'cancelled' | 'failed' | 'blocked' | 'no-turn' | 'overflow';
+type StartedResult = InteractionResult;
 export type InteractionFallback = 'reduced-motion' | 'prepare-unavailable';
 type PreparationOutcome = 'ready' | 'unavailable' | 'stale';
 interface OriginKey { positionRevision: number; layoutGeneration: number; appearanceGeneration: number }
@@ -227,6 +226,8 @@ export function createPageTurnDiagnostics({
   let nextRecordId = 1;
   let nextInteractionId = 1;
   let facade: object | null = null;
+  let timingDeferred = false;
+  const deferredTiming = new Set<InteractionState>();
 
   function getActiveRecord(recordId: number | null | undefined) {
     if (!enabled || destroyed) return null;
@@ -267,6 +268,7 @@ export function createPageTurnDiagnostics({
   // Called only after an interaction's result and its last linked record close,
   // so it never runs inside motion. Each measure is cleared once the trace has it.
   function emitUserTiming(state: InteractionState) {
+    if (timingDeferred) { deferredTiming.add(state); return; }
     const linked = state.linked;
     state.linked = [];
     if (!timing) return;
@@ -455,6 +457,7 @@ export function createPageTurnDiagnostics({
       for (const [id, item] of interactions) {
         if (item.entry.result === null || item.open > 0) continue;
         interactions.delete(id);
+        deferredTiming.delete(item);
         omitted.interactions += 1;
         break;
       }
@@ -473,11 +476,35 @@ export function createPageTurnDiagnostics({
   function blockInteraction(input: InteractionInput, reason: string) {
     if (!enabled || destroyed) return null;
     const { entry } = createInteraction(input);
-    entry.result = 'blocked';
+    entry.result = reason === 'queue-full' ? 'overflow' : 'blocked';
     entry.reason = reason;
     entry.resultTime = readTimestamp(now);
     interactionCounts.blocked += 1;
+    if (reason === 'queue-full') interactionCounts.overflow += 1;
     return entry.id;
+  }
+
+  /** Waiting input may finish during another turn's motion; trace work waits. */
+  function deferUserTiming() { if (enabled && !destroyed) timingDeferred = true; }
+  function flushUserTiming() {
+    timingDeferred = false;
+    for (const state of deferredTiming) emitUserTiming(state);
+    deferredTiming.clear();
+  }
+
+  /** Queue admission is not a terminal result. Depth excludes the active turn. */
+  function markQueued(interactionId: number | null | undefined, depth: number) {
+    const state = getInteraction(interactionId);
+    if (!state || state.entry.queueDepth) return;
+    state.entry.queueDepth = depth; state.entry.readyAtInput = 'queued'; interactionCounts.queued += 1;
+  }
+
+  function markInteractionStart(interactionId: number | null | undefined, origin: OriginKey, viewport: { width: number; height: number }) {
+    const state = getInteraction(interactionId);
+    if (state) {
+      state.entry.origin = { positionRevision: origin.positionRevision, layoutGeneration: origin.layoutGeneration, appearanceGeneration: origin.appearanceGeneration };
+      state.entry.viewport = { ...viewport };
+    }
   }
 
   /** The first result wins; User Timing waits until every linked record has closed. */
@@ -550,6 +577,7 @@ export function createPageTurnDiagnostics({
     completedRecords.splice(0, completedRecords.length);
     inputCounts.received = inputCounts.accepted = inputCounts.rejected = inputCounts.committed = 0;
     interactions.clear();
+    deferredTiming.clear();
     Object.assign(interactionCounts, emptyInteractionCounts());
     omitted.records = omitted.interactions = 0;
   }
@@ -607,6 +635,10 @@ export function createPageTurnDiagnostics({
     cancel,
     getRecords,
     beginInteraction,
+    markQueued,
+    markInteractionStart,
+    deferUserTiming,
+    flushUserTiming,
     blockInteraction,
     resolveInteraction,
     setInteractionDirection,
