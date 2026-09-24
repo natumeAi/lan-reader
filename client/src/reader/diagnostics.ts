@@ -1,6 +1,6 @@
 import type { FoliateEngine } from './foliateEngine';
 import type { ReaderSettings } from '../hooks/useReaderSettings';
-import { readPageTurnDebugConfig } from '../utils/pageTurnDiagnostics';
+import { PAGE_TURN_DIAGNOSTIC_LIMITS, readPageTurnDebugConfig } from '../utils/pageTurnDiagnostics';
 
 type WorkKind = 'preview' | 'measurement';
 interface PreparationRecord {
@@ -54,10 +54,12 @@ export function getReaderWorkDiagnostics() {
 export function exportReaderDiagnostics(engine: FoliateEngine | null, settings: ReaderSettings) {
   const pageTurns = Reflect.get(window, '__EPUB_READER_PAGE_TURN_DIAGNOSTICS__') as {
     getRecords?: () => unknown; getInputCounts?: () => unknown;
+    getInteractions?: () => unknown; getInteractionCounts?: () => unknown; getOmitted?: () => unknown;
+    userTiming?: 'available' | 'unavailable';
   } | undefined;
   const report = {
     createdAt: new Date().toISOString(),
-    schemaVersion: 2,
+    schemaVersion: 3,
     measurement: 'Main-thread callback timing; not presented display FPS or an iPhone test result',
     userAgent: navigator.userAgent,
     viewport: { width: innerWidth, height: innerHeight, scale: visualViewport?.scale },
@@ -65,6 +67,12 @@ export function exportReaderDiagnostics(engine: FoliateEngine | null, settings: 
     position: engine?.diagnostics(),
     pageTurns: pageTurns?.getRecords?.() ?? [],
     turnCommandCounts: pageTurns?.getInputCounts?.() ?? null,
+    interactions: pageTurns?.getInteractions?.() ?? [],
+    interactionCounts: pageTurns?.getInteractionCounts?.() ?? null,
+    omitted: pageTurns?.getOmitted?.() ?? null,
+    limits: PAGE_TURN_DIAGNOSTIC_LIMITS,
+    // Phase spans are also emitted as User Timing measures named `lr:i<interaction>:r<record>:<phase>`.
+    userTiming: pageTurns?.userTiming ?? 'unavailable',
     backgroundWork: getReaderWorkDiagnostics(),
   };
   const url = URL.createObjectURL(new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' }));

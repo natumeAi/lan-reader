@@ -449,12 +449,14 @@ export function ReaderView({
         void turnPage('prev', {
           action: 'tap-prev',
           inputTime: event.timeStamp,
+          source: 'keyboard',
         });
       } else if (event.key === 'ArrowRight') {
         event.preventDefault();
         void turnPage('next', {
           action: 'tap-next',
           inputTime: event.timeStamp,
+          source: 'keyboard',
         });
       }
     };

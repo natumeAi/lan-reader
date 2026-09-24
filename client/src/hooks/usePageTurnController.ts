@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from '
 import type { PointerEvent as ReactPointerEvent, RefObject } from 'react';
 import type { ReaderSession } from '../reader/types';
 import { createReaderController } from '../reader/readerController';
-import type { ReaderController } from '../reader/readerController';
+import type { ReaderController, TurnCommandOptions } from '../reader/readerController';
 
 interface Options {
   controller?: ReaderController | null;
@@ -48,12 +48,12 @@ export function usePageTurnController({ controller: supplied, session, disabled,
   const getSnapshot = useCallback(() => controller?.snapshot ?? idleSnapshot, [controller]);
   const state = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   const cancelPageTurn = useCallback((reason = 'cancelled') => { void controller?.cancel(reason); release(); }, [controller, release]);
-  const turnPage = useCallback((direction: 'next' | 'prev', options?: { action?: string; inputTime?: number }) => controller?.turnPage(direction, options) ?? Promise.resolve(), [controller]);
+  const turnPage = useCallback((direction: 'next' | 'prev', options?: TurnCommandOptions) => controller?.turnPage(direction, options) ?? Promise.resolve(), [controller]);
   const navigateTo = useCallback((target: string) => controller?.navigateTo(target) ?? Promise.resolve(), [controller]);
   const handlePointerDown = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     if (!event.isPrimary || event.button !== 0 || pointer.current) return;
     if (event.pointerType !== 'mouse' && (event.clientX < 20 || event.clientX > innerWidth - 20)) return;
-    if (!controller?.pointerDown(event.pointerId, sample(event))) return;
+    if (!controller?.pointerDown(event.pointerId, sample(event), { pointerType: event.pointerType })) return;
     pointer.current = { id: event.pointerId, element: event.currentTarget };
     try { event.currentTarget.setPointerCapture(event.pointerId); } catch { cancelPageTurn('capture-failed'); }
   }, [controller, cancelPageTurn]);
