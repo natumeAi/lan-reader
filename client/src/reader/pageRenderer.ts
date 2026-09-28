@@ -1,4 +1,4 @@
-import { sampleEaseOutCubicKeyframes } from '../utils/pageTurnGesture';
+import { PAGE_TURN_RULES, sampleEaseKeyframes } from '../utils/pageTurnGesture';
 
 type PageSurface = Pick<HTMLElement, 'style' | 'animate'>;
 /** A prepared neighbor at `distance - sign * width`: LTR next has sign -1 (right of current). */
@@ -15,7 +15,8 @@ export interface PageRendererBinding {
   /** Native animation timeline progress; null when there is no active motion. */
   readonly progress: number | null;
   update(distance: number): void;
-  settle(from: number, to: number, duration: number, timelineTime?: number | null, onAnimationWrite?: () => void): Promise<PageMotionResult>;
+  /** `launch` is the `hermiteEase` start slope; the default 3 is ease-out cubic. */
+  settle(from: number, to: number, duration: number, timelineTime?: number | null, onAnimationWrite?: () => void, launch?: number): Promise<PageMotionResult>;
   /** Stationary handoff: keep the incoming surface covering normal foreground geometry. */
   holdIncoming(): void;
   cancel(): void;
@@ -23,8 +24,18 @@ export interface PageRendererBinding {
 }
 
 const translate = (x: number) => `translateX(${x}px)`;
-const easing = sampleEaseOutCubicKeyframes();
-const keyframes = (from: number, to: number): Keyframe[] => easing.map(({ offset, value }) => ({
+// Sampled once per launch at settle start; releases add a few distinct launches.
+const curves = new Map<number, { offset: number; value: number }[]>();
+const curve = (launch: number) => {
+  let points = curves.get(launch);
+  if (!points) {
+    if (curves.size >= 16) curves.delete(curves.keys().next().value!);
+    points = sampleEaseKeyframes(launch);
+    curves.set(launch, points);
+  }
+  return points;
+};
+const keyframes = (easing: readonly { offset: number; value: number }[], from: number, to: number): Keyframe[] => easing.map(({ offset, value }) => ({
   offset, transform: translate(from + (to - from) * value),
 }));
 
@@ -64,7 +75,7 @@ export function createPageRenderer() {
         current.style.transform = translate(distance);
         for (const side of sides) side.element.style.transform = translate(distance + side.offset);
       },
-      settle(from, to, duration, timelineTime, onAnimationWrite) {
+      settle(from, to, duration, timelineTime, onAnimationWrite, launch = PAGE_TURN_RULES.settleLaunchMax) {
         if (active !== binding) return Promise.resolve('cancelled');
         stop();
         last = { from, to };
@@ -72,12 +83,13 @@ export function createPageRenderer() {
           const motion = { animations: [] as Animation[], resolve };
           run = motion;
           try {
+            const easing = curve(launch);
             const options: KeyframeAnimationOptions = { duration, easing: 'linear', fill: 'forwards' };
-            motion.animations.push(current.animate(keyframes(from, to), options));
+            motion.animations.push(current.animate(keyframes(easing, from, to), options));
             onAnimationWrite?.();
             // Every bound neighbor shares the curve and timeline: a velocity-led
             // reversal can settle toward one side while the other one is on-screen.
-            for (const side of sides) motion.animations.push(side.element.animate(keyframes(from + side.offset, to + side.offset), options));
+            for (const side of sides) motion.animations.push(side.element.animate(keyframes(easing, from + side.offset, to + side.offset), options));
             if (typeof timelineTime === 'number') {
               for (const animation of motion.animations) animation.startTime = timelineTime;
             }

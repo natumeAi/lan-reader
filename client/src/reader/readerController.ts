@@ -7,7 +7,7 @@ import { createPageRenderer } from './pageRenderer';
 import type { PageRendererBinding } from './pageRenderer';
 import { createPageTurnEngine } from './pageTurnEngine';
 import type { GestureSnapshot, GestureInput, GestureMoveResult } from './pageTurnEngine';
-import { PAGE_TURN_RULES, getSettleDuration, getTapZone, easeOutCubic } from '../utils/pageTurnGesture';
+import { PAGE_TURN_RULES, getSettleMotion, getTapZone, easeOutCubic, hermiteEase } from '../utils/pageTurnGesture';
 import { createPageTurnDiagnostics, readPageTurnDebugConfig } from '../utils/pageTurnDiagnostics';
 
 type Direction = 'next' | 'prev';
@@ -31,6 +31,9 @@ interface InputOptions {
   onPageTurnCommitted?: () => Promise<void>;
 }
 interface Snapshot extends GestureSnapshot { left: number; height: number }
+/** One settle: its duration and `hermiteEase` launch slope. */
+interface SettleMotion { duration: number; launch: number }
+const TURN_MOTION: SettleMotion = { duration: PAGE_TURN_RULES.tapDurationMs, launch: PAGE_TURN_RULES.turnLaunch };
 interface Intent {
   direction: Direction | null; options: TurnCommandOptions; interaction: number | null;
   queueRecord: number | null; resolve: (result: TurnResult) => void; promise: Promise<TurnResult>;
@@ -459,7 +462,7 @@ export function createReaderController(session: ReaderSession, options: Options 
     }
     return true;
   };
-  const animate = async (from: number, to: number, duration: number, nextPair: Pair | null, onProgress?: (distance: number) => boolean) => {
+  const animate = async (from: number, to: number, { duration, launch }: SettleMotion, nextPair: Pair | null, onProgress?: (distance: number) => boolean) => {
     if (input.reducedMotion) return 'finished' as const;
     const version = command; const epoch = optionalEpoch;
     if (!motionReady) {
@@ -480,7 +483,7 @@ export function createReaderController(session: ReaderSession, options: Options 
       const progress = motion.progress;
       // Read the actual WAAPI clock, so delayed starts and paused animations do
       // not advance the label on a wall-clock timer. The keyframes use this curve.
-      if (progress !== null && onProgress(from + (to - from) * easeOutCubic(progress))) return;
+      if (progress !== null && onProgress(from + (to - from) * hermiteEase(launch, progress))) return;
       progressFrame = requestAnimationFrame(reportProgress);
     };
     try {
@@ -488,7 +491,7 @@ export function createReaderController(session: ReaderSession, options: Options 
         diagnostics.markVisualUpdate(animationRecord); diagnostics.startPhase(animationRecord, 'motion');
         diagnostics.startPhase(animationRecord, 'settle');
         diagnostics.markAnimationStart(animationRecord, undefined, { sampleFrames: true });
-      });
+      }, launch);
       if (onProgress) reportProgress();
       return await completion;
     } finally {
@@ -549,9 +552,11 @@ export function createReaderController(session: ReaderSession, options: Options 
     diagnostics.startPhase(intent.queueRecord, 'queue');
     publishQueue(); stopOptional();
   };
-  const runIntent = (intent: Intent, distance = 0, frozen?: Snapshot) => {
+  // Only an immediate release from the rendered distance passes `releaseVelocity`;
+  // queued, promoted and discrete turns settle without it.
+  const runIntent = (intent: Intent, distance = 0, frozen?: Snapshot, releaseVelocity = 0) => {
     activeIntent = intent; diagnostics.endPhase(intent.queueRecord, 'queue');
-    void performTurn(intent.direction!, intent.options, distance, frozen, intent.interaction, intent.queueRecord).then(result => {
+    void performTurn(intent.direction!, intent.options, distance, frozen, intent.interaction, intent.queueRecord, releaseVelocity).then(result => {
       resolveIntent(intent, result);
       if (activeIntent !== intent) return;
       activeIntent = null;
@@ -649,7 +654,7 @@ export function createReaderController(session: ReaderSession, options: Options 
       return { kind, reason };
     }
   };
-  const performTurn = async (next: Direction, commandOptions: TurnCommandOptions = {}, distance = 0, frozen?: Snapshot, gestureInteraction?: number | null, queuedRecord: number | null = null): Promise<TurnResult> => {
+  const performTurn = async (next: Direction, commandOptions: TurnCommandOptions = {}, distance = 0, frozen?: Snapshot, gestureInteraction?: number | null, queuedRecord: number | null = null, releaseVelocity = 0): Promise<TurnResult> => {
     const version = ++command; const ruler = frozen ?? snapshot();
     const boundary = next === 'next' ? !ruler.canNext : !ruler.canPrev;
     const turnInteraction = gestureInteraction !== undefined ? gestureInteraction : diagnostics.enabled
@@ -679,14 +684,17 @@ export function createReaderController(session: ReaderSession, options: Options 
       setPhase('settling', next);
       if (boundary) {
         if (pair) clearPair();
-        if (await animate(distance, 0, PAGE_TURN_RULES.settleDurationMinMs, null) === 'cancelled') { diagnostics.resolveInteraction(turnInteraction, 'cancelled', 'motion-cancelled'); return { kind: 'cancelled', reason: 'motion-cancelled' }; }
+        if (await animate(distance, 0, { duration: PAGE_TURN_RULES.settleDurationMinMs, launch: PAGE_TURN_RULES.turnLaunch }, null) === 'cancelled') { diagnostics.resolveInteraction(turnInteraction, 'cancelled', 'motion-cancelled'); return { kind: 'cancelled', reason: 'motion-cancelled' }; }
       } else if (nextPair && side) {
         const settlePair = nextPair;
         place(settlePair, distance); diagnostics.markMilestone(turnRecord, 'neighborReady');
         const target = side.sign * ruler.width;
         // A reversal can release from the opposite side: the remaining distance may exceed one width.
-        const duration = commandOptions.action === 'release' ? getSettleDuration(Math.abs(target - distance), ruler.width) : PAGE_TURN_RULES.tapDurationMs;
-        if (await animate(distance, target, duration, settlePair, visibleDistance => {
+        // Releases continue the finger's velocity projected toward the target.
+        const motion = commandOptions.action === 'release'
+          ? getSettleMotion({ remaining: Math.abs(target - distance), width: ruler.width, velocity: Math.max(0, releaseVelocity * Math.sign(target - distance)) })
+          : TURN_MOTION;
+        if (await animate(distance, target, motion, settlePair, visibleDistance => {
           if (Math.abs(visibleDistance) < ruler.width / 2 || Math.sign(visibleDistance) !== side.sign) return false;
           // The label is a React update: the progress frame only posts it.
           postControl(() => { showPreviewPage(settlePair, next); });
@@ -879,11 +887,11 @@ export function createReaderController(session: ReaderSession, options: Options 
       const result = current.gesture.release(sample); pointer = null;
       if (frame !== null) cancelAnimationFrame(frame); frame = null; input.onReleasePointer?.(id);
       diagnostics.endPhase(record, 'motion'); diagnostics.endPhase(record, 'drag'); diagnostics.close(record); record = null;
-      const releaseTurn = (next: Direction, commandOptions: TurnCommandOptions, distance = 0) => {
+      const releaseTurn = (next: Direction, commandOptions: TurnCommandOptions, distance = 0, velocity = 0) => {
         diagnostics.countInput('received'); diagnostics.countInput('accepted');
         const intent = current.intent ?? newIntent(next, commandOptions, current.interaction);
         intent.direction = next; intent.options = commandOptions;
-        runIntent(intent, distance, current.snapshot); return intent.promise;
+        runIntent(intent, distance, current.snapshot, velocity); return intent.promise;
       };
       const noTurn = (kind: 'no-turn' | 'rebound', reason?: string) => {
         if (current.intent) resolveIntent(current.intent, { kind, reason });
@@ -903,7 +911,8 @@ export function createReaderController(session: ReaderSession, options: Options 
         const sign = sideSign(result.direction, current.snapshot.direction === 'rtl');
         const bound = Boolean(pair?.sides[result.direction] && binding?.pair === pair);
         const distance = bound || (Math.sign(current.visual) === sign && !pair) ? current.visual : 0;
-        return releaseTurn(result.direction, { action: 'release', inputTime: current.start }, distance);
+        // Only moving, bound surfaces continue the finger; an unbound turn still prepares from rest.
+        return releaseTurn(result.direction, { action: 'release', inputTime: current.start }, distance, bound ? result.velocity : 0);
       } else if (result.kind === 'rebound') {
         if (current.intent) activeIntent = current.intent;
         const version = ++command; setPhase('settling', result.direction);
@@ -911,7 +920,8 @@ export function createReaderController(session: ReaderSession, options: Options 
         record = diagnostics.begin({ action: 'rebound', backend: 'foliate-paired-views', inputTime: sample.time, interactionId: current.interaction }); const reboundRecord = record;
         diagnostics.startPhase(record, 'busy');
         const prepared = pair && binding?.pair === pair ? pair : null; if (!prepared && pair) clearPair();
-        void animate(current.visual, 0, getSettleDuration(Math.abs(current.visual), current.snapshot.width), prepared).finally(async () => {
+        const motion = getSettleMotion({ remaining: Math.abs(current.visual), width: current.snapshot.width, velocity: Math.max(0, -Math.sign(current.visual) * result.velocity) });
+        void animate(current.visual, 0, motion, prepared).finally(async () => {
           // The settle ends inside a frame; release and resume from a control task.
           await controlTask();
           finish(version, reboundRecord);
