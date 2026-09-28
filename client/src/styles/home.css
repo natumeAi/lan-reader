@@ -25,6 +25,33 @@ body[data-main-view="home"] {
   display: none !important;
 }
 
+.main-view {
+  position: relative;
+  left: 0;
+  opacity: 1;
+  transition: left var(--main-view-phase-duration) ease, opacity var(--main-view-phase-duration) ease;
+}
+
+.main-view[data-motion-phase="exiting"][data-motion-direction="1"] {
+  left: -8px;
+  opacity: 0;
+}
+
+.main-view[data-motion-phase="exiting"][data-motion-direction="-1"] {
+  left: 8px;
+  opacity: 0;
+}
+
+.main-view[data-motion-phase="preparing"] {
+  opacity: 0;
+  transition: none;
+}
+
+.main-view[data-motion-instant] { transition: none; }
+
+.main-view[data-motion-phase="preparing"][data-motion-direction="1"] { left: 8px; }
+.main-view[data-motion-phase="preparing"][data-motion-direction="-1"] { left: -8px; }
+
 .main-view:focus {
   outline: none;
 }
@@ -222,6 +249,8 @@ body[data-main-view="home"] {
 }
 
 .main-navigation-item {
+  position: relative;
+  z-index: 1;
   display: flex;
   min-width: 0;
   flex-direction: column;
@@ -236,7 +265,7 @@ body[data-main-view="home"] {
   font-weight: 650;
   line-height: 1.1;
   cursor: pointer;
-  transition: background-color 160ms ease, color 160ms ease;
+  transition: color var(--main-navigation-duration) ease;
   -webkit-tap-highlight-color: transparent;
 }
 
@@ -246,8 +275,23 @@ body[data-main-view="home"] {
 }
 
 .main-navigation-item.is-active {
-  background: rgba(118, 118, 128, 0.16);
   color: var(--text-primary);
+}
+
+.main-navigation-pill {
+  position: absolute;
+  top: 5px;
+  bottom: 5px;
+  left: 5px;
+  width: calc((100% - 16px) / 2);
+  border-radius: 999px;
+  background: rgba(118, 118, 128, 0.16);
+  pointer-events: none;
+  transition: transform var(--main-navigation-duration) cubic-bezier(.22, 1, .36, 1);
+}
+
+.main-navigation[data-visual-view="shelf"] .main-navigation-pill {
+  transform: translateX(calc(100% + 6px));
 }
 
 .main-navigation-item:focus-visible {
@@ -269,9 +313,13 @@ body[data-main-view="home"] {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .main-view,
+  .main-navigation-pill,
   .main-navigation-item {
     transition: none;
   }
+
+  .main-view { left: 0 !important; opacity: 1 !important; }
 
   .current-reading-book:active .current-reading-cover,
   .home-card-action:active {
