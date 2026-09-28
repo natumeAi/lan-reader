@@ -40,7 +40,7 @@ export interface ReadingHomeProps {
 
 /**
  * 首页: a vertical stack of home cards in the reference order 正在读 → 今日目标 →
- * 近 7 日/totals → 今年读完的书. Cards are presentational; data and actions come from App.
+ * 近 7 日/totals → 随机推荐 → 今年读完的书. Cards are presentational; data and actions come from App.
  */
 export function ReadingHome({
   catalogBooks, catalogError, hasLoadedCatalog, onRetryCatalog, onOpenRecent,
@@ -88,8 +88,6 @@ export function ReadingHome({
           onOpenShelf={onOpenShelf}
           onRetry={onRetryRecentReading}
         />
-        <RandomRecommendationsCard books={catalogBooks} error={catalogError} hasLoaded={hasLoadedCatalog}
-          onRetry={onRetryCatalog} onOpenBook={onOpenBook} />
         {staleNotice || readingActivityNotice ? (
           <div className="reading-stats-notice" role="status">
             {staleNotice ? (
@@ -109,6 +107,8 @@ export function ReadingHome({
           stats={readingStats}
         />
         <ReadingSummaryCard error={readingStatsError} onRetry={onRetryReadingStats} stats={readingStats} />
+        <RandomRecommendationsCard books={catalogBooks} error={catalogError} hasLoaded={hasLoadedCatalog}
+          onRetry={onRetryCatalog} onOpenBook={onOpenBook} />
         <AnnualBooksCard
           error={readingStatsError}
           onEditGoal={() => onEditGoal('annual')}
