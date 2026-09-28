@@ -8,6 +8,7 @@ import { StatisticsSections } from './StatisticsSections.js';
 interface ReadingStatisticsProps {
   /** State and actions of the App-owned `useReadingStatistics`. */
   model: ReadingStatisticsState;
+  onOpenRanking: (opener: HTMLElement) => void;
 }
 
 /**
@@ -15,7 +16,7 @@ interface ReadingStatisticsProps {
  * selected range. Data belonging to another range is never shown under the current title:
  * without a matching response the page shows loading or a retryable error instead.
  */
-export function ReadingStatistics({ model }: ReadingStatisticsProps) {
+export function ReadingStatistics({ model, onOpenRanking }: ReadingStatisticsProps) {
   const baseId = useId();
   const panelId = `${baseId}-panel`;
   const tabId = useCallback((dimension: StatisticsDimension) => `${baseId}-tab-${dimension}`, [baseId]);
@@ -65,7 +66,7 @@ export function ReadingStatistics({ model }: ReadingStatisticsProps) {
           </div>
         ) : null}
         <div className="reading-statistics-cards" aria-busy={status === 'loading'}>
-          {statistics ? <StatisticsSections statistics={statistics} /> : null}
+          {statistics ? <StatisticsSections statistics={statistics} onOpenRanking={onOpenRanking} /> : null}
           {status === 'loading' ? (
             <div className="home-card statistics-state" role="status">
               <p>正在加载阅读统计</p>

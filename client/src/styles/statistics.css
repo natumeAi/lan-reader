@@ -348,3 +348,187 @@
     transition: none;
   }
 }
+
+/* ---------- Reading-time ranking ---------- */
+.statistics-ranking-list {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  margin: 0;
+  padding: 8px 0;
+  list-style: none;
+}
+
+.statistics-ranking-row {
+  display: grid;
+  grid-template-columns: 22px 48px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.statistics-ranking-position {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.statistics-ranking-position.is-first { color: #ac7914; }
+
+.statistics-ranking-cover.book-cover {
+  width: 48px;
+  height: 72px;
+  border-radius: 5px;
+  overflow: hidden;
+}
+
+.statistics-ranking-info {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 7px 10px;
+  min-width: 0;
+}
+
+.statistics-ranking-title,
+.statistics-ranking-author {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.statistics-ranking-title,
+.statistics-ranking-duration {
+  color: var(--text-primary);
+  font-size: 15px;
+  font-weight: 720;
+  line-height: 1.35;
+}
+
+.statistics-ranking-duration {
+  max-width: 135px;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.statistics-ranking-author,
+.statistics-ranking-characters {
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.statistics-ranking-characters { text-align: right; }
+
+.statistics-ranking-bar {
+  grid-column: 1 / -1;
+  display: block;
+  height: 6px;
+  overflow: hidden;
+  border-radius: 6px;
+  background: rgba(29, 29, 31, 0.07);
+}
+
+.statistics-ranking-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--text-primary);
+}
+
+.statistics-ranking-empty {
+  margin: 0;
+  padding: 18px 0;
+  color: var(--text-secondary);
+  font-size: 14px;
+  text-align: center;
+}
+
+.statistics-ranking-detail {
+  position: fixed;
+  z-index: 100;
+  inset: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: var(--home-canvas);
+  opacity: 1;
+  transform: translateX(0);
+  transition: transform var(--ranking-motion-duration) ease, opacity var(--ranking-motion-duration) ease;
+}
+
+.statistics-ranking-detail.is-preparing,
+.statistics-ranking-detail.is-closing {
+  transform: translateX(100%);
+  opacity: 0;
+}
+
+.statistics-ranking-detail.is-preparing { transition: none; }
+.statistics-ranking-detail:focus { outline: none; }
+
+.statistics-ranking-detail-content {
+  max-width: 920px;
+  margin: 0 auto;
+  padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(28px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+}
+
+.statistics-ranking-detail-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.statistics-ranking-detail-header h1 {
+  margin: 0;
+  font-size: 23px;
+  line-height: 1.25;
+  font-weight: 780;
+}
+
+.statistics-ranking-back {
+  display: grid;
+  flex: 0 0 44px;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.statistics-ranking-back:focus-visible { outline: 3px solid rgba(0, 122, 255, 0.4); }
+.statistics-ranking-range { margin: 8px 0 18px; color: var(--text-secondary); font-size: 14px; }
+
+.statistics-ranking-summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+  margin-bottom: 20px;
+  font-size: 16px;
+  color: var(--text-secondary);
+}
+
+.statistics-ranking-summary > :nth-child(even) { text-align: right; overflow-wrap: anywhere; }
+.statistics-ranking-summary strong { color: var(--text-primary); font-size: 21px; }
+
+@media (max-width: 374px) {
+  .statistics-ranking-card { padding-inline: 14px; }
+  .statistics-ranking-row { grid-template-columns: 18px 40px minmax(0, 1fr); gap: 7px; }
+  .statistics-ranking-cover.book-cover { width: 40px; height: 60px; }
+  .statistics-ranking-info { gap: 6px; }
+  .statistics-ranking-title, .statistics-ranking-duration { font-size: 13px; }
+  .statistics-ranking-duration { max-width: 95px; }
+  .statistics-ranking-author, .statistics-ranking-characters { font-size: 12px; }
+  .statistics-ranking-detail-header h1 { font-size: 21px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .statistics-ranking-detail { transition: none; transform: none; }
+}
