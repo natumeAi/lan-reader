@@ -38,7 +38,7 @@ export function useModalDialog({
   onRequestClose,
   open,
   restoreFocus = true,
-}: { initialFocusRef?: RefObject<HTMLElement | null>; onRequestClose?: () => void; open: boolean; restoreFocus?: boolean }) {
+}: { initialFocusRef?: RefObject<HTMLElement | null>; onRequestClose?: () => void; open: boolean; restoreFocus?: boolean | (() => boolean) }) {
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
 
@@ -54,13 +54,14 @@ export function useModalDialog({
       const target = initialTarget && !initialTarget.matches(':disabled') && isVisible(initialTarget)
         ? initialTarget
         : focusableElements(dialog)[0] || dialog;
-      target.focus();
+      target.focus({ preventScroll: true });
     });
 
     return () => {
       cancelInitialFocus();
       const previousFocus = previousFocusRef.current;
-      if (restoreFocus && previousFocus?.isConnected) previousFocus.focus();
+      const shouldRestore = typeof restoreFocus === 'function' ? restoreFocus() : restoreFocus;
+      if (shouldRestore && previousFocus?.isConnected) previousFocus.focus();
       previousFocusRef.current = null;
     };
   }, [initialFocusRef, open, restoreFocus]);
@@ -78,7 +79,7 @@ export function useModalDialog({
     const elements = focusableElements(dialog);
     if (!elements[0]) {
       event.preventDefault();
-      dialog.focus();
+      dialog.focus({ preventScroll: true });
       return;
     }
 
@@ -89,10 +90,10 @@ export function useModalDialog({
       (document.activeElement === first || !dialog.contains(document.activeElement))
     ) {
       event.preventDefault();
-      last?.focus();
+      last?.focus({ preventScroll: true });
     } else if (!event.shiftKey && document.activeElement === last) {
       event.preventDefault();
-      first.focus();
+      first.focus({ preventScroll: true });
     }
   }, [onRequestClose]);
 

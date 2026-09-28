@@ -99,6 +99,7 @@ function App() {
     saveGoals: saveReadingGoals,
   } = readingDashboard;
   const [recentSheetOpen, setRecentSheetOpen] = useState(false);
+  const handleRecentSheetClosed = useCallback(() => setRecentSheetOpen(false), []);
   const handleFolderRenamed = useCallback((renamedFolder: Folder) => {
     replaceShelfFolder(renamedFolder);
     void loadShelf();
@@ -371,7 +372,7 @@ function App() {
           <MainNavigation activeView={mainView} onSelectView={handleSelectMainView} />
         )}
         {recentSheetOpen ? <RecentReadingSheet items={recentReadingItems}
-          onClose={() => setRecentSheetOpen(false)}
+          onClose={handleRecentSheetClosed}
           onOpenBook={(book, rect) => { setRecentSheetOpen(false); handleOpenBook(book, rect); }} /> : null}
         <FolderOverlay
           books={folderBooks}
