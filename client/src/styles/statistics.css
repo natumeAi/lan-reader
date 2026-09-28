@@ -1,0 +1,618 @@
+/* 统计 page: range tabs, period navigation, overview, trend, ranking and calendar. Cards reuse
+   the home card frame from home.css; everything here is scoped to .reading-statistics. The
+   page never adds a transform/containment wrapper around .main-view (see home.css). */
+
+.reading-statistics {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.reading-statistics-header {
+  display: flex;
+  align-items: center;
+  min-height: 46px;
+  padding: 4px 0 2px;
+}
+
+.reading-statistics-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.reading-statistics-panel:focus {
+  outline: none;
+}
+
+.reading-statistics-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* ---------- 日 / 周 / 月 / 年 / 总 ---------- */
+
+.statistics-dimensions {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 4px;
+  padding: 4px;
+  border-radius: 14px;
+  background: rgba(118, 118, 128, 0.12);
+}
+
+.statistics-dimension {
+  min-height: 38px;
+  padding: 0 4px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 16px;
+  font-weight: 620;
+  cursor: pointer;
+  transition: background-color 160ms ease, color 160ms ease, box-shadow 160ms ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.statistics-dimension.is-selected {
+  background: var(--home-card-surface);
+  color: var(--text-primary);
+  font-weight: 760;
+  box-shadow: 0 1px 3px rgba(29, 29, 31, 0.1);
+}
+
+/* ---------- Period title and arrows ---------- */
+
+.statistics-period {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) 44px;
+  align-items: center;
+  gap: 10px;
+}
+
+.statistics-period-title {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-primary);
+  font-size: 18px;
+  font-weight: 720;
+  line-height: 1.3;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.statistics-period-button {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  padding: 0;
+  border: 1px solid rgba(29, 29, 31, 0.12);
+  border-radius: 12px;
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.statistics-period-button:disabled {
+  cursor: default;
+  opacity: 0.32;
+}
+
+.statistics-period-spacer {
+  width: 44px;
+  height: 44px;
+}
+
+.statistics-dimension:focus-visible,
+.statistics-period-button:focus-visible,
+.statistics-state .home-card-action:focus-visible {
+  outline: 3px solid rgba(0, 122, 255, 0.4);
+  outline-offset: 2px;
+}
+
+/* ---------- Loading / error ---------- */
+
+.statistics-state {
+  align-items: center;
+  padding-block: 28px;
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+.statistics-state p {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.45;
+}
+
+/* ---------- Overview ---------- */
+
+.statistics-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 24px 16px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.statistics-metric {
+  display: grid;
+  min-width: 0;
+  align-content: start;
+  gap: 6px;
+}
+
+.statistics-metric.is-wide {
+  grid-column: 1 / -1;
+}
+
+.statistics-metric p {
+  margin: 0;
+}
+
+.statistics-metric-value {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 6px;
+  color: var(--text-primary);
+  line-height: 1.15;
+  font-variant-numeric: tabular-nums;
+}
+
+.statistics-metric-number {
+  font-size: 28px;
+  font-weight: 780;
+}
+
+.statistics-metric-unit {
+  margin-left: 3px;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.statistics-metric-label {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 15px;
+  line-height: 1.3;
+}
+
+.statistics-metric-icon {
+  display: block;
+  flex: 0 0 auto;
+}
+
+.statistics-metric-change {
+  color: rgba(29, 29, 31, 0.78);
+  font-size: 14px;
+  line-height: 1.3;
+  font-variant-numeric: tabular-nums;
+}
+
+.statistics-metric-change.is-flat {
+  color: var(--text-secondary);
+}
+
+.statistics-footnote {
+  margin: 4px 0 0;
+  padding-top: 12px;
+  border-top: 1px solid rgba(29, 29, 31, 0.08);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+/* ---------- Trend chart ---------- */
+
+.statistics-trend-chart {
+  --statistics-plot-height: 180px;
+  --statistics-label-height: 22px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  padding-top: 8px;
+}
+
+.statistics-trend-axis {
+  position: relative;
+  min-width: 44px;
+  height: var(--statistics-plot-height);
+}
+
+.statistics-trend-tick {
+  position: absolute;
+  right: 0;
+  transform: translateY(50%);
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.statistics-trend-plot {
+  position: relative;
+  min-width: 0;
+}
+
+.statistics-trend-grid {
+  position: absolute;
+  inset: 0 0 auto;
+  height: var(--statistics-plot-height);
+  pointer-events: none;
+}
+
+.statistics-trend-line {
+  position: absolute;
+  right: 0;
+  left: 0;
+  border-top: 1px dashed rgba(29, 29, 31, 0.14);
+}
+
+.statistics-trend-line.is-base {
+  border-top-style: solid;
+  border-top-color: rgba(29, 29, 31, 0.2);
+}
+
+.statistics-trend-bars {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(var(--statistics-bucket-count, 1), minmax(0, 1fr));
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.statistics-trend-bucket {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.statistics-trend-slot {
+  display: flex;
+  height: var(--statistics-plot-height);
+  align-items: flex-end;
+  justify-content: center;
+}
+
+.statistics-trend-bar {
+  display: block;
+  width: min(100%, 22px);
+  min-height: 2px;
+  border-radius: 5px 5px 1px 1px;
+  background: #1d1d1f;
+  transition: height 320ms ease;
+}
+
+/* Labels may be wider than a narrow month column; they overflow centered on their bar. */
+.statistics-trend-label {
+  display: flex;
+  height: var(--statistics-label-height);
+  align-items: flex-end;
+  justify-content: center;
+  overflow: visible;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.statistics-trend-note {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.45;
+  text-align: center;
+}
+
+@media (min-width: 720px) {
+  .statistics-trend-chart {
+    --statistics-plot-height: 220px;
+  }
+
+  .statistics-trend-bars {
+    gap: 4px;
+  }
+}
+
+@media (max-width: 374px) {
+  .statistics-dimension {
+    font-size: 15px;
+  }
+
+  .statistics-metric-number {
+    font-size: 24px;
+  }
+
+  .statistics-metrics {
+    gap: 20px 12px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .statistics-dimension,
+  .statistics-trend-bar {
+    transition: none;
+  }
+}
+
+/* ---------- Reading-time ranking ---------- */
+.statistics-ranking-list {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  margin: 0;
+  padding: 8px 0;
+  list-style: none;
+}
+
+.statistics-ranking-row {
+  display: grid;
+  grid-template-columns: 22px 48px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.statistics-ranking-position {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.statistics-ranking-position.is-first { color: #ac7914; }
+
+.statistics-ranking-cover.book-cover {
+  width: 48px;
+  height: 72px;
+  border-radius: 5px;
+  overflow: hidden;
+}
+
+.statistics-ranking-info {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 7px 10px;
+  min-width: 0;
+}
+
+.statistics-ranking-title,
+.statistics-ranking-author {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.statistics-ranking-title,
+.statistics-ranking-duration {
+  color: var(--text-primary);
+  font-size: 15px;
+  font-weight: 720;
+  line-height: 1.35;
+}
+
+.statistics-ranking-duration {
+  max-width: 135px;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.statistics-ranking-author,
+.statistics-ranking-characters {
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.statistics-ranking-characters { text-align: right; }
+
+.statistics-ranking-bar {
+  grid-column: 1 / -1;
+  display: block;
+  height: 6px;
+  overflow: hidden;
+  border-radius: 6px;
+  background: rgba(29, 29, 31, 0.07);
+}
+
+.statistics-ranking-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--text-primary);
+}
+
+.statistics-ranking-empty {
+  margin: 0;
+  padding: 18px 0;
+  color: var(--text-secondary);
+  font-size: 14px;
+  text-align: center;
+}
+
+.statistics-ranking-detail {
+  position: fixed;
+  z-index: 100;
+  inset: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: var(--home-canvas);
+  opacity: 1;
+  transform: translateX(0);
+  transition: transform var(--ranking-motion-duration) ease, opacity var(--ranking-motion-duration) ease;
+}
+
+.statistics-ranking-detail.is-preparing,
+.statistics-ranking-detail.is-closing {
+  transform: translateX(100%);
+  opacity: 0;
+}
+
+.statistics-ranking-detail.is-preparing { transition: none; }
+.statistics-ranking-detail:focus { outline: none; }
+
+.statistics-ranking-detail-content {
+  max-width: 920px;
+  margin: 0 auto;
+  padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(28px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+}
+
+.statistics-ranking-detail-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.statistics-ranking-detail-header h1 {
+  margin: 0;
+  font-size: 23px;
+  line-height: 1.25;
+  font-weight: 780;
+}
+
+.statistics-ranking-back {
+  display: grid;
+  flex: 0 0 44px;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.statistics-ranking-back:focus-visible { outline: 3px solid rgba(0, 122, 255, 0.4); }
+.statistics-ranking-range { margin: 8px 0 18px; color: var(--text-secondary); font-size: 14px; }
+
+.statistics-ranking-summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+  margin-bottom: 20px;
+  font-size: 16px;
+  color: var(--text-secondary);
+}
+
+.statistics-ranking-summary > :nth-child(even) { text-align: right; overflow-wrap: anywhere; }
+.statistics-ranking-summary strong { color: var(--text-primary); font-size: 21px; }
+
+@media (max-width: 374px) {
+  .statistics-ranking-card { padding-inline: 14px; }
+  .statistics-ranking-row { grid-template-columns: 18px 40px minmax(0, 1fr); gap: 7px; }
+  .statistics-ranking-cover.book-cover { width: 40px; height: 60px; }
+  .statistics-ranking-info { gap: 6px; }
+  .statistics-ranking-title, .statistics-ranking-duration { font-size: 13px; }
+  .statistics-ranking-duration { max-width: 95px; }
+  .statistics-ranking-author, .statistics-ranking-characters { font-size: 12px; }
+  .statistics-ranking-detail-header h1 { font-size: 21px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .statistics-ranking-detail { transition: none; transform: none; }
+}
+
+/* ---------- Monthly reading calendar ---------- */
+.statistics-calendar {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: separate;
+  border-spacing: 0 10px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.statistics-calendar th {
+  padding: 0 2px 2px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.statistics-calendar td {
+  padding: 0 2px;
+  vertical-align: top;
+}
+
+.statistics-calendar-day {
+  position: relative;
+  width: 100%;
+  max-width: 80px;
+  /* Date (21.6px) + two duration lines (32.4px) + a 4px gap at narrow widths. */
+  min-height: 58px;
+  aspect-ratio: 2 / 3;
+  margin: 0 auto;
+  overflow: hidden;
+  border-radius: 5px;
+}
+
+.statistics-calendar-cover.book-cover {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  box-shadow: none;
+}
+
+.statistics-calendar-date {
+  position: relative;
+  z-index: 2;
+  display: block;
+  padding: 3px 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.2;
+}
+
+.statistics-calendar-day.has-reading .statistics-calendar-date {
+  color: #fff;
+  background: linear-gradient(rgba(0, 0, 0, 0.76), rgba(0, 0, 0, 0));
+  text-shadow: 0 1px 2px #000;
+}
+
+.statistics-calendar-duration {
+  position: absolute;
+  z-index: 2;
+  inset: auto 0 0;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0 2px;
+  padding: 4px 1px 2px;
+  color: #fff;
+  background: linear-gradient(rgba(0, 0, 0, 0), rgba(0, 0, 0, 0.9));
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1.2;
+  text-shadow: 0 1px 2px #000;
+}
+
+.statistics-calendar-duration > span { white-space: nowrap; }
+
+@media (min-width: 720px) {
+  .statistics-calendar { border-spacing: 0 14px; }
+  .statistics-calendar th, .statistics-calendar-date { font-size: 15px; }
+  .statistics-calendar-duration { font-size: 13px; }
+}

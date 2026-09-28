@@ -5,7 +5,7 @@ import { formatLocalDate } from '@lan-reader/shared';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { getReadingStats, updateReadingGoals } from '../api/readingApi.js';
 import { errorMessage, isAbortError } from '../api/transport.js';
-import { msUntilNextLocalMidnight } from '../utils/readingStatsFormat.js';
+import { deliveryNoticeOf, msUntilNextLocalMidnight } from '../utils/readingStatsFormat.js';
 
 /** The part of the App-owned activity delivery the dashboard observes. */
 export interface DashboardDeliverySource {
@@ -46,16 +46,6 @@ export interface ReadingDashboard {
 
 const defaultFetchStats = (date: string, options: { signal: AbortSignal; bookId?: number | null }) => getReadingStats(date, options);
 const defaultNow = () => new Date();
-
-function deliveryNoticeOf(status: ReadingActivityStatus): string {
-  if (status.permanentErrorCount > 0) {
-    return `有 ${status.permanentErrorCount} 条阅读记录被服务器拒绝，未计入统计`;
-  }
-  if (!status.isDurable && status.pendingCount > 0) {
-    return '阅读记录暂存于内存，尚未同步；刷新或关闭页面前请保持联网';
-  }
-  return '';
-}
 
 /**
  * Single owner of the 首页 statistics: the decoded stats response, its request

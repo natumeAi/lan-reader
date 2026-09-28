@@ -16,6 +16,8 @@ import { MainNavigation } from './components/common/MainNavigation.js';
 import { FolderOverlay } from './components/folders/FolderOverlay.js';
 import { RecentReadingSheet } from './components/home/RecentReadingSheet.js';
 import { ReadingHome } from './components/home/ReadingHome.js';
+import { ReadingStatistics } from './components/statistics/ReadingStatistics.js';
+import { StatisticsRankingDetail } from './components/statistics/StatisticsRankingDetail.js';
 import { useBookDeletion } from './hooks/useBookDeletion.js';
 import { useFolderState } from './hooks/useFolderState.js';
 import { useLibraryDrag } from './hooks/useLibraryDrag.js';
@@ -23,6 +25,8 @@ import { MAIN_VIEW_PHASE_MS, useMainView } from './hooks/useMainView.js';
 import { useReaderSession } from './hooks/useReaderSession.js';
 import { useReadingActivityDelivery } from './hooks/useReadingActivityDelivery.js';
 import { useReadingDashboard } from './hooks/useReadingDashboard.js';
+import { useReadingStatistics } from './hooks/useReadingStatistics.js';
+import { useStatisticsRanking } from './hooks/useStatisticsRanking.js';
 import { useReducedMotion } from './hooks/useReducedMotion.js';
 import { useShelfData } from './hooks/useShelfData.js';
 import { dropAnimationConfig } from './utils/dragMotion.js';
@@ -43,6 +47,7 @@ function ReaderRestoreFallback() {
 function App() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const reducedMotion = useReducedMotion();
+  const ranking = useStatisticsRanking(reducedMotion);
   const {
     clearReadingBookOrigin,
     clearReaderBookIfDeleted,
@@ -68,6 +73,7 @@ function App() {
   const readingActivityDelivery = useReadingActivityDelivery();
   const homeViewRef = useRef<HTMLDivElement>(null);
   const shelfViewRef = useRef<HTMLDivElement>(null);
+  const statisticsViewRef = useRef<HTMLDivElement>(null);
   const focusHandoffRef = useRef<HTMLButtonElement | null>(null);
   const {
     beginShelfProjection,
@@ -109,6 +115,17 @@ function App() {
     refresh: refreshReadingDashboard,
     saveGoals: saveReadingGoals,
   } = readingDashboard;
+  // 统计 page data. Like the dashboard it works only while its page is shown with no reader
+  // over it; its dimension/period selection lives as long as App.
+  const readingStatistics = useReadingStatistics({
+    active: mainView === MAIN_VIEW.STATISTICS && !readingBook,
+    delivery: readingActivityDelivery,
+  });
+  const { invalidate: invalidateReadingStatistics } = readingStatistics;
+  const handleBookDeleted = useCallback(() => {
+    invalidateReadingDashboard();
+    invalidateReadingStatistics();
+  }, [invalidateReadingDashboard, invalidateReadingStatistics]);
   const [recentSheetOpen, setRecentSheetOpen] = useState(false);
   const handleRecentSheetClosed = useCallback(() => setRecentSheetOpen(false), []);
   const handleFolderRenamed = useCallback((renamedFolder: Folder) => {
@@ -153,7 +170,7 @@ function App() {
   } = useBookDeletion({
     clearReaderBookIfDeleted,
     loadShelf,
-    onBookDeleted: invalidateReadingDashboard,
+    onBookDeleted: handleBookDeleted,
     openFolder,
     refreshOpenFolderBooksOrClose,
     setError: setOperationError,
@@ -205,6 +222,7 @@ function App() {
     deleteCandidateBook ||
     goalDialog ||
     recentSheetOpen ||
+    ranking.session ||
     activeDragPreview,
   );
 
@@ -241,8 +259,12 @@ function App() {
     const anchor = focusHandoffRef.current;
     focusHandoffRef.current = null;
     if (isMainNavigationBlocked || document.activeElement !== anchor) return;
-    const shownView = mainView === MAIN_VIEW.HOME ? homeViewRef.current : shelfViewRef.current;
-    shownView?.focus({ preventScroll: true });
+    const viewRefs = {
+      [MAIN_VIEW.HOME]: homeViewRef,
+      [MAIN_VIEW.SHELF]: shelfViewRef,
+      [MAIN_VIEW.STATISTICS]: statisticsViewRef,
+    };
+    viewRefs[mainView].current?.focus({ preventScroll: true });
   }, [isMainNavigationBlocked, mainView, motionPhase]);
 
   const handleMainViewTransitionEnd = useCallback((event: TransitionEvent<HTMLDivElement>) => {
@@ -340,9 +362,10 @@ function App() {
           '--main-view-phase-duration': `${MAIN_VIEW_PHASE_MS}ms`,
           '--main-navigation-duration': `${MAIN_VIEW_PHASE_MS * 2}ms`,
         } as CSSProperties}>
-        {/* Both views stay mounted so shelf search/view/sort, grid and scroll context survive
-            a round trip. The hidden view is display:none and inert: it takes no focus, has no
-            laid-out cover for reader transitions, and cannot start a drag. */}
+        {/* Every main view stays mounted so shelf search/view/sort, the statistics selection,
+            grid and scroll context survive a round trip. A hidden view is display:none and
+            inert: it takes no focus, has no laid-out cover for reader transitions, and
+            cannot start a drag. */}
         <div
           ref={homeViewRef}
           className="main-view"
@@ -351,7 +374,7 @@ function App() {
           data-motion-direction={mainView === MAIN_VIEW.HOME ? motionDirection : undefined}
           data-motion-instant={mainView === MAIN_VIEW.HOME && motionInstant ? '' : undefined}
           hidden={mainView !== MAIN_VIEW.HOME}
-          inert={mainView !== MAIN_VIEW.HOME || recentSheetOpen || motionPhase !== 'idle'}
+          inert={mainView !== MAIN_VIEW.HOME || recentSheetOpen || Boolean(ranking.session) || motionPhase !== 'idle'}
           tabIndex={-1}
           onTransitionEnd={handleMainViewTransitionEnd}
         >
@@ -385,7 +408,7 @@ function App() {
           data-motion-direction={mainView === MAIN_VIEW.SHELF ? motionDirection : undefined}
           data-motion-instant={mainView === MAIN_VIEW.SHELF && motionInstant ? '' : undefined}
           hidden={mainView !== MAIN_VIEW.SHELF}
-          inert={mainView !== MAIN_VIEW.SHELF || recentSheetOpen || motionPhase !== 'idle'}
+          inert={mainView !== MAIN_VIEW.SHELF || recentSheetOpen || Boolean(ranking.session) || motionPhase !== 'idle'}
           tabIndex={-1}
           onTransitionEnd={handleMainViewTransitionEnd}
         >
@@ -413,6 +436,27 @@ function App() {
             uploadProgress={uploadProgress}
           />
         </div>
+        <div
+          ref={statisticsViewRef}
+          className="main-view"
+          data-main-view={MAIN_VIEW.STATISTICS}
+          data-motion-phase={mainView === MAIN_VIEW.STATISTICS ? motionPhase : undefined}
+          data-motion-direction={mainView === MAIN_VIEW.STATISTICS ? motionDirection : undefined}
+          data-motion-instant={mainView === MAIN_VIEW.STATISTICS && motionInstant ? '' : undefined}
+          hidden={mainView !== MAIN_VIEW.STATISTICS}
+          inert={mainView !== MAIN_VIEW.STATISTICS || recentSheetOpen || Boolean(ranking.session) || motionPhase !== 'idle'}
+          tabIndex={-1}
+          onTransitionEnd={handleMainViewTransitionEnd}
+        >
+          <ReadingStatistics model={ranking.session
+            ? { ...readingStatistics, statistics: ranking.session.statistics, title: ranking.session.title }
+            : readingStatistics} onOpenRanking={opener => {
+              if (isMainNavigationBlocked || motionPhase !== 'idle' || !readingStatistics.statistics) return;
+              ranking.open(readingStatistics.statistics, readingStatistics.title, opener);
+            }} />
+        </div>
+        {ranking.session ? <StatisticsRankingDetail ranking={ranking.session.statistics.ranking}
+          title={ranking.session.title} phase={ranking.session.phase} onClose={ranking.close} /> : null}
         {isMainNavigationBlocked ? null : (
           <MainNavigation activeView={mainView} visualView={requestedView}
             onSelectView={handleSelectMainView} />

@@ -51,6 +51,8 @@ export const READING_STATS_DAY_COUNT = 7;
 export const MAX_ACTIVITY_BATCH_EVENTS = 50;
 /** One event covers at most one local day of foreground time. */
 export const MAX_ACTIVITY_DURATION_MS = 86_400_000;
+/** An event that names its local hour covers at most one hour of foreground time. */
+export const MAX_ACTIVITY_HOUR_DURATION_MS = 3_600_000;
 export const MAX_ACTIVITY_SECTIONS = 32;
 export const MAX_SECTION_INTERVALS = 256;
 export const MAX_SECTION_INDEX = 100_000;
@@ -70,8 +72,8 @@ export const ACTIVITY_EVENT_ID_PATTERN = /^[A-Za-z0-9_-]{8,64}$/;
  */
 export const TEXT_SIGNATURE_PATTERN = /^[A-Za-z0-9._:-]{8,128}$/;
 
-const MIN_CALENDAR_YEAR = 1900;
-const MAX_CALENDAR_YEAR = 9999;
+export const MIN_CALENDAR_YEAR = 1900;
+export const MAX_CALENDAR_YEAR = 9999;
 
 // ---------------------------------------------------------------------------
 // Wire types
@@ -116,6 +118,13 @@ export interface ReadingActivityEvent {
   readonly occurredAt: string;
   /** Integer foreground milliseconds, `0` for observation-only records. */
   readonly durationMs: number;
+  /**
+   * Browser-local hour (`0`–`23`) of `localDate` to which `durationMs` belongs.
+   * Absent on events captured before hourly attribution existed; those only
+   * count towards their day. When present, `durationMs` is at most
+   * `MAX_ACTIVITY_HOUR_DURATION_MS`. A repeated DST hour shares one label.
+   */
+  readonly localHour?: number;
   /** At most one entry per `sectionIndex`. */
   readonly sections: readonly ViewedSectionCoverage[];
   readonly completion: ReadingCompletionObservation | null;
@@ -245,7 +254,8 @@ const LOCAL_DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
 const INSTANT_PATTERN =
   /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/;
 
-function daysInMonth(year: number, month: number): number {
+/** Days of a calendar month; `month` is `1`–`12`. */
+export function daysInMonth(year: number, month: number): number {
   return new Date(Date.UTC(year, month, 0)).getUTCDate();
 }
 
@@ -277,7 +287,8 @@ export function formatLocalDate(date: Date): string {
   return `${year}-${month}-${day}`;
 }
 
-function requireLocalDateParts(localDate: string): [number, number, number] {
+/** `[year, month, day]` of a valid local date; throws `WireDecodeError` otherwise. */
+export function requireLocalDateParts(localDate: string): [number, number, number] {
   if (!isLocalDate(localDate)) {
     throw new WireDecodeError(`${localDate} is not a YYYY-MM-DD calendar date`);
   }
@@ -364,7 +375,7 @@ export function countIntervalCharacters(intervals: readonly CharacterInterval[])
 // Decoders
 // ---------------------------------------------------------------------------
 
-function requireSafeInteger(value: unknown, context: string, min: number, max: number): number {
+export function requireSafeInteger(value: unknown, context: string, min: number, max: number): number {
   const integer = requireInteger(value, context);
   if (!Number.isSafeInteger(integer) || integer < min || integer > max) {
     throw new WireDecodeError(`${context} must be an integer between ${min} and ${max}`);
@@ -372,25 +383,25 @@ function requireSafeInteger(value: unknown, context: string, min: number, max: n
   return integer;
 }
 
-function requireNonNegativeInteger(value: unknown, context: string): number {
+export function requireNonNegativeInteger(value: unknown, context: string): number {
   return requireSafeInteger(value, context, 0, Number.MAX_SAFE_INTEGER);
 }
 
-function requireString(value: unknown, context: string): string {
+export function requireString(value: unknown, context: string): string {
   if (typeof value !== 'string') {
     throw new WireDecodeError(`${context} must be a string`);
   }
   return value;
 }
 
-function requireLocalDate(value: unknown, context: string): string {
+export function requireLocalDate(value: unknown, context: string): string {
   if (!isLocalDate(value)) {
     throw new WireDecodeError(`${context} must be a YYYY-MM-DD calendar date`);
   }
   return value;
 }
 
-function requireIsoInstant(value: unknown, context: string): string {
+export function requireIsoInstant(value: unknown, context: string): string {
   if (!isIsoInstant(value)) {
     throw new WireDecodeError(`${context} must be an ISO 8601 instant with a timezone`);
   }
@@ -515,7 +526,9 @@ function decodeCompletion(value: unknown, context: string): ReadingCompletionObs
 
 /**
  * Decodes one activity event. A missing `sections` means none; a missing
- * `completion` means `null`. Everything else is required and strictly typed.
+ * `completion` means `null`; a missing `localHour` leaves the property out
+ * (an event captured before hourly attribution). Everything else is required
+ * and strictly typed: a present `localHour` must be an integer `0`–`23`.
  */
 export function decodeReadingActivityEvent(value: unknown): ReadingActivityEvent {
   const event = requireRecord(value, 'activity event');
@@ -534,12 +547,20 @@ export function decodeReadingActivityEvent(value: unknown): ReadingActivityEvent
     throw new WireDecodeError('sections must list each sectionIndex once');
   }
 
+  const localHour =
+    event['localHour'] === undefined
+      ? undefined
+      : requireSafeInteger(event['localHour'], 'localHour', 0, 23);
+  const maxDurationMs =
+    localHour === undefined ? MAX_ACTIVITY_DURATION_MS : MAX_ACTIVITY_HOUR_DURATION_MS;
+
   return {
     id,
     bookId: requireSafeInteger(event['bookId'], 'bookId', 1, Number.MAX_SAFE_INTEGER),
     localDate: requireLocalDate(event['localDate'], 'localDate'),
     occurredAt: requireIsoInstant(event['occurredAt'], 'occurredAt'),
-    durationMs: requireSafeInteger(event['durationMs'], 'durationMs', 0, MAX_ACTIVITY_DURATION_MS),
+    durationMs: requireSafeInteger(event['durationMs'], 'durationMs', 0, maxDurationMs),
+    ...(localHour === undefined ? {} : { localHour }),
     sections,
     completion: decodeCompletion(event['completion'], 'completion'),
   };

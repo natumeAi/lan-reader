@@ -2,9 +2,10 @@
  * Reading Position and reading statistics routes.
  *
  * A Reading Position belongs to one Book, so the named routes (`/recent`,
- * `/stats`, `/goals`, `/activity`) are registered before `/:bookId` and the
- * upsert below is keyed on `book_id` alone. `PUT` writes the position the
- * reader is at, which may move backwards — it is not a furthest-read marker.
+ * `/stats`, `/statistics`, `/goals`, `/activity`) are registered before
+ * `/:bookId` and the upsert below is keyed on `book_id` alone. `PUT` writes
+ * the position the reader is at, which may move backwards — it is not a
+ * furthest-read marker.
  * Statistics are separate from positions and never change them.
  */
 import type { Response } from 'express';
@@ -14,6 +15,7 @@ import type {
   ReadingActivityOutcome,
   ReadingGoalsResponse,
   ReadingPositionResponse,
+  ReadingStatisticsResponse,
   ReadingStatsResponse,
   RecentReadingResponse,
 } from '@lan-reader/shared';
@@ -24,6 +26,7 @@ import {
   decodeReadingActivityBatchEntries,
   decodeReadingActivityEvent,
   decodeReadingGoalsUpdate,
+  decodeReadingStatisticsQuery,
   isLocalDate,
   shiftLocalDate,
 } from '@lan-reader/shared';
@@ -35,6 +38,7 @@ import {
   getExactProgress,
   listRecentReadingEntries,
 } from '../services/readingLibrary.js';
+import { getReadingStatistics } from '../services/readingStatistics.js';
 import {
   getReadingStats,
   recordReadingActivity,
@@ -100,6 +104,24 @@ router.get('/stats', (req, res: Response<ReadingStatsResponse>, next) => {
     const bookId = rawBookId === undefined ? null : parseBookId(rawBookId);
     if (bookId !== null && (!Number.isSafeInteger(bookId) || typeof rawBookId !== 'string')) throw badRequest('Invalid bookId');
     res.json({ stats: getReadingStats(db, date, bookId) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/reading/statistics?dimension=day|week|month|year|all&anchor=YYYY-MM-DD&today=YYYY-MM-DD
+//
+// `today` is the reader's browser-local date; `anchor` selects the period and
+// is ignored by `all`. An invalid query or an unrepresentable period is a 400.
+router.get('/statistics', (req, res: Response<ReadingStatisticsResponse>, next) => {
+  try {
+    const db = requireDatabase(req);
+    const query = decodeRequest(
+      () => decodeReadingStatisticsQuery(req.query),
+      'INVALID_STATISTICS_QUERY',
+    );
+
+    res.json({ statistics: getReadingStatistics(db, query) });
   } catch (err) {
     next(err);
   }

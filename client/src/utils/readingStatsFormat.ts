@@ -6,6 +6,7 @@
  * here reads the network, storage or the reader.
  */
 import type { ReadingDayDto } from '@lan-reader/shared';
+import type { ReadingActivityStatus } from './activityDelivery.js';
 import {
   MAX_ANNUAL_BOOK_GOAL,
   MAX_DAILY_GOAL_MINUTES,
@@ -148,4 +149,18 @@ export function parseGoalInput(kind: GoalKind, raw: string): GoalInputResult {
 export function msUntilNextLocalMidnight(now: Date): number {
   const next = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 0, 0);
   return Math.max(1, next.getTime() - now.getTime());
+}
+
+/**
+ * Delivery warning shown by every statistics view (首页 and 统计), or `''`. Only permanent
+ * rejections and memory-only pending records are surfaced; ordinary retries are silent.
+ */
+export function deliveryNoticeOf(status: ReadingActivityStatus): string {
+  if (status.permanentErrorCount > 0) {
+    return `有 ${status.permanentErrorCount} 条阅读记录被服务器拒绝，未计入统计`;
+  }
+  if (!status.isDurable && status.pendingCount > 0) {
+    return '阅读记录暂存于内存，尚未同步；刷新或关闭页面前请保持联网';
+  }
+  return '';
 }

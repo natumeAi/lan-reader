@@ -10,7 +10,8 @@
   --main-navigation-gap: max(12px, env(safe-area-inset-bottom));
 }
 
-body[data-main-view="home"] {
+body[data-main-view="home"],
+body[data-main-view="statistics"] {
   background: var(--home-canvas);
 }
 
@@ -233,9 +234,9 @@ body[data-main-view="home"] {
   bottom: var(--main-navigation-gap);
   z-index: 40;
   display: grid;
-  width: min(calc(100% - 36px), 340px);
+  width: min(calc(100% - 36px), 400px);
   height: var(--main-navigation-height);
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 6px;
   padding: 5px;
   border-radius: 999px;
@@ -283,15 +284,14 @@ body[data-main-view="home"] {
   top: 5px;
   bottom: 5px;
   left: 5px;
-  width: calc((100% - 16px) / 2);
+  /* Three columns: 2 × 5px padding plus 2 × 6px gaps. */
+  width: calc((100% - 22px) / 3);
   border-radius: 999px;
   background: rgba(118, 118, 128, 0.16);
   pointer-events: none;
+  /* --main-navigation-index is the visual target's position in MAIN_VIEW_ORDER. */
+  transform: translateX(calc(var(--main-navigation-index, 0) * (100% + 6px)));
   transition: transform var(--main-navigation-duration) cubic-bezier(.22, 1, .36, 1);
-}
-
-.main-navigation[data-visual-view="shelf"] .main-navigation-pill {
-  transform: translateX(calc(100% + 6px));
 }
 
 .main-navigation-item:focus-visible {
