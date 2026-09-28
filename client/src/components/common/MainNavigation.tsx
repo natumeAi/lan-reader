@@ -3,6 +3,7 @@ import { MAIN_VIEW } from '../../utils/mainViewPreference.js';
 
 interface MainNavigationProps {
   activeView: MainView;
+  visualView: MainView;
   onSelectView: (view: MainView) => void;
 }
 
@@ -38,18 +39,23 @@ const destinations = [
 ] as const;
 
 /** Bottom tab bar for the two main views. Selection is local state, not browser history. */
-export function MainNavigation({ activeView, onSelectView }: MainNavigationProps) {
+export function MainNavigation({ activeView, visualView, onSelectView }: MainNavigationProps) {
   return (
-    <nav className="main-navigation" aria-label="主导航">
+    <nav className="main-navigation" aria-label="主导航" data-visual-view={visualView}>
+      <span className="main-navigation-pill" aria-hidden="true" />
       {destinations.map(({ view, label, Icon }) => {
         const active = view === activeView;
         return (
           <button
             key={view}
-            className={active ? 'main-navigation-item is-active' : 'main-navigation-item'}
+            className={view === visualView ? 'main-navigation-item is-active' : 'main-navigation-item'}
+            data-main-navigation-view={view}
             type="button"
             aria-current={active ? 'page' : undefined}
-            onClick={() => onSelectView(view)}
+            onClick={(event) => {
+              event.currentTarget.focus({ preventScroll: true });
+              onSelectView(view);
+            }}
           >
             <Icon />
             <span>{label}</span>

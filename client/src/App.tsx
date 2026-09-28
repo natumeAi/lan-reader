@@ -2,6 +2,7 @@ import type { Book, Folder } from './types/library.js';
 import type { MainView } from './utils/mainViewPreference.js';
 import type { GoalKind } from './utils/readingStatsFormat.js';
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import type { CSSProperties, TransitionEvent } from 'react';
 import {
   DndContext,
   DragOverlay,
@@ -18,7 +19,7 @@ import { ReadingHome } from './components/home/ReadingHome.js';
 import { useBookDeletion } from './hooks/useBookDeletion.js';
 import { useFolderState } from './hooks/useFolderState.js';
 import { useLibraryDrag } from './hooks/useLibraryDrag.js';
-import { useMainView } from './hooks/useMainView.js';
+import { MAIN_VIEW_PHASE_MS, useMainView } from './hooks/useMainView.js';
 import { useReaderSession } from './hooks/useReaderSession.js';
 import { useReadingActivityDelivery } from './hooks/useReadingActivityDelivery.js';
 import { useReadingDashboard } from './hooks/useReadingDashboard.js';
@@ -51,13 +52,23 @@ function App() {
     readingBookOrigin,
     restoreReaderBook,
   } = useReaderSession();
-  const { mainView, selectMainView } = useMainView({ readerActive: Boolean(readingBook) });
+  const {
+    mainView,
+    requestedView,
+    motionPhase,
+    motionDirection,
+    motionGeneration,
+    motionInstant,
+    selectMainView,
+    finishPhase,
+    setNavigationBlocked,
+  } = useMainView({ readerActive: Boolean(readingBook), reducedMotion });
   // Delivers reading activity independently of any open reader. Only the dashboard observes
   // its status (while active); the shell never subscribes.
   const readingActivityDelivery = useReadingActivityDelivery();
   const homeViewRef = useRef<HTMLDivElement>(null);
   const shelfViewRef = useRef<HTMLDivElement>(null);
-  const previousMainViewRef = useRef(mainView);
+  const focusHandoffRef = useRef<HTMLButtonElement | null>(null);
   const {
     beginShelfProjection,
     catalogBooks,
@@ -99,6 +110,7 @@ function App() {
     saveGoals: saveReadingGoals,
   } = readingDashboard;
   const [recentSheetOpen, setRecentSheetOpen] = useState(false);
+  const handleRecentSheetClosed = useCallback(() => setRecentSheetOpen(false), []);
   const handleFolderRenamed = useCallback((renamedFolder: Folder) => {
     replaceShelfFolder(renamedFolder);
     void loadShelf();
@@ -196,6 +208,10 @@ function App() {
     activeDragPreview,
   );
 
+  useLayoutEffect(() => {
+    setNavigationBlocked(isMainNavigationBlocked);
+  }, [isMainNavigationBlocked, setNavigationBlocked]);
+
   const handleSaveReadingGoal = useCallback((kind: GoalKind, value: number) => (
     saveReadingGoals(kind === 'daily' ? { dailyMinutes: value } : { annualBooks: value })
   ), [saveReadingGoals]);
@@ -206,26 +222,42 @@ function App() {
   }, [isMainNavigationBlocked, selectMainView]);
 
   const handleOpenShelf = useCallback(() => {
-    handleSelectMainView(MAIN_VIEW.SHELF);
-  }, [handleSelectMainView]);
-
-  // A control inside the view that was just hidden loses focus with it (for example the
-  // empty-state shelf action). Hand focus to the newly shown view instead of the document.
-  useLayoutEffect(() => {
-    if (previousMainViewRef.current === mainView) return;
-    previousMainViewRef.current = mainView;
-    const activeElement = document.activeElement;
-    const shownView = mainView === MAIN_VIEW.HOME ? homeViewRef.current : shelfViewRef.current;
-    const hiddenView = mainView === MAIN_VIEW.HOME ? shelfViewRef.current : homeViewRef.current;
-    if (!activeElement || activeElement === document.body || hiddenView?.contains(activeElement)) {
-      shownView?.focus({ preventScroll: true });
+    if (isMainNavigationBlocked || motionPhase !== 'idle') return;
+    const source = homeViewRef.current;
+    if (source?.contains(document.activeElement)) {
+      const button = document.querySelector<HTMLButtonElement>(
+        `[data-main-navigation-view="${MAIN_VIEW.SHELF}"]`,
+      );
+      button?.focus({ preventScroll: true });
+      focusHandoffRef.current = button;
     }
-  }, [mainView]);
+    handleSelectMainView(MAIN_VIEW.SHELF);
+  }, [handleSelectMainView, isMainNavigationBlocked, motionPhase]);
+
+  // A home CTA hands focus through the stable navigation button while both moving pages
+  // are inert. Do not steal focus if the user moved it during the transition.
+  useLayoutEffect(() => {
+    if (motionPhase !== 'idle' || !focusHandoffRef.current) return;
+    const anchor = focusHandoffRef.current;
+    focusHandoffRef.current = null;
+    if (isMainNavigationBlocked || document.activeElement !== anchor) return;
+    const shownView = mainView === MAIN_VIEW.HOME ? homeViewRef.current : shelfViewRef.current;
+    shownView?.focus({ preventScroll: true });
+  }, [isMainNavigationBlocked, mainView, motionPhase]);
+
+  const handleMainViewTransitionEnd = useCallback((event: TransitionEvent<HTMLDivElement>) => {
+    if (event.target !== event.currentTarget || event.propertyName !== 'opacity') return;
+    if (motionPhase !== 'exiting' && motionPhase !== 'entering' && motionPhase !== 'restoring') return;
+    // A transitionend queued by the page we just hid must not finish the new page's entry.
+    if (event.currentTarget.dataset.mainView !== mainView || event.currentTarget.hidden) return;
+    finishPhase(motionPhase, motionGeneration);
+  }, [finishPhase, mainView, motionGeneration, motionPhase]);
 
   // Stable so the memoized shelf cards survive a DndContext re-render.
   const handleOpenBook = useCallback((book: Book, originRect: DOMRect | null) => {
+    if (motionPhase !== 'idle') return;
     openBook(book, originRect, { disabled: isSavingOrder });
-  }, [isSavingOrder, openBook]);
+  }, [isSavingOrder, motionPhase, openBook]);
 
   const handleReaderProgressSettled = useCallback(() => {
     reapplyPendingReadingPositions();
@@ -238,6 +270,7 @@ function App() {
   }, [clearReaderBookIfDeleted, loadShelf]);
 
   const handleOpenFolder = useCallback((folder: Folder, originRect: DOMRect | null) => {
+    if (motionPhase !== 'idle') return;
     openFolderFromShelf(folder, {
       books: folderBooksByFolderId.get(folder.id) || [],
       ignoreUntil: getFolderOpenIgnoreUntil(),
@@ -250,6 +283,7 @@ function App() {
     getFolderOpenIgnoreUntil,
     isSavingOrder,
     loadShelf,
+    motionPhase,
     openFolderFromShelf,
   ]);
 
@@ -299,9 +333,13 @@ function App() {
       onDragCancel={handleDragCancel}
       onDragEnd={handleDragEnd}
       onDragMove={handleDragMove}
-      onDragStart={handleDragStart}
+      onDragStart={motionPhase === 'idle' ? handleDragStart : undefined}
     >
-      <main className="app-shell has-main-navigation" aria-label="EPUB Reader">
+      <main className="app-shell has-main-navigation" aria-label="EPUB Reader"
+        style={{
+          '--main-view-phase-duration': `${MAIN_VIEW_PHASE_MS}ms`,
+          '--main-navigation-duration': `${MAIN_VIEW_PHASE_MS * 2}ms`,
+        } as CSSProperties}>
         {/* Both views stay mounted so shelf search/view/sort, grid and scroll context survive
             a round trip. The hidden view is display:none and inert: it takes no focus, has no
             laid-out cover for reader transitions, and cannot start a drag. */}
@@ -309,9 +347,13 @@ function App() {
           ref={homeViewRef}
           className="main-view"
           data-main-view={MAIN_VIEW.HOME}
+          data-motion-phase={mainView === MAIN_VIEW.HOME ? motionPhase : undefined}
+          data-motion-direction={mainView === MAIN_VIEW.HOME ? motionDirection : undefined}
+          data-motion-instant={mainView === MAIN_VIEW.HOME && motionInstant ? '' : undefined}
           hidden={mainView !== MAIN_VIEW.HOME}
-          inert={mainView !== MAIN_VIEW.HOME || recentSheetOpen}
+          inert={mainView !== MAIN_VIEW.HOME || recentSheetOpen || motionPhase !== 'idle'}
           tabIndex={-1}
+          onTransitionEnd={handleMainViewTransitionEnd}
         >
           <ReadingHome
             catalogBooks={catalogBooks}
@@ -339,9 +381,13 @@ function App() {
           ref={shelfViewRef}
           className="main-view"
           data-main-view={MAIN_VIEW.SHELF}
+          data-motion-phase={mainView === MAIN_VIEW.SHELF ? motionPhase : undefined}
+          data-motion-direction={mainView === MAIN_VIEW.SHELF ? motionDirection : undefined}
+          data-motion-instant={mainView === MAIN_VIEW.SHELF && motionInstant ? '' : undefined}
           hidden={mainView !== MAIN_VIEW.SHELF}
-          inert={mainView !== MAIN_VIEW.SHELF || recentSheetOpen}
+          inert={mainView !== MAIN_VIEW.SHELF || recentSheetOpen || motionPhase !== 'idle'}
           tabIndex={-1}
+          onTransitionEnd={handleMainViewTransitionEnd}
         >
           <LibraryHome
             catalogBooks={catalogBooks}
@@ -368,10 +414,11 @@ function App() {
           />
         </div>
         {isMainNavigationBlocked ? null : (
-          <MainNavigation activeView={mainView} onSelectView={handleSelectMainView} />
+          <MainNavigation activeView={mainView} visualView={requestedView}
+            onSelectView={handleSelectMainView} />
         )}
         {recentSheetOpen ? <RecentReadingSheet items={recentReadingItems}
-          onClose={() => setRecentSheetOpen(false)}
+          onClose={handleRecentSheetClosed}
           onOpenBook={(book, rect) => { setRecentSheetOpen(false); handleOpenBook(book, rect); }} /> : null}
         <FolderOverlay
           books={folderBooks}

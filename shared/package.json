@@ -1,6 +1,6 @@
 {
   "name": "@lan-reader/shared",
-  "version": "2.3.0",
+  "version": "2.4.0",
   "private": true,
   "type": "module",
   "description": "Browser-safe wire contracts shared by the client and the server.",

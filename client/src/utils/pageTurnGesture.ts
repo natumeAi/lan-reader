@@ -6,9 +6,15 @@ export const PAGE_TURN_RULES = Object.freeze({
   distanceMaxPx: 160,
   velocityThresholdPxPerMs: 0.45,
   velocityWindowMs: 100,
-  edgeDampingMaxPx: 28,
-  edgeDampingFactor: 0.25,
-  tapDurationMs: 360,
+  /** Rubber band: initial slope and asymptotic limit of the boundary distance. */
+  edgeRubberCoefficient: 0.35,
+  edgeRubberScalePx: 60,
+  tapDurationMs: 420,
+  /** Settle launch slope (start speed / average speed) of taps and slow releases. */
+  turnLaunch: 1.3,
+  /** Highest monotone launch slope; equals ease-out cubic. */
+  settleLaunchMax: 3,
+  settleFlickMinMs: 120,
   dragCatchUpDurationMs: 80,
   settleDurationMinMs: 260,
   settleDurationMaxMs: 420,
@@ -68,11 +74,9 @@ export function clampDragDistance(distanceX: number, pageWidth: number) {
 }
 
 export function dampBoundaryDistance(distanceX: number) {
-  const damped = Math.min(
-    Math.abs(distanceX) * PAGE_TURN_RULES.edgeDampingFactor,
-    PAGE_TURN_RULES.edgeDampingMaxPx,
-  );
-  return Math.sign(distanceX) * damped;
+  const scale = PAGE_TURN_RULES.edgeRubberScalePx;
+  const stretch = Math.abs(distanceX) * PAGE_TURN_RULES.edgeRubberCoefficient / scale;
+  return Math.sign(distanceX) * (1 - 1 / (stretch + 1)) * scale;
 }
 
 export function getSettleDuration(remainingDistance: number, pageWidth: number) {
@@ -83,6 +87,26 @@ export function getSettleDuration(remainingDistance: number, pageWidth: number) 
   return Math.round(PAGE_TURN_RULES.settleDurationMinMs + durationRange * ratio);
 }
 
+/**
+ * Settle duration and launch slope that continue the release velocity
+ * (px/ms, already projected onto the settle direction). A flick the longest
+ * monotone launch cannot match shortens the settle instead.
+ */
+export function getSettleMotion({ remaining, width, velocity }: { remaining: number; width: number; velocity: number }) {
+  const speed = Number.isFinite(velocity) && velocity > 0 ? velocity : 0;
+  const distance = Math.abs(remaining);
+  const duration = getSettleDuration(distance, width);
+  if (!Number.isFinite(distance) || distance <= 0) return { duration, launch: PAGE_TURN_RULES.turnLaunch };
+  const matched = speed * duration / distance;
+  if (matched > PAGE_TURN_RULES.settleLaunchMax) {
+    return {
+      duration: Math.max(PAGE_TURN_RULES.settleFlickMinMs, Math.round(PAGE_TURN_RULES.settleLaunchMax * distance / speed)),
+      launch: PAGE_TURN_RULES.settleLaunchMax,
+    };
+  }
+  return { duration, launch: Math.max(PAGE_TURN_RULES.turnLaunch, matched) };
+}
+
 export function getTapZone(clientX: number, left: number, width: number) {
   const ratio = width > 0 ? (clientX - left) / width : 0.5;
   if (ratio < 1 / 3) return 'prev';
@@ -90,23 +114,35 @@ export function getTapZone(clientX: number, left: number, width: number) {
   return 'center';
 }
 
+/**
+ * Cubic Hermite ease from 0 to 1 with start slope `launch` and end slope 0.
+ * Monotone without overshoot for launch in [0, 3]; launch 3 is ease-out cubic.
+ */
+export function hermiteEase(launch: number, progress: number) {
+  const v = clamp(Number.isFinite(launch) ? launch : PAGE_TURN_RULES.settleLaunchMax, 0, PAGE_TURN_RULES.settleLaunchMax);
+  const p = clamp(progress, 0, 1);
+  return v * (p ** 3 - 2 * p ** 2 + p) + 3 * p ** 2 - 2 * p ** 3;
+}
+
 export function easeOutCubic(progress: number) {
   const value = clamp(progress, 0, 1);
   return 1 - ((1 - value) ** 3);
 }
 
-export function sampleEaseOutCubicKeyframes(maxErrorRatio = 0.0025) {
+/** Adaptive linear keyframes of `hermiteEase(launch, ·)` within `maxErrorRatio`. */
+export function sampleEaseKeyframes(launch: number = PAGE_TURN_RULES.settleLaunchMax, maxErrorRatio = 0.0025) {
   const tolerance = Number.isFinite(maxErrorRatio) && maxErrorRatio > 0
     ? maxErrorRatio
     : 0.0025;
-  const points = [{ offset: 0, value: easeOutCubic(0) }];
+  const ease = (progress: number) => hermiteEase(launch, progress);
+  const points = [{ offset: 0, value: ease(0) }];
   const appendSegment = (left: number, right: number, depth: number): void => {
-    const leftValue = easeOutCubic(left);
-    const rightValue = easeOutCubic(right);
+    const leftValue = ease(left);
+    const rightValue = ease(right);
     const exceedsTolerance = [0.25, 0.5, 0.75].some((ratio) => {
       const offset = left + (right - left) * ratio;
       const linearValue = leftValue + (rightValue - leftValue) * ratio;
-      return Math.abs(easeOutCubic(offset) - linearValue) > tolerance;
+      return Math.abs(ease(offset) - linearValue) > tolerance;
     });
 
     if (exceedsTolerance && depth < 12) {
@@ -121,4 +157,8 @@ export function sampleEaseOutCubicKeyframes(maxErrorRatio = 0.0025) {
 
   appendSegment(0, 1, 0);
   return points;
+}
+
+export function sampleEaseOutCubicKeyframes(maxErrorRatio = 0.0025) {
+  return sampleEaseKeyframes(PAGE_TURN_RULES.settleLaunchMax, maxErrorRatio);
 }
