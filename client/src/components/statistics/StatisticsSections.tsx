@@ -2,6 +2,7 @@ import type { ReadingStatisticsDto } from '@lan-reader/shared';
 import { StatisticsOverviewCard } from './StatisticsOverviewCard.js';
 import { StatisticsTrendCard } from './StatisticsTrendCard.js';
 import { StatisticsRankingCard } from './StatisticsRankingCard.js';
+import { StatisticsCalendarCard } from './StatisticsCalendarCard.js';
 
 interface StatisticsSectionsProps {
   /** The decoded response of exactly the selected range; every section reads only this. */
@@ -19,8 +20,7 @@ export function StatisticsSections({ statistics, onOpenRanking }: StatisticsSect
       <StatisticsOverviewCard statistics={statistics} />
       <StatisticsTrendCard statistics={statistics} />
       <StatisticsRankingCard ranking={statistics.ranking} onOpen={onOpenRanking} />
-      {/* Mount point: 月度阅读日历 (calendar subtask). Render it here from
-          `statistics.calendar`, which is non-null only for the month dimension. */}
+      <StatisticsCalendarCard statistics={statistics} />
     </>
   );
 }

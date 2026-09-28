@@ -9,8 +9,8 @@ import { formatLocalDate, resolveStatisticsPeriod, shiftStatisticsAnchor } from 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getReadingStatistics } from '../api/readingApi.js';
 import { errorMessage, isAbortError } from '../api/transport.js';
-import { deliveryNoticeOf, msUntilNextLocalMidnight } from '../utils/readingStatsFormat.js';
-import { formatStatisticsTitle } from '../utils/statisticsFormat.js';
+import { msUntilNextLocalMidnight } from '../utils/readingStatsFormat.js';
+import { formatStatisticsTitle, statisticsDeliveryNoticeOf } from '../utils/statisticsFormat.js';
 
 /** The chosen dimension and a local date inside the chosen period. */
 export interface StatisticsSelection {
@@ -52,7 +52,7 @@ export interface ReadingStatisticsState {
   isRefreshing: boolean;
   /** Latest failure for the current selection (also set while older matching data is kept). */
   error: string;
-  /** Delivery warning shared with 首页, or `''`. */
+  /** Delivery warning and pending synchronization status, or `''`. */
   deliveryNotice: string;
   canGoPrevious: boolean;
   canGoNext: boolean;
@@ -268,7 +268,7 @@ export function useReadingStatistics({
     const onDeliveryStatus = () => {
       if (!source) return;
       const status = source.getStatus();
-      setDeliveryNotice(deliveryNoticeOf(status));
+      setDeliveryNotice(statisticsDeliveryNoticeOf(status));
       const acceptedAt = status.lastAcceptedAt;
       if (acceptedAt !== null && acceptedAt !== acceptedSeenRef.current) refresh();
     };

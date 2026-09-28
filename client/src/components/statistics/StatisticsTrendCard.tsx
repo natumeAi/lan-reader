@@ -73,7 +73,7 @@ export function StatisticsTrendCard({ statistics }: StatisticsTrendCardProps) {
         </div>
       </div>
       {gapNotice ? <p className="statistics-trend-note">{gapNotice}</p> : null}
-      {isEmpty && !gapNotice ? <p className="statistics-trend-note">本期没有阅读记录</p> : null}
+      {isEmpty && !gapNotice ? <p className="statistics-trend-note">本期没有阅读时长记录</p> : null}
     </HomeCard>
   );
 }

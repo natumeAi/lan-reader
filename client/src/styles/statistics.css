@@ -1,4 +1,4 @@
-/* 统计 page: range tabs, period navigation, overview metrics and the trend chart. Cards reuse
+/* 统计 page: range tabs, period navigation, overview, trend, ranking and calendar. Cards reuse
    the home card frame from home.css; everything here is scoped to .reading-statistics. The
    page never adds a transform/containment wrapper around .main-view (see home.css). */
 
@@ -531,4 +531,88 @@
 
 @media (prefers-reduced-motion: reduce) {
   .statistics-ranking-detail { transition: none; transform: none; }
+}
+
+/* ---------- Monthly reading calendar ---------- */
+.statistics-calendar {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: separate;
+  border-spacing: 0 10px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.statistics-calendar th {
+  padding: 0 2px 2px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.statistics-calendar td {
+  padding: 0 2px;
+  vertical-align: top;
+}
+
+.statistics-calendar-day {
+  position: relative;
+  width: 100%;
+  max-width: 80px;
+  /* Date (21.6px) + two duration lines (32.4px) + a 4px gap at narrow widths. */
+  min-height: 58px;
+  aspect-ratio: 2 / 3;
+  margin: 0 auto;
+  overflow: hidden;
+  border-radius: 5px;
+}
+
+.statistics-calendar-cover.book-cover {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  box-shadow: none;
+}
+
+.statistics-calendar-date {
+  position: relative;
+  z-index: 2;
+  display: block;
+  padding: 3px 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.2;
+}
+
+.statistics-calendar-day.has-reading .statistics-calendar-date {
+  color: #fff;
+  background: linear-gradient(rgba(0, 0, 0, 0.76), rgba(0, 0, 0, 0));
+  text-shadow: 0 1px 2px #000;
+}
+
+.statistics-calendar-duration {
+  position: absolute;
+  z-index: 2;
+  inset: auto 0 0;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0 2px;
+  padding: 4px 1px 2px;
+  color: #fff;
+  background: linear-gradient(rgba(0, 0, 0, 0), rgba(0, 0, 0, 0.9));
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1.2;
+  text-shadow: 0 1px 2px #000;
+}
+
+.statistics-calendar-duration > span { white-space: nowrap; }
+
+@media (min-width: 720px) {
+  .statistics-calendar { border-spacing: 0 14px; }
+  .statistics-calendar th, .statistics-calendar-date { font-size: 15px; }
+  .statistics-calendar-duration { font-size: 13px; }
 }

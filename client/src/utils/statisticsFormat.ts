@@ -6,12 +6,16 @@
  * shared period arithmetic; nothing here reads the network, storage or the reader.
  */
 import type {
+  ReadingStatisticsDto,
+  StatisticsCalendarDayDto,
   StatisticsDimension,
   StatisticsMetricComparison,
   StatisticsMetricKey,
   StatisticsPeriod,
 } from '@lan-reader/shared';
-import { formatSpokenDuration } from './readingStatsFormat.js';
+import { formatLocalDate } from '@lan-reader/shared';
+import type { ReadingActivityStatus } from './activityDelivery.js';
+import { deliveryNoticeOf, formatSpokenDuration } from './readingStatsFormat.js';
 
 const SECOND_MS = 1000;
 const MINUTE_MS = 60 * SECOND_MS;
@@ -26,6 +30,68 @@ function dateParts(localDate: string) {
 
 function wholeSeconds(durationMs: number) {
   return Number.isFinite(durationMs) && durationMs > 0 ? Math.floor(durationMs / SECOND_MS) : 0;
+}
+
+export interface StatisticsCalendarCell {
+  day: StatisticsCalendarDayDto;
+  dayNumber: number;
+  accessible: string;
+}
+
+/** Lay out the decoded month's complete days, Monday first, with empty edge cells. */
+export function buildCalendarWeeks(days: readonly StatisticsCalendarDayDto[]): (StatisticsCalendarCell | null)[][] {
+  const first = days[0];
+  if (!first) return [];
+  const leading = (dateParts(first.date).weekday + 6) % 7;
+  const cells: (StatisticsCalendarCell | null)[] = Array.from({ length: leading }, () => null);
+  for (const day of days) {
+    const date = dateParts(day.date);
+    const dateLabel = `${date.year}年${date.month}月${date.day}日`;
+    const champion = day.champion;
+    const duration = champion && champion.durationMs < SECOND_MS
+      ? '不足 1 秒'
+      : formatSpokenDuration(champion?.durationMs ?? 0);
+    cells.push({
+      day,
+      dayNumber: date.day,
+      accessible: champion
+        ? `${dateLabel}，${champion.book.title || '未命名书籍'}，${duration}`
+        : dateLabel,
+    });
+  }
+  while (cells.length % 7) cells.push(null);
+  const weeks: (StatisticsCalendarCell | null)[][] = [];
+  for (let index = 0; index < cells.length; index += 7) weeks.push(cells.slice(index, index + 7));
+  return weeks;
+}
+
+/** Known historical completion gaps must remain visible beside the measured counts. */
+export function statisticsCoverageNotices({ range, coverage }: Pick<ReadingStatisticsDto, 'range' | 'coverage'>): string[] {
+  const notices: string[] = [];
+  const detailStart = coverage.detailTrackingStartedAt
+    ? formatLocalDate(new Date(coverage.detailTrackingStartedAt))
+    : null;
+  if (!detailStart) {
+    notices.push('历史重复读完明细可能不完整。');
+  } else if (range.start <= detailStart) {
+    notices.push(`重复读完明细自 ${detailStart} 起记录，较早的完成记录可能不完整。`);
+  }
+  const undated = coverage.undatedCompletedBooks;
+  if (undated > 0) {
+    notices.push(range.dimension === 'all'
+      ? `汇总包含 ${undated} 本没有完成日期的历史读完书籍，无法归入具体周期。`
+      : `${undated} 本历史读完书籍没有完成日期，仅计入“总”的汇总。`);
+  }
+  return notices;
+}
+
+/** The statistics page also names durable records still awaiting server confirmation. */
+export function statisticsDeliveryNoticeOf(status: ReadingActivityStatus): string {
+  const warning = deliveryNoticeOf(status);
+  const pending = status.isDurable && status.pendingCount > 0
+    ? `有 ${status.pendingCount} 条阅读记录${status.isDelivering ? '正在同步' : '待同步'}，统计可能尚未更新${status.isDelivering ? '' : '；联网后自动重试'}`
+    : '';
+  return [warning, pending].filter(Boolean).join('；');
 }
 
 // ---------------------------------------------------------------------------

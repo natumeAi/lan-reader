@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import type { ReadingStatisticsDto, StatisticsMetricKey } from '@lan-reader/shared';
 import { HomeCard } from '../home/HomeCard.js';
-import { formatMetricChange, joinValueParts, metricValueParts } from '../../utils/statisticsFormat.js';
+import { formatMetricChange, joinValueParts, metricValueParts, statisticsCoverageNotices } from '../../utils/statisticsFormat.js';
 
 function LineIcon({ children }: { children: ReactNode }) {
   return (
@@ -137,6 +137,9 @@ export function StatisticsOverviewCard({ statistics }: StatisticsOverviewCardPro
         })}
       </ul>
       <p className="statistics-footnote">字数与速度按去重后的新读正文估算，重读的内容不重复计入。</p>
+      {statisticsCoverageNotices(statistics).map(notice => (
+        <p key={notice} className="statistics-footnote statistics-coverage-note">{notice}</p>
+      ))}
     </HomeCard>
   );
 }
