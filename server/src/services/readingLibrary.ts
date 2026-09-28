@@ -40,6 +40,8 @@ export function formatProgress(
     progress: row.progress,
     chapterHref: row.chapter_href,
     chapterLabel: row.chapter_label,
+    chapterCount: row.chapter_count,
+    chapterIndex: row.chapter_index,
     updatedAt: row.updated_at,
   };
 }
@@ -57,6 +59,8 @@ export function listRecentReadingEntries(
               rp.progress AS progress_value,
               rp.chapter_href AS progress_chapter_href,
               rp.chapter_label AS progress_chapter_label,
+              rp.chapter_count AS progress_chapter_count,
+              rp.chapter_index AS progress_chapter_index,
               rp.updated_at AS progress_updated_at
        FROM reading_progress rp
        INNER JOIN books b ON b.id = rp.book_id
@@ -76,6 +80,8 @@ export function listRecentReadingEntries(
         progress: row.progress_value,
         chapter_href: row.progress_chapter_href,
         chapter_label: row.progress_chapter_label,
+        chapter_count: row.progress_chapter_count,
+        chapter_index: row.progress_chapter_index,
         updated_at: row.progress_updated_at,
       }),
     });

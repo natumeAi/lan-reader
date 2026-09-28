@@ -1,7 +1,7 @@
 import type { Book, Folder } from './types/library.js';
 import type { MainView } from './utils/mainViewPreference.js';
 import type { GoalKind } from './utils/readingStatsFormat.js';
-import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   DndContext,
   DragOverlay,
@@ -13,6 +13,7 @@ import { FixedDragPreview } from './components/bookshelf/FixedDragPreview.js';
 import { LibraryHome } from './components/bookshelf/LibraryHome.js';
 import { MainNavigation } from './components/common/MainNavigation.js';
 import { FolderOverlay } from './components/folders/FolderOverlay.js';
+import { RecentReadingSheet } from './components/home/RecentReadingSheet.js';
 import { ReadingHome } from './components/home/ReadingHome.js';
 import { useBookDeletion } from './hooks/useBookDeletion.js';
 import { useFolderState } from './hooks/useFolderState.js';
@@ -54,20 +55,6 @@ function App() {
   // Delivers reading activity independently of any open reader. Only the dashboard observes
   // its status (while active); the shell never subscribes.
   const readingActivityDelivery = useReadingActivityDelivery();
-  // 首页 statistics. Active only while 首页 is shown with no reader over it, so entering 首页
-  // and closing a reader onto it refresh, and delivery status is observed only then.
-  const readingDashboard = useReadingDashboard({
-    active: mainView === MAIN_VIEW.HOME && !readingBook,
-    delivery: readingActivityDelivery,
-  });
-  const {
-    closeGoalDialog,
-    goalDialog,
-    invalidate: invalidateReadingDashboard,
-    openGoalDialog,
-    refresh: refreshReadingDashboard,
-    saveGoals: saveReadingGoals,
-  } = readingDashboard;
   const homeViewRef = useRef<HTMLDivElement>(null);
   const shelfViewRef = useRef<HTMLDivElement>(null);
   const previousMainViewRef = useRef(mainView);
@@ -96,6 +83,22 @@ function App() {
     shelfItems,
     uploadProgress,
   } = useShelfData({ restoreReaderBook });
+  // 首页 statistics. Active only while 首页 is shown with no reader over it, so entering 首页
+  // and closing a reader onto it refresh, and delivery status is observed only then.
+  const readingDashboard = useReadingDashboard({
+    active: mainView === MAIN_VIEW.HOME && !readingBook,
+    delivery: readingActivityDelivery,
+    selectedBookId: recentReadingItems[0]?.book.id ?? null,
+  });
+  const {
+    closeGoalDialog,
+    goalDialog,
+    invalidate: invalidateReadingDashboard,
+    openGoalDialog,
+    refresh: refreshReadingDashboard,
+    saveGoals: saveReadingGoals,
+  } = readingDashboard;
+  const [recentSheetOpen, setRecentSheetOpen] = useState(false);
   const handleFolderRenamed = useCallback((renamedFolder: Folder) => {
     replaceShelfFolder(renamedFolder);
     void loadShelf();
@@ -189,6 +192,7 @@ function App() {
     isFolderClosing ||
     deleteCandidateBook ||
     goalDialog ||
+    recentSheetOpen ||
     activeDragPreview,
   );
 
@@ -306,10 +310,15 @@ function App() {
           className="main-view"
           data-main-view={MAIN_VIEW.HOME}
           hidden={mainView !== MAIN_VIEW.HOME}
-          inert={mainView !== MAIN_VIEW.HOME}
+          inert={mainView !== MAIN_VIEW.HOME || recentSheetOpen}
           tabIndex={-1}
         >
           <ReadingHome
+            catalogBooks={catalogBooks}
+            catalogError={catalogError}
+            hasLoadedCatalog={hasLoadedCatalog}
+            onRetryCatalog={loadCatalog}
+            onOpenRecent={() => setRecentSheetOpen(true)}
             goalDialog={goalDialog}
             hasLoadedRecentReading={hasLoadedShelf}
             onCloseGoalDialog={closeGoalDialog}
@@ -331,7 +340,7 @@ function App() {
           className="main-view"
           data-main-view={MAIN_VIEW.SHELF}
           hidden={mainView !== MAIN_VIEW.SHELF}
-          inert={mainView !== MAIN_VIEW.SHELF}
+          inert={mainView !== MAIN_VIEW.SHELF || recentSheetOpen}
           tabIndex={-1}
         >
           <LibraryHome
@@ -361,6 +370,9 @@ function App() {
         {isMainNavigationBlocked ? null : (
           <MainNavigation activeView={mainView} onSelectView={handleSelectMainView} />
         )}
+        {recentSheetOpen ? <RecentReadingSheet items={recentReadingItems}
+          onClose={() => setRecentSheetOpen(false)}
+          onOpenBook={(book, rect) => { setRecentSheetOpen(false); handleOpenBook(book, rect); }} /> : null}
         <FolderOverlay
           books={folderBooks}
           error={folderError}

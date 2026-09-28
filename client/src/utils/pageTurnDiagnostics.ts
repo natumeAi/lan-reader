@@ -1,28 +1,62 @@
 export interface DebugConfig { enabled: boolean; forceBackend: 'scroll' | 'compositor' | null }
 type FrameSampleSource = 'animation-frame' | 'visual-update';
-export type TurnPhase = 'prepare' | 'motion' | 'handoff' | 'busy';
-type TurnMilestone = 'neighborReady' | 'engineVerified' | 'committed';
+/** Application work spans, never compositor presentation. */
+export type TurnPhase = 'prepare' | 'drain' | 'drag' | 'catch-up' | 'motion' | 'settle' | 'handoff' | 'accept' | 'busy' | 'queue';
+type TurnMilestone = 'neighborReady' | 'previewLabel' | 'engineVerified' | 'committed';
 type InputOutcome = 'received' | 'accepted' | 'rejected' | 'committed';
+type Direction = 'next' | 'prev';
+export type InteractionSource = 'pointer' | 'keyboard' | 'tap' | 'command' | 'navigation';
+export type InteractionResult = 'committed' | 'boundary' | 'rebound' | 'cancelled' | 'failed' | 'blocked' | 'no-turn' | 'overflow';
+type StartedResult = InteractionResult;
+export type InteractionFallback = 'reduced-motion' | 'prepare-unavailable';
+type PreparationOutcome = 'ready' | 'unavailable' | 'stale';
+interface OriginKey { positionRevision: number; layoutGeneration: number; appearanceGeneration: number }
 interface PhaseSpan { phase: TurnPhase; start: number; end: number | null }
 interface DiagnosticRecord {
+  id: number; interactionId: number | null;
   action: string | null; backend: string | null; inputTime: number;
   firstVisualTime: number | null; animationStartTime: number | null; endTime: number | null;
-  frameTimestamps: number[]; cancelReason: string | null; samplerFrameId: number | null;
+  frameTimestamps: number[]; omittedFrameSamples: number; cancelReason: string | null; samplerFrameId: number | null;
   frameSampleSource: FrameSampleSource | 'mixed' | null;
-  phases: PhaseSpan[];
+  phases: PhaseSpan[]; omittedPhaseSpans: number;
+  /** Starts dropped at the span cap and not yet ended, so their end cannot close an older span. */
+  omittedOpenPhases: Partial<Record<TurnPhase, number>>;
   milestones: Partial<Record<TurnMilestone, number>>;
+  summary: ReturnType<typeof summarizePageTurnFrames> | null;
 }
-type TerminalRecord = Omit<DiagnosticRecord, 'samplerFrameId' | 'frameTimestamps' | 'frameSampleSource'> & Omit<ReturnType<typeof summarizePageTurnFrames>, 'frameIntervalsMs'> & { frameTimestamps: readonly number[]; frameIntervalsMs: readonly number[] };
-type DiagnosticFacade = { getRecords: () => ReturnType<typeof copyRecord>[]; getInputCounts: () => Record<InputOutcome, number>; clear: () => void };
+interface Preparation { direction: Direction; slotAtStart: string; outcome: PreparationOutcome | null; catchUp: boolean; start: number; end: number | null }
+interface Interaction {
+  id: number; source: InteractionSource; pointerType: string | null;
+  /** Raw pointerdown/keydown/command timestamp; never reset by later records. */
+  inputTime: number; phaseAtInput: string; direction: Direction | null;
+  /** Buffer slot state of the required direction: first drag direction lock, else turn entry (a tap's direction is known only at pointerup). */
+  readyAtInput: string | null; readyAtStart: string | null;
+  preparations: Preparation[]; omittedPreparations: number;
+  fallback: InteractionFallback | null;
+  origin: OriginKey | null; viewport: { width: number; height: number } | null;
+  queueDepth: number;
+  result: InteractionResult | null; reason: string | null; resultTime: number | null;
+  records: number[];
+}
+export interface InteractionInput {
+  source: InteractionSource; phaseAtInput: string; pointerType?: string | null; inputTime?: number;
+  direction?: Direction | null; origin?: OriginKey | null; viewport?: { width: number; height: number } | null;
+}
+interface InteractionState { entry: Interaction; open: number; linked: DiagnosticRecord[] }
+type UserTiming = Pick<Performance, 'measure' | 'clearMeasures'>;
 interface DiagnosticsEnvironment {
   cancelAnimationFrame?: typeof cancelAnimationFrame; enabled?: boolean;
   now?: () => number; requestAnimationFrame?: typeof requestAnimationFrame;
-  target?: object | null;
+  target?: object | null; userTiming?: UserTiming | null;
 }
 export const PAGE_TURN_DEBUG_STORAGE_KEY = 'epub-reader:page-turn-debug';
+export const PAGE_TURN_DIAGNOSTIC_LIMITS = Object.freeze({
+  records: 200, interactions: 1000, frameSamplesPerRecord: 2048, preparationsPerInteraction: 16, phaseSpansPerRecord: 256,
+});
+// Distinguishes controllers (and reopened books) in one page; allocated only when enabled.
+let nextDiagnosticsInstance = 0;
 
 const DIAGNOSTICS_FACADE_NAME = '__EPUB_READER_PAGE_TURN_DIAGNOSTICS__';
-const MAX_COMPLETED_RECORDS = 200;
 const TARGET_REFRESH_RATE_HZ = 120;
 // Accommodate sub-millisecond scheduler jitter without hiding a missed 120 Hz
 // interval. This is an explicit comparison target, not a detected display rate.
@@ -43,15 +77,49 @@ function readTimestamp(now: () => number, value?: number | null) {
   }
 }
 
-function copyRecord(record: TerminalRecord) {
+/**
+ * User Timing name of the nth span (1-based) of `phase` in a record of one
+ * diagnostics instance; trace clocks align by these names. Interaction and
+ * record ids restart per instance, so the instance prefix keeps a reopened
+ * book in the same page from reusing names.
+ */
+export function pageTurnMeasureName(instanceId: number, interactionId: number, recordId: number, phase: TurnPhase, occurrence = 1) {
+  return `lr:s${instanceId}:i${interactionId}:r${recordId}:${phase}${occurrence > 1 ? `#${occurrence}` : ''}`;
+}
+
+const emptyInteractionCounts = () => ({
+  received: 0, started: 0, blocked: 0, queued: 0, overflow: 0,
+  committed: 0, boundary: 0, rebound: 0, cancelled: 0, failed: 0, 'no-turn': 0, fallback: 0,
+});
+
+// Percentiles are computed on export, never while a record is still sampling motion.
+function exportRecord(record: DiagnosticRecord) {
+  const { samplerFrameId, summary: cachedSummary, omittedOpenPhases, ...terminalRecord } = record;
+  void samplerFrameId; void cachedSummary; void omittedOpenPhases; // Internal handles do not belong in debug records.
+  const summary = record.summary ??= summarizePageTurnFrames(record);
   return {
-    ...record,
-    frameTimestamps: [...record.frameTimestamps],
-    frameIntervalsMs: [...record.frameIntervalsMs],
+    ...terminalRecord,
+    ...summary,
+    firstVisualMeasurement: 'application-style-or-animation-write' as const,
+    truncated: record.omittedFrameSamples > 0,
     phases: record.phases.map(span => ({ ...span })),
     milestones: { ...record.milestones },
+    frameTimestamps: [...record.frameTimestamps],
+    frameIntervalsMs: [...summary.frameIntervalsMs],
   };
 }
+export type PageTurnRecord = ReturnType<typeof exportRecord>;
+
+function copyInteraction({ entry }: InteractionState) {
+  return {
+    ...entry,
+    preparations: entry.preparations.map(item => ({ ...item })),
+    origin: entry.origin && { ...entry.origin },
+    viewport: entry.viewport && { ...entry.viewport },
+    records: [...entry.records],
+  };
+}
+export type PageTurnInteraction = ReturnType<typeof copyInteraction>;
 
 export function readPageTurnDebugConfig(storage?: Pick<Storage, 'getItem'> | null): DebugConfig {
   try {
@@ -141,18 +209,33 @@ export function createPageTurnDiagnostics({
   now = () => globalThis.performance?.now?.() ?? 0,
   requestAnimationFrame = globalThis.requestAnimationFrame?.bind(globalThis),
   target = globalThis.window,
+  userTiming = globalThis.performance,
 }: DiagnosticsEnvironment = {}) {
   const activeRecords = new Map<number, DiagnosticRecord>();
-  const completedRecords: TerminalRecord[] = [];
+  const completedRecords: DiagnosticRecord[] = [];
+  const interactions = new Map<number, InteractionState>();
   // Counts logical turnPage commands, not pointermove events or drag previews.
   const inputCounts = { received: 0, accepted: 0, rejected: 0, committed: 0 };
+  // Logical inputs: received = started + blocked; each started input gets at most one result.
+  const interactionCounts = emptyInteractionCounts();
+  const omitted = { records: 0, interactions: 0 };
+  const timing = enabled && typeof userTiming?.measure === 'function' && typeof userTiming.clearMeasures === 'function' ? userTiming : null;
+  const instance = enabled ? ++nextDiagnosticsInstance : 0;
+  const userTimingStatus: 'available' | 'unavailable' = timing ? 'available' : 'unavailable';
   let destroyed = false;
   let nextRecordId = 1;
-  let facade: DiagnosticFacade | null = null;
+  let nextInteractionId = 1;
+  let facade: object | null = null;
+  let timingDeferred = false;
+  const deferredTiming = new Set<InteractionState>();
 
   function getActiveRecord(recordId: number | null | undefined) {
     if (!enabled || destroyed) return null;
     return recordId == null ? null : activeRecords.get(recordId) || null;
+  }
+  function getInteraction(interactionId: number | null | undefined) {
+    if (!enabled || destroyed || interactionId == null) return null;
+    return interactions.get(interactionId) ?? null;
   }
 
   function stopSampler(record: DiagnosticRecord) {
@@ -182,12 +265,38 @@ export function createPageTurnDiagnostics({
     }
   }
 
-  function begin({ action = null, backend = null, inputTime }: { action?: string | null; backend?: string | null; inputTime?: number } = {}) {
+  // Called only after an interaction's result and its last linked record close,
+  // so it never runs inside motion. Each measure is cleared once the trace has it.
+  function emitUserTiming(state: InteractionState) {
+    if (timingDeferred) { deferredTiming.add(state); return; }
+    const linked = state.linked;
+    state.linked = [];
+    if (!timing) return;
+    for (const record of linked) {
+      const occurrences = new Map<TurnPhase, number>();
+      for (const span of record.phases) {
+        const occurrence = (occurrences.get(span.phase) ?? 0) + 1;
+        occurrences.set(span.phase, occurrence);
+        if (span.end === null) continue;
+        const name = pageTurnMeasureName(instance, state.entry.id, record.id, span.phase, occurrence);
+        try {
+          timing.measure(name, { start: span.start, end: span.end });
+          timing.clearMeasures(name);
+        } catch {
+          // Optional trace alignment must never affect reading.
+        }
+      }
+    }
+  }
+
+  function begin({ action = null, backend = null, inputTime, interactionId = null }: { action?: string | null; backend?: string | null; inputTime?: number; interactionId?: number | null } = {}) {
     if (!enabled || destroyed) return null;
 
     const recordId = nextRecordId;
     nextRecordId += 1;
-    activeRecords.set(recordId, {
+    const record: DiagnosticRecord = {
+      id: recordId,
+      interactionId,
       action,
       backend,
       inputTime: readTimestamp(now, inputTime),
@@ -195,12 +304,23 @@ export function createPageTurnDiagnostics({
       animationStartTime: null,
       endTime: null,
       frameTimestamps: [],
+      omittedFrameSamples: 0,
       frameSampleSource: null,
       cancelReason: null,
       samplerFrameId: null,
       phases: [],
+      omittedPhaseSpans: 0,
+      omittedOpenPhases: {},
       milestones: {},
-    });
+      summary: null,
+    };
+    activeRecords.set(recordId, record);
+    const state = getInteraction(interactionId);
+    if (state) {
+      state.entry.records.push(recordId);
+      state.linked.push(record);
+      state.open += 1;
+    }
     return recordId;
   }
 
@@ -213,12 +333,28 @@ export function createPageTurnDiagnostics({
   // These spans measure application work, never compositor presentation.
   function startPhase(recordId: number | null | undefined, phase: TurnPhase, timestamp?: number) {
     const record = getActiveRecord(recordId);
-    if (!record || record.phases.some(span => span.phase === phase && span.end === null)) return;
+    // A dropped catch-up stays unfinished; a later catch-up opens its own span.
+    if (!record || (phase !== 'catch-up' && (record.omittedOpenPhases[phase]
+      || record.phases.some(span => span.phase === phase && span.end === null)))) return;
+    // Bounded: count spans past the cap (e.g. repeated reversals) instead of keeping them.
+    if (record.phases.length >= PAGE_TURN_DIAGNOSTIC_LIMITS.phaseSpansPerRecord) {
+      record.omittedPhaseSpans += 1;
+      record.omittedOpenPhases[phase] = (record.omittedOpenPhases[phase] ?? 0) + 1;
+      return;
+    }
     record.phases.push({ phase, start: readTimestamp(now, timestamp), end: null });
   }
   function endPhase(recordId: number | null | undefined, phase: TurnPhase, timestamp?: number) {
-    const span = getActiveRecord(recordId)?.phases.slice().reverse().find(span => span.phase === phase && span.end === null);
-    if (span) span.end = readTimestamp(now, timestamp);
+    const record = getActiveRecord(recordId);
+    if (!record) return;
+    // The latest start of this phase was dropped at the cap: it owns this end.
+    const dropped = record.omittedOpenPhases[phase];
+    if (dropped) { record.omittedOpenPhases[phase] = dropped - 1; return; }
+    const phases = record.phases;
+    for (let index = phases.length - 1; index >= 0; index -= 1) {
+      const span = phases[index]!;
+      if (span.phase === phase && span.end === null) { span.end = readTimestamp(now, timestamp); return; }
+    }
   }
   function markMilestone(recordId: number | null | undefined, milestone: TurnMilestone, timestamp?: number) {
     const record = getActiveRecord(recordId);
@@ -242,56 +378,208 @@ export function createPageTurnDiagnostics({
   function frame(recordId: number | null | undefined, timestamp: number, source: FrameSampleSource = 'animation-frame') {
     const record = getActiveRecord(recordId);
     if (!record || !Number.isFinite(timestamp)) return;
+    // Keep the first samples; later ones are counted so the export is marked truncated.
+    if (record.frameTimestamps.length >= PAGE_TURN_DIAGNOSTIC_LIMITS.frameSamplesPerRecord) {
+      record.omittedFrameSamples += 1;
+      return;
+    }
     record.frameSampleSource = record.frameSampleSource === null
       ? source
       : record.frameSampleSource === source ? source : 'mixed';
     record.frameTimestamps.push(timestamp);
   }
 
-  function finish(recordId: number | null | undefined, endTime?: number) {
+  function closeRecord(recordId: number | null | undefined, { cancelReason, endTime }: { cancelReason?: string; endTime?: number } = {}) {
     const record = getActiveRecord(recordId);
     if (!record) return null;
 
     stopSampler(record);
-    activeRecords.delete(recordId!);
+    activeRecords.delete(record.id);
     record.endTime = readTimestamp(now, endTime);
-
-    const { samplerFrameId, ...terminalRecord } = record;
-    void samplerFrameId; // Internal sampler handles do not belong in debug records.
-    const summary = summarizePageTurnFrames(terminalRecord);
-    const completedRecord = Object.freeze({
-      ...terminalRecord,
-      ...summary,
-      firstVisualMeasurement: 'application-style-or-animation-write' as const,
-      phases: terminalRecord.phases.map(span => ({ ...span })),
-      milestones: { ...terminalRecord.milestones },
-      frameTimestamps: Object.freeze([...terminalRecord.frameTimestamps]),
-      frameIntervalsMs: Object.freeze([...summary.frameIntervalsMs]),
-    });
-
-    completedRecords.push(completedRecord);
-    if (completedRecords.length > MAX_COMPLETED_RECORDS) {
-      completedRecords.splice(0, completedRecords.length - MAX_COMPLETED_RECORDS);
+    if (cancelReason !== undefined) record.cancelReason = cancelReason;
+    completedRecords.push(record);
+    if (completedRecords.length > PAGE_TURN_DIAGNOSTIC_LIMITS.records) {
+      omitted.records += completedRecords.splice(0, completedRecords.length - PAGE_TURN_DIAGNOSTIC_LIMITS.records).length;
     }
+    const state = getInteraction(record.interactionId);
+    if (state) {
+      state.open = Math.max(0, state.open - 1);
+      if (state.open === 0 && state.entry.result !== null) emitUserTiming(state);
+    }
+    return record;
+  }
 
-    return copyRecord(completedRecord);
+  /** Stores the raw terminal record without summarizing it. */
+  function close(recordId: number | null | undefined, options?: { cancelReason?: string; endTime?: number }) {
+    closeRecord(recordId, options);
+  }
+
+  function finish(recordId: number | null | undefined, endTime?: number) {
+    const record = closeRecord(recordId, { endTime });
+    return record && exportRecord(record);
   }
 
   function cancel(recordId: number | null | undefined, cancelReason = 'cancelled', endTime?: number) {
-    const record = getActiveRecord(recordId);
-    if (!record) return null;
+    const record = closeRecord(recordId, { cancelReason, endTime });
+    return record && exportRecord(record);
+  }
 
-    record.cancelReason = cancelReason;
-    return finish(recordId, endTime);
+  function createInteraction(input: InteractionInput) {
+    const { origin, viewport } = input;
+    const state: InteractionState = {
+      entry: {
+        id: nextInteractionId++,
+        source: input.source,
+        pointerType: input.pointerType ?? null,
+        inputTime: readTimestamp(now, input.inputTime),
+        phaseAtInput: input.phaseAtInput,
+        direction: input.direction ?? null,
+        readyAtInput: null,
+        readyAtStart: null,
+        preparations: [],
+        omittedPreparations: 0,
+        fallback: null,
+        origin: origin ? { positionRevision: origin.positionRevision, layoutGeneration: origin.layoutGeneration, appearanceGeneration: origin.appearanceGeneration } : null,
+        viewport: viewport ? { width: viewport.width, height: viewport.height } : null,
+        queueDepth: 0,
+        result: null,
+        reason: null,
+        resultTime: null,
+        records: [],
+      },
+      open: 0,
+      linked: [],
+    };
+    interactions.set(state.entry.id, state);
+    interactionCounts.received += 1;
+    if (interactions.size > PAGE_TURN_DIAGNOSTIC_LIMITS.interactions) {
+      // Evict the oldest finished interaction; unfinished ones keep their slot.
+      for (const [id, item] of interactions) {
+        if (item.entry.result === null || item.open > 0) continue;
+        interactions.delete(id);
+        deferredTiming.delete(item);
+        omitted.interactions += 1;
+        break;
+      }
+    }
+    return state;
+  }
+
+  function beginInteraction(input: InteractionInput) {
+    if (!enabled || destroyed) return null;
+    const state = createInteraction(input);
+    interactionCounts.started += 1;
+    return state.entry.id;
+  }
+
+  /** A rejected logical input: received and blocked, never started. */
+  function blockInteraction(input: InteractionInput, reason: string) {
+    if (!enabled || destroyed) return null;
+    const { entry } = createInteraction(input);
+    entry.result = reason === 'queue-full' ? 'overflow' : 'blocked';
+    entry.reason = reason;
+    entry.resultTime = readTimestamp(now);
+    interactionCounts.blocked += 1;
+    if (reason === 'queue-full') interactionCounts.overflow += 1;
+    return entry.id;
+  }
+
+  /** Waiting input may finish during another turn's motion; trace work waits. */
+  function deferUserTiming() { if (enabled && !destroyed) timingDeferred = true; }
+  function flushUserTiming() {
+    timingDeferred = false;
+    for (const state of deferredTiming) emitUserTiming(state);
+    deferredTiming.clear();
+  }
+
+  /** Queue admission is not a terminal result. Depth excludes the active turn. */
+  function markQueued(interactionId: number | null | undefined, depth: number) {
+    const state = getInteraction(interactionId);
+    if (!state || state.entry.queueDepth) return;
+    state.entry.queueDepth = depth; state.entry.readyAtInput = 'queued'; interactionCounts.queued += 1;
+  }
+
+  function markInteractionStart(interactionId: number | null | undefined, origin: OriginKey, viewport: { width: number; height: number }) {
+    const state = getInteraction(interactionId);
+    if (state) {
+      state.entry.origin = { positionRevision: origin.positionRevision, layoutGeneration: origin.layoutGeneration, appearanceGeneration: origin.appearanceGeneration };
+      state.entry.viewport = { ...viewport };
+    }
+  }
+
+  /** The first result wins; User Timing waits until every linked record has closed. */
+  function resolveInteraction(interactionId: number | null | undefined, result: StartedResult, reason: string | null = null, timestamp?: number) {
+    const state = getInteraction(interactionId);
+    if (!state || state.entry.result !== null) return;
+    state.entry.result = result;
+    state.entry.reason = reason;
+    state.entry.resultTime = readTimestamp(now, timestamp);
+    interactionCounts[result] += 1;
+    if (state.open === 0) emitUserTiming(state);
+  }
+
+  function setInteractionDirection(interactionId: number | null | undefined, direction: Direction | null) {
+    const state = getInteraction(interactionId);
+    if (state) state.entry.direction = direction;
+  }
+
+  function markInteractionReady(interactionId: number | null | undefined, slotState: string) {
+    const state = getInteraction(interactionId);
+    if (!state) return;
+    state.entry.readyAtStart = slotState;
+    state.entry.readyAtInput ??= slotState;
+  }
+
+  function markFallback(interactionId: number | null | undefined, fallback: InteractionFallback) {
+    const state = getInteraction(interactionId);
+    if (!state || state.entry.fallback !== null) return;
+    state.entry.fallback = fallback;
+    interactionCounts.fallback += 1;
+  }
+
+  function startPreparation(interactionId: number | null | undefined, direction: Direction, slotAtStart: string, timestamp?: number) {
+    const state = getInteraction(interactionId);
+    if (!state) return null;
+    state.entry.readyAtInput ??= slotAtStart;
+    if (state.entry.preparations.length >= PAGE_TURN_DIAGNOSTIC_LIMITS.preparationsPerInteraction) {
+      state.entry.omittedPreparations += 1;
+      return null;
+    }
+    return state.entry.preparations.push({ direction, slotAtStart, outcome: null, catchUp: false, start: readTimestamp(now, timestamp), end: null }) - 1;
+  }
+
+  function getPreparation(interactionId: number | null | undefined, index: number | null) {
+    return index === null ? undefined : getInteraction(interactionId)?.entry.preparations[index];
+  }
+
+  function endPreparation(interactionId: number | null | undefined, index: number | null, outcome: PreparationOutcome, timestamp?: number) {
+    const preparation = getPreparation(interactionId, index);
+    if (!preparation || preparation.outcome !== null) return;
+    preparation.outcome = outcome;
+    preparation.end = readTimestamp(now, timestamp);
+  }
+
+  function markCatchUp(interactionId: number | null | undefined, index: number | null) {
+    const preparation = getPreparation(interactionId, index);
+    if (preparation) preparation.catchUp = true;
   }
 
   function getRecords() {
-    return completedRecords.map(copyRecord);
+    return completedRecords.map(exportRecord);
   }
+  function getInteractions() {
+    return [...interactions.values()].map(copyInteraction);
+  }
+  function getInteractionCounts() { return { ...interactionCounts }; }
+  function getOmitted() { return { ...omitted }; }
 
   function clear() {
     completedRecords.splice(0, completedRecords.length);
     inputCounts.received = inputCounts.accepted = inputCounts.rejected = inputCounts.committed = 0;
+    interactions.clear();
+    deferredTiming.clear();
+    Object.assign(interactionCounts, emptyInteractionCounts());
+    omitted.records = omitted.interactions = 0;
   }
 
   function destroy() {
@@ -312,7 +600,10 @@ export function createPageTurnDiagnostics({
   }
 
   if (enabled && target) {
-    facade = Object.freeze({ getRecords, getInputCounts, clear });
+    facade = Object.freeze({
+      getRecords, getInputCounts, getInteractions, getInteractionCounts, getOmitted, clear,
+      userTiming: userTimingStatus, instance,
+    });
     try {
       Object.defineProperty(target, DIAGNOSTICS_FACADE_NAME, {
         configurable: true,
@@ -325,6 +616,11 @@ export function createPageTurnDiagnostics({
   }
 
   return {
+    /** False when disabled or destroyed; callers guard costly diagnostic reads with it. */
+    get enabled() { return enabled && !destroyed; },
+    userTiming: userTimingStatus,
+    /** Measure-name prefix id; 0 when disabled. */
+    instance,
     begin,
     markVisualUpdate,
     markAnimationStart,
@@ -334,9 +630,26 @@ export function createPageTurnDiagnostics({
     countInput,
     getInputCounts,
     frame,
+    close,
     finish,
     cancel,
     getRecords,
+    beginInteraction,
+    markQueued,
+    markInteractionStart,
+    deferUserTiming,
+    flushUserTiming,
+    blockInteraction,
+    resolveInteraction,
+    setInteractionDirection,
+    markInteractionReady,
+    markFallback,
+    startPreparation,
+    endPreparation,
+    markCatchUp,
+    getInteractions,
+    getInteractionCounts,
+    getOmitted,
     clear,
     destroy,
   };

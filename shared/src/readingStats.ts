@@ -212,7 +212,14 @@ export interface ReadingYearDto {
   readonly books: readonly CompletedBookDto[];
 }
 
+export interface CurrentBookStats {
+  readonly bookId: number;
+  readonly durationMs: number;
+  readonly streakDays: number;
+}
+
 export interface ReadingStatsDto {
+  readonly currentBook: CurrentBookStats | null;
   /** The requested local "today". */
   readonly date: string;
   readonly goals: ReadingGoalsDto;
@@ -713,7 +720,13 @@ export function decodeReadingStatsResponse(
     throw new WireDecodeError('stats.year.completedCount must equal the number of books');
   }
 
+  const current = stats['currentBook'] == null ? null : requireRecord(stats['currentBook'], 'stats.currentBook');
   return {
+    currentBook: current ? {
+      bookId: requireSafeInteger(current['bookId'], 'currentBook.bookId', 1, Number.MAX_SAFE_INTEGER),
+      durationMs: requireNonNegativeInteger(current['durationMs'], 'currentBook.durationMs'),
+      streakDays: requireNonNegativeInteger(current['streakDays'], 'currentBook.streakDays'),
+    } : null,
     date,
     goals: decodeReadingGoals(stats['goals']),
     days,

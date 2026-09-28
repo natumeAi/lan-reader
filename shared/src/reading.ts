@@ -6,9 +6,20 @@
  * keyed by identifier or file name.
  */
 import type { BookDto } from './book.js';
+import { WireDecodeError } from './decode.js';
+
+export interface ChapterProgress { readonly chapterCount: number | null; readonly chapterIndex: number | null }
+
+/** Missing legacy tuples normalize to unknown; partial tuples are rejected. */
+export function decodeChapterProgress(value: { chapterCount?: unknown; chapterIndex?: unknown }): ChapterProgress {
+  const { chapterCount: count, chapterIndex: index } = value;
+  if ((count === undefined && index === undefined) || (count === null && index === null)) return { chapterCount: null, chapterIndex: null };
+  if (typeof count !== 'number' || !Number.isSafeInteger(count) || count <= 0 || typeof index !== 'number' || !Number.isSafeInteger(index) || index < -1 || index >= count) throw new WireDecodeError('Invalid chapter progress pair');
+  return { chapterCount: count, chapterIndex: index };
+}
 
 /** Stored Reading Position as returned by `GET`/`PUT /api/reading/:bookId`. */
-export interface ReadingPositionDto {
+export interface ReadingPositionDto extends ChapterProgress {
   readonly bookId: number;
   readonly cfi: string | null;
   /** Fraction between 0 and 1 inclusive. `0` means opened at the start. */
@@ -26,6 +37,8 @@ export interface ReadingPositionDto {
  * and are stored as `null` when missing.
  */
 export interface ReadingPositionUpdate {
+  readonly chapterCount?: number | null;
+  readonly chapterIndex?: number | null;
   readonly progress: number;
   readonly cfi?: string | null;
   readonly chapterHref?: string | null;

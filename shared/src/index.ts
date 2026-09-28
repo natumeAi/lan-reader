@@ -15,15 +15,18 @@ export { MAX_FOLDER_NAME_LENGTH } from './folder.js';
 export type { ShelfItemDto, ShelfItemRef, ShelfItemType, ShelfOrderItem } from './shelf.js';
 export { isShelfBookItem, isShelfFolderItem } from './shelf.js';
 export type {
+  ChapterProgress,
   ReadingPositionDto,
   ReadingPositionUpdate,
   RecentReadingEntryDto,
   SnapshotRecentEntry,
 } from './reading.js';
+export { decodeChapterProgress } from './reading.js';
 export type {
   AcceptedActivityOutcome,
   CharacterInterval,
   CompletedBookDto,
+  CurrentBookStats,
   ReadingActivityBatchRequest,
   ReadingActivityBatchResponse,
   ReadingActivityEvent,

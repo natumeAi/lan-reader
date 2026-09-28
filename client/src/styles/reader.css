@@ -254,16 +254,6 @@
   );
 }
 
-.reader-page-edge-prev::before {
-  border-left: 0;
-  border-right: 1px solid var(--reader-page-edge-line);
-  background: linear-gradient(
-    to left,
-    var(--reader-page-edge-shadow),
-    transparent 75%
-  );
-}
-
 .reader-page-turn-dragging .reader-page-edge,
 .reader-page-turn-settling .reader-page-edge {
   opacity: 1;

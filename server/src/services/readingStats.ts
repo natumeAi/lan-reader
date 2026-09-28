@@ -344,13 +344,25 @@ function listYearCompletions(db: DatabaseHandle, year: number): CompletedBookDto
     }));
 }
 
+function currentBookStats(db: DatabaseHandle, today: string, bookId: number | null): ReadingStatsDto['currentBook'] {
+  if (bookId === null || !db.prepare<[number]>('SELECT 1 FROM books WHERE id = ?').get(bookId)) return null;
+  const rows = db.prepare<[number], { local_date: string; duration_ms: number }>(
+    'SELECT local_date, duration_ms FROM reading_daily_activity WHERE book_id = ?',
+  ).all(bookId);
+  const dates = new Set(rows.filter(row => row.duration_ms > 0 && row.local_date <= today).map(row => row.local_date));
+  let date = dates.has(today) ? today : shiftLocalDate(today, -1);
+  let streakDays = 0;
+  while (dates.has(date)) { streakDays += 1; date = shiftLocalDate(date, -1); }
+  return { bookId, durationMs: rows.reduce((sum, row) => sum + row.duration_ms, 0), streakDays };
+}
+
 /**
  * Dashboard statistics for the reader's local `today` (a validated local date).
  *
  * The seven days and the year both derive from `today`, never from the server
  * clock or timezone. The annual count is the length of the annual list.
  */
-export function getReadingStats(db: DatabaseHandle, today: string): ReadingStatsDto {
+export function getReadingStats(db: DatabaseHandle, today: string, bookId: number | null = null): ReadingStatsDto {
   return db.transaction((): ReadingStatsDto => {
     const settings = readSettings(db);
     const lifetime = requireQueryResult(
@@ -379,6 +391,7 @@ export function getReadingStats(db: DatabaseHandle, today: string): ReadingStats
     const books = listYearCompletions(db, year);
 
     return {
+      currentBook: currentBookStats(db, today, bookId),
       date: today,
       goals: formatGoals(settings),
       days: listDays(db, today),

@@ -1,6 +1,6 @@
-import { isRecord } from '@lan-reader/shared';
+import { decodeChapterProgress, isRecord } from '@lan-reader/shared';
 import type { StorageAccess } from '../types/library.js';
-export interface ProgressRecord { bookId: number; cfi: string | null; progress: number; chapterHref: string | null; chapterLabel: string | null }
+export interface ProgressRecord { bookId: number; cfi: string | null; progress: number; chapterHref: string | null; chapterLabel: string | null; chapterCount?: number | null; chapterIndex?: number | null }
 export type ProgressRecords = Record<number, ProgressRecord>;
 export const PROGRESS_OUTBOX_KEY = 'epub-reader:pending-reading-progress:v1';
 const OUTBOX_VERSION = 1;
@@ -43,7 +43,10 @@ export function sanitizeProgressRecord(value: unknown): ProgressRecord | null {
     return null;
   }
 
+  let chapters;
+  try { chapters = decodeChapterProgress(value); } catch { return null; }
   return {
+    ...chapters,
     bookId: value.bookId,
     cfi,
     progress,
@@ -123,7 +126,9 @@ export function isSameProgressSnapshot(first: ProgressRecord | null | undefined,
     first.cfi === second.cfi &&
     first.progress === second.progress &&
     first.chapterHref === second.chapterHref &&
-    first.chapterLabel === second.chapterLabel,
+    first.chapterLabel === second.chapterLabel &&
+    (first.chapterCount ?? null) === (second.chapterCount ?? null) &&
+    (first.chapterIndex ?? null) === (second.chapterIndex ?? null),
   );
 }
 

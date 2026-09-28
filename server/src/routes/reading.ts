@@ -18,6 +18,7 @@ import type {
   RecentReadingResponse,
 } from '@lan-reader/shared';
 import {
+  decodeChapterProgress,
   READING_STATS_DAY_COUNT,
   WireDecodeError,
   decodeReadingActivityBatchEntries,
@@ -95,7 +96,10 @@ router.get('/stats', (req, res: Response<ReadingStatsResponse>, next) => {
       throw badRequest('date must be a YYYY-MM-DD calendar date', 'INVALID_DATE');
     }
 
-    res.json({ stats: getReadingStats(db, date) });
+    const rawBookId = req.query['bookId'];
+    const bookId = rawBookId === undefined ? null : parseBookId(rawBookId);
+    if (bookId !== null && (!Number.isSafeInteger(bookId) || typeof rawBookId !== 'string')) throw badRequest('Invalid bookId');
+    res.json({ stats: getReadingStats(db, date, bookId) });
   } catch (err) {
     next(err);
   }
@@ -157,7 +161,9 @@ router.put('/:bookId', (req, res: Response<ReadingPositionResponse>, next) => {
   try {
     const db = requireDatabase(req);
     const bookId = parseBookId(req.params.bookId);
-    const { cfi, progress, chapterHref, chapterLabel } = readRequestBody(req);
+    const body = readRequestBody(req);
+    const { cfi, progress, chapterHref, chapterLabel } = body;
+    const { chapterCount, chapterIndex } = decodeRequest(() => decodeChapterProgress(body), 'INVALID_CHAPTER_PROGRESS');
 
     const progressValue = Number(progress);
 
@@ -175,16 +181,18 @@ router.put('/:bookId', (req, res: Response<ReadingPositionResponse>, next) => {
     // The three text columns are stored exactly as they arrived, so the bind
     // parameters stay `unknown`: a value SQLite cannot bind fails here just as
     // it did before.
-    db.prepare<[number, unknown, number, unknown, unknown]>(`
-      INSERT INTO reading_progress (book_id, cfi, progress, chapter_href, chapter_label, updated_at)
-      VALUES (?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%f', 'now'))
+    db.prepare<[number, unknown, number, unknown, unknown, number | null, number | null]>(`
+      INSERT INTO reading_progress (book_id, cfi, progress, chapter_href, chapter_label, chapter_count, chapter_index, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%f', 'now'))
       ON CONFLICT(book_id) DO UPDATE SET
         cfi = excluded.cfi,
         progress = excluded.progress,
         chapter_href = excluded.chapter_href,
         chapter_label = excluded.chapter_label,
+        chapter_count = excluded.chapter_count,
+        chapter_index = excluded.chapter_index,
         updated_at = excluded.updated_at
-    `).run(bookId, cfi ?? null, progressValue, chapterHref ?? null, chapterLabel ?? null);
+    `).run(bookId, cfi ?? null, progressValue, chapterHref ?? null, chapterLabel ?? null, chapterCount, chapterIndex);
 
     const row = getExactProgress(db, bookId);
 

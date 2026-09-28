@@ -1,122 +1,65 @@
 import type { ReactNode } from 'react';
+import type { ReadingStatsDto } from '@lan-reader/shared';
 import type { Book, RecentReadingItem } from '../../types/library.js';
-import { useId } from 'react';
 import { BookCover } from '../bookshelf/BookCover.js';
-import {
-  formatRecentReadingTime,
-  normalizeRecentReadingTimestamp,
-} from '../../utils/recentReadingTime.js';
+import { findVisibleBookCoverRect } from '../../utils/coverOrigin.js';
+import { formatTotalDuration } from '../../utils/readingStatsFormat.js';
 import { HomeCard } from './HomeCard.js';
 
 export interface CurrentReadingCardProps {
   error: string;
   hasLoaded: boolean;
   items: RecentReadingItem[];
+  currentBook: ReadingStatsDto['currentBook'];
   onOpenBook: (book: Book, originRect: DOMRect | null) => void;
+  onOpenRecent: () => void;
   onOpenShelf: () => void;
   onRetry: () => void;
 }
 
-function progressPercentOf(item: RecentReadingItem) {
-  const rawProgressValue = item.progress?.progress;
-  const progressValue = Number(rawProgressValue);
-  return rawProgressValue != null && Number.isFinite(progressValue)
-    ? Math.max(0, Math.min(100, Math.round(progressValue * 100)))
-    : null;
-}
-
-/** 正在读: the recent-reading list, in the server's order and limit, resuming saved positions. */
-export function CurrentReadingCard({
-  error,
-  hasLoaded,
-  items,
-  onOpenBook,
-  onOpenShelf,
-  onRetry,
-}: CurrentReadingCardProps) {
-  const descriptionIdPrefix = useId();
-
+export function CurrentReadingCard({ error, hasLoaded, items, currentBook, onOpenBook,
+  onOpenRecent, onOpenShelf, onRetry }: CurrentReadingCardProps) {
+  const item = items[0];
+  const stats = currentBook?.bookId === item?.book.id ? currentBook : null;
   let content: ReactNode;
-  if (items.length) {
-    content = (
-      <div className="current-reading-list">
-        {items.map((item, index) => {
-          const book = item.book;
-          const title = book.title || '未命名书籍';
-          const metaId = `${descriptionIdPrefix}-book-${book.id}-meta`;
-          const normalizedUpdatedAt = normalizeRecentReadingTimestamp(item.progress?.updatedAt);
-          const progressPercent = progressPercentOf(item);
-
-          return (
-            <button
-              className="current-reading-book"
-              key={book.id}
-              type="button"
-              data-book-id={book.id}
-              onClick={(event) => {
-                const rect = event.currentTarget.querySelector('.book-cover')?.getBoundingClientRect();
-                onOpenBook(book, rect || null);
-              }}
-              aria-describedby={metaId}
-              aria-label={`继续阅读《${title}》`}
-            >
-              <span className="book-cover current-reading-cover">
-                <BookCover book={book} priority={index < 3} />
-              </span>
-              <span className="current-reading-content">
-                <span className="current-reading-title">{title}</span>
-                <span className="current-reading-meta" id={metaId}>
-                  {progressPercent !== null ? <span>{progressPercent}%</span> : null}
-                  <time dateTime={normalizedUpdatedAt || undefined}>
-                    {formatRecentReadingTime(normalizedUpdatedAt)}
-                  </time>
-                </span>
-                {progressPercent !== null ? (
-                  <span className="current-reading-track" aria-hidden="true">
-                    <span style={{ width: `${progressPercent}%` }} />
-                  </span>
-                ) : null}
-              </span>
-            </button>
-          );
-        })}
+  if (item) {
+    const { book, progress } = item;
+    const percent = Math.max(0, Math.min(100, progress.progress * 100));
+    const remaining = progress.chapterCount != null && progress.chapterIndex != null
+      ? progress.progress === 1 ? 0 : progress.chapterCount - Math.max(0, progress.chapterIndex)
+      : null;
+    const open = () => onOpenBook(book, findVisibleBookCoverRect(book.id));
+    content = <>
+      <button type="button" className="current-reading-book" data-book-id={book.id}
+        aria-label={`继续阅读《${book.title || '未命名书籍'}》`} onClick={open}>
+        <span className="book-cover current-reading-cover"><BookCover book={book} priority /></span>
+        <span className="current-reading-content">
+          <span className="current-reading-title">{book.title || '未命名书籍'}</span>
+          <span className="current-reading-author">{book.author || '未知作者'}</span>
+          <span className="current-reading-meta">
+            <span>已读 {percent.toFixed(1)}%</span>
+            <span aria-label={remaining === null ? '暂无章节信息' : undefined}>剩余 {remaining ?? '—'} 章</span>
+          </span>
+          <span className="current-reading-track" aria-hidden="true"><span style={{ width: `${percent}%` }} /></span>
+        </span>
+      </button>
+      <div className="current-reading-footer">
+        <span>已读 {stats ? formatTotalDuration(stats.durationMs) : '—'}</span>
+        <button type="button" onClick={open}>继续阅读 <span className="home-card-chevron" aria-hidden="true" /></button>
       </div>
-    );
+    </>;
   } else if (error) {
-    // Unavailable data is not presented as an empty reading history.
-    content = (
-      <div className="home-card-state" role="alert">
-        <p>暂时无法加载阅读记录</p>
-        <button className="home-card-action" type="button" onClick={() => onRetry()}>
-          重试
-        </button>
-      </div>
-    );
+    content = <div className="home-card-state" role="alert"><p>暂时无法加载阅读记录</p>
+      <button className="home-card-action" type="button" onClick={onRetry}>重试</button></div>;
   } else if (!hasLoaded) {
-    content = (
-      <div className="home-card-state" role="status" aria-live="polite">
-        <p>正在加载阅读记录</p>
-      </div>
-    );
+    content = <div className="home-card-state" role="status"><p>正在加载阅读记录</p></div>;
   } else {
-    content = (
-      <div className="home-card-state">
-        <p>还没有阅读记录哦</p>
-        <button className="home-card-action" type="button" onClick={() => onOpenShelf()}>
-          去书架选一本书
-        </button>
-      </div>
-    );
+    content = <div className="home-card-state"><p>还没有阅读记录哦</p>
+      <button className="home-card-action" type="button" onClick={onOpenShelf}>去书架选一本书</button></div>;
   }
-
-  return (
-    <HomeCard
-      className="current-reading-card"
-      onTitleAction={onOpenShelf}
-      title="正在读"
-      titleActionLabel="正在读，前往书架"
-    >
-      {content}
-    </HomeCard>
-  );
+  return <HomeCard className="current-reading-card" title="正在读" onTitleAction={onOpenRecent}
+    titleActionLabel="正在读，打开继续阅读列表"
+    actions={item ? <span className="current-reading-streak">连续阅读 {stats?.streakDays ?? '—'} 天</span> : null}>
+    {content}
+  </HomeCard>;
 }
