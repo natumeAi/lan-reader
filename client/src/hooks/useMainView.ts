@@ -4,6 +4,7 @@ import { requestFrameOrTimeout } from '../utils/animationFrame.js';
 import {
   clearReaderOriginMainView,
   MAIN_VIEW,
+  mainViewIndex,
   readInitialMainView,
   writeReaderOriginMainView,
 } from '../utils/mainViewPreference.js';
@@ -15,6 +16,8 @@ export type MainViewMotionPhase = 'idle' | 'exiting' | 'preparing' | 'entering' 
 interface MotionState {
   mainView: MainView;
   requestedView: MainView;
+  /** The page that was visible when the current switch began exiting. */
+  sourceView: MainView;
   phase: MainViewMotionPhase;
   direction: -1 | 1;
   generation: number;
@@ -27,7 +30,16 @@ interface UseMainViewOptions {
   reducedMotion?: boolean;
 }
 
-const directionTo = (view: MainView): -1 | 1 => view === MAIN_VIEW.SHELF ? 1 : -1;
+/**
+ * Movement direction from one destination to another by their navigation order. A switch
+ * back to the same page (possible only as a retarget while both pages are transparent)
+ * reverses the current movement.
+ */
+function directionBetween(from: MainView, to: MainView, current: -1 | 1): -1 | 1 {
+  const delta = mainViewIndex(to) - mainViewIndex(from);
+  if (delta === 0) return current === 1 ? -1 : 1;
+  return delta > 0 ? 1 : -1;
+}
 
 /** Owns the committed page, latest visual target and each page's window scroll offset. */
 export function useMainView({
@@ -36,13 +48,14 @@ export function useMainView({
 }: UseMainViewOptions) {
   const [motion, setMotion] = useState<MotionState>(() => {
     const mainView = readInitialMainView();
-    return { mainView, requestedView: mainView, phase: 'idle', direction: 1,
-      generation: 0, instant: false };
+    return { mainView, requestedView: mainView, sourceView: mainView, phase: 'idle',
+      direction: 1, generation: 0, instant: false };
   });
   const motionRef = useRef(motion);
   const scrollPositionsRef = useRef<Record<MainView, number>>({
     [MAIN_VIEW.HOME]: 0,
     [MAIN_VIEW.SHELF]: 0,
+    [MAIN_VIEW.STATISTICS]: 0,
   });
   const pendingScrollRestoreRef = useRef<MainView | null>(null);
   const wasReaderActiveRef = useRef(readerActive);
@@ -64,6 +77,7 @@ export function useMainView({
     publish({
       mainView: target,
       requestedView: target,
+      sourceView: target,
       phase: 'idle',
       direction: current.direction,
       generation: current.generation + 1,
@@ -83,8 +97,10 @@ export function useMainView({
     if (current.phase === 'preparing') {
       // Both pages are transparent. Retarget the swap without showing an obsolete page.
       if (nextView !== current.mainView) pendingScrollRestoreRef.current = nextView;
-      publish({ mainView: nextView, requestedView: nextView, phase: 'preparing',
-        direction: directionTo(nextView), generation, instant: false });
+      // The direction stays relative to the page that exited, not the transparent target.
+      publish({ ...current, mainView: nextView, requestedView: nextView, phase: 'preparing',
+        direction: directionBetween(current.sourceView, nextView, current.direction),
+        generation, instant: false });
       return;
     }
     if (nextView === current.mainView) {
@@ -92,8 +108,9 @@ export function useMainView({
         generation, instant: false });
       return;
     }
-    publish({ ...current, requestedView: nextView, phase: 'exiting',
-      direction: directionTo(nextView), generation, instant: false });
+    publish({ ...current, requestedView: nextView, sourceView: current.mainView, phase: 'exiting',
+      direction: directionBetween(current.mainView, nextView, current.direction),
+      generation, instant: false });
   }, [commitImmediately, publish]);
 
   const finishPhase = useCallback((phase: MainViewMotionPhase, generation: number) => {

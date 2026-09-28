@@ -1,5 +1,6 @@
+import type { CSSProperties } from 'react';
 import type { MainView } from '../../utils/mainViewPreference.js';
-import { MAIN_VIEW } from '../../utils/mainViewPreference.js';
+import { MAIN_VIEW, mainViewIndex } from '../../utils/mainViewPreference.js';
 
 interface MainNavigationProps {
   activeView: MainView;
@@ -33,15 +34,33 @@ function ShelfIcon() {
   );
 }
 
+function StatisticsIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false">
+      <path
+        d="M4 20.2h16M6.6 16.8v-5.4m4 5.4V6.2m4 10.6V9.6m4 7.2V4.8"
+        fill="none"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.9"
+      />
+    </svg>
+  );
+}
+
+// Rendered in MAIN_VIEW_ORDER; the pill position is the visual target's index in it.
 const destinations = [
   { view: MAIN_VIEW.HOME, label: '首页', Icon: HomeIcon },
   { view: MAIN_VIEW.SHELF, label: '书架', Icon: ShelfIcon },
+  { view: MAIN_VIEW.STATISTICS, label: '统计', Icon: StatisticsIcon },
 ] as const;
 
-/** Bottom tab bar for the two main views. Selection is local state, not browser history. */
+/** Bottom tab bar for the main views. Selection is local state, not browser history. */
 export function MainNavigation({ activeView, visualView, onSelectView }: MainNavigationProps) {
   return (
-    <nav className="main-navigation" aria-label="主导航" data-visual-view={visualView}>
+    <nav className="main-navigation" aria-label="主导航" data-visual-view={visualView}
+      style={{ '--main-navigation-index': mainViewIndex(visualView) } as CSSProperties}>
       <span className="main-navigation-pill" aria-hidden="true" />
       {destinations.map(({ view, label, Icon }) => {
         const active = view === activeView;
