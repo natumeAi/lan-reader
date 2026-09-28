@@ -52,6 +52,7 @@ export {
   DEFAULT_DAILY_GOAL_MINUTES,
   MAX_ACTIVITY_BATCH_EVENTS,
   MAX_ACTIVITY_DURATION_MS,
+  MAX_ACTIVITY_HOUR_DURATION_MS,
   MAX_ACTIVITY_SECTIONS,
   MAX_ANNUAL_BOOK_GOAL,
   MAX_DAILY_GOAL_MINUTES,
@@ -81,6 +82,40 @@ export {
   readActivityEventId,
   shiftLocalDate,
 } from './readingStats.js';
+export type {
+  ReadingStatisticsDto,
+  ReadingStatisticsQuery,
+  ReadingStatisticsResponse,
+  StatisticsCalendarDayDto,
+  StatisticsCalendarDto,
+  StatisticsComparisonDto,
+  StatisticsCoverageDto,
+  StatisticsDimension,
+  StatisticsMetricComparison,
+  StatisticsMetricKey,
+  StatisticsOverviewDto,
+  StatisticsPeriod,
+  StatisticsPeriodDimension,
+  StatisticsRangeDto,
+  StatisticsRankingDto,
+  StatisticsRankingEntryDto,
+  StatisticsTrendBucketDto,
+  StatisticsTrendDto,
+  StatisticsTrendUnit,
+} from './readingStatistics.js';
+export {
+  STATISTICS_DIMENSIONS,
+  STATISTICS_METRIC_KEYS,
+  STATISTICS_RANKING_LIMIT,
+  countLocalDays,
+  decodeReadingStatisticsQuery,
+  decodeReadingStatisticsResponse,
+  isStatisticsDimension,
+  resolveStatisticsPeriod,
+  shiftStatisticsAnchor,
+  statisticsBucketKeys,
+  statisticsTrendUnit,
+} from './readingStatistics.js';
 export type { LibrarySnapshot } from './librarySnapshot.js';
 export {
   LIBRARY_SNAPSHOT_SCHEMA_VERSION,

@@ -4,7 +4,8 @@
  * - `ForegroundClock` measures eligible foreground time with a monotonic clock
  *   and discards implausible gaps (sleep, frozen timers) instead of crediting
  *   them.
- * - `splitAtLocalMidnight` attributes a measured span to browser-local days.
+ * - `splitAtLocalHour` attributes a measured span to browser-local hours
+ *   (and therefore days); `splitAtLocalMidnight` splits at days only.
  * - `CoverageLedger` accumulates verified visible intervals per observation
  *   day and never resends intervals already recorded in this reader session.
  * - `createActivityEvents` / `createCompletionEvent` build immutable wire
@@ -20,6 +21,7 @@ import type {
 } from '@lan-reader/shared';
 import {
   MAX_ACTIVITY_DURATION_MS,
+  MAX_ACTIVITY_HOUR_DURATION_MS,
   MAX_ACTIVITY_SECTIONS,
   MAX_SECTION_INTERVALS,
   READING_TEXT_NORMALIZATION_VERSION,
@@ -135,6 +137,45 @@ export function splitAtLocalMidnight(span: ForegroundSpan): DaySegment[] {
         localDate: formatLocalDate(day),
         durationMs,
         occurredAt: new Date(end === nextMidnight ? end - 1 : end).toISOString(),
+      });
+    }
+    start = end;
+  }
+  return segments;
+}
+
+/** Foreground time attributed to one browser-local hour of one day. */
+export interface HourSegment extends DaySegment {
+  /** Local hour `0`–`23` of `localDate`; a repeated DST hour shares one label. */
+  readonly localHour: number;
+}
+
+/**
+ * Splits a span at local hour boundaries (which include midnight); each part
+ * keeps its own date, hour and end instant. Durations are rounded cumulatively,
+ * so the parts always sum to the rounded whole. A skipped DST hour produces no
+ * part; a repeated one keeps a single label.
+ */
+export function splitAtLocalHour(span: ForegroundSpan): HourSegment[] {
+  const segments: HourSegment[] = [];
+  let start = span.startWall;
+  let credited = 0;
+  while (start < span.endWall) {
+    const at = new Date(start);
+    let boundary = new Date(at.getFullYear(), at.getMonth(), at.getDate(), at.getHours() + 1).getTime();
+    // Defensive: a boundary that does not advance ends the span in this hour.
+    if (!(boundary > start)) boundary = span.endWall;
+    const end = Math.min(span.endWall, boundary);
+    const total = Math.round(end - span.startWall);
+    // Checkpoint spans are far shorter than an hour; the cap only guards the wire limit.
+    const durationMs = Math.min(MAX_ACTIVITY_HOUR_DURATION_MS, total - credited);
+    credited = total;
+    if (durationMs > 0) {
+      segments.push({
+        localDate: formatLocalDate(at),
+        localHour: at.getHours(),
+        durationMs,
+        occurredAt: new Date(end === boundary ? end - 1 : end).toISOString(),
       });
     }
     start = end;
@@ -268,13 +309,15 @@ function sectionGroups(sections: readonly ViewedSectionCoverage[]): ViewedSectio
 }
 
 /**
- * Builds the immutable events of one checkpoint: one per day segment, with
- * that day's coverage attached, plus zero-duration events for coverage
- * observed on a day without a time segment (or beyond per-event limits).
+ * Builds the immutable events of one checkpoint: one per time segment, plus
+ * zero-duration events for coverage observed on a day without a time segment
+ * (or beyond per-event limits). A day's coverage is attached once, to that
+ * day's first segment; a segment's `localHour` is copied to its event, while
+ * zero-duration coverage events never carry an hour.
  */
 export function createActivityEvents(
   bookId: number,
-  segments: readonly DaySegment[],
+  segments: readonly (DaySegment | HourSegment)[],
   coverage: readonly DayCoverage[],
   createId: () => string = createActivityEventId,
 ): ReadingActivityEvent[] {
@@ -284,7 +327,8 @@ export function createActivityEvents(
     const day = coverageByDay.get(segment.localDate);
     coverageByDay.delete(segment.localDate);
     const [first = [], ...rest] = day ? sectionGroups(day.sections) : [];
-    events.push({ id: createId(), bookId, localDate: segment.localDate, occurredAt: segment.occurredAt, durationMs: segment.durationMs, sections: first, completion: null });
+    const hour = 'localHour' in segment ? { localHour: segment.localHour } : {};
+    events.push({ id: createId(), bookId, localDate: segment.localDate, occurredAt: segment.occurredAt, durationMs: segment.durationMs, ...hour, sections: first, completion: null });
     for (const group of rest) events.push({ id: createId(), bookId, localDate: segment.localDate, occurredAt: segment.occurredAt, durationMs: 0, sections: group, completion: null });
   }
   for (const day of coverageByDay.values()) {

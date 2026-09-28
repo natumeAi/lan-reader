@@ -113,13 +113,18 @@ export interface RevisionRow {
   revision: number;
 }
 
-/** `reading_stats_settings`, created by `006_add_reading_statistics.sql`. Singleton. */
+/**
+ * `reading_stats_settings`, created by `006_add_reading_statistics.sql` and
+ * extended by `008_add_statistics_detail.sql`. Singleton.
+ */
 export interface ReadingStatsSettingsRow {
   id: number;
   daily_goal_minutes: number;
   annual_book_goal: number;
   tracking_started_at: string;
   updated_at: string;
+  /** Since when hourly attribution and completion observations are recorded. */
+  detail_tracking_started_at: string | null;
 }
 
 /**
@@ -172,7 +177,7 @@ export interface ReadingCompletionRow {
   event_id: string;
 }
 
-/** Seven-day chart: activity summed over every Book for one local date. */
+/** Seven-day chart and period statistics: activity summed over every Book for one local date. */
 export interface ReadingDayTotalRow {
   local_date: string;
   duration_ms: number;
@@ -190,3 +195,55 @@ export type CompletedBookRow = BookRow & {
   completion_local_date: string;
   completion_occurred_at: string;
 };
+
+/**
+ * `reading_hourly_activity`, created by `008_add_statistics_detail.sql`.
+ *
+ * Duration of events that named their local hour. It is a breakdown of part of
+ * `reading_daily_activity`, never an additional amount.
+ */
+export interface ReadingHourlyActivityRow {
+  book_id: number;
+  local_date: string;
+  local_hour: number;
+  duration_ms: number;
+}
+
+/**
+ * `reading_completion_observations`, created by `008_add_statistics_detail.sql`.
+ * One row per accepted completion event.
+ */
+export interface ReadingCompletionObservationRow {
+  event_id: string;
+  book_id: number;
+  local_date: string;
+  occurred_at: string;
+}
+
+/** Period statistics: hourly duration summed over every Book. */
+export interface StatisticsHourTotalRow {
+  local_hour: number;
+  duration_ms: number;
+}
+
+/** Period statistics: a distinct Book id. */
+export interface StatisticsBookIdRow {
+  book_id: number;
+}
+
+/** Period ranking: a Book with its totals in the range. */
+export type StatisticsRankingRow = BookRow & {
+  stat_duration_ms: number;
+  stat_characters: number;
+};
+
+/** Monthly calendar: the longest Book of one local date. */
+export type StatisticsChampionRow = BookRow & {
+  stat_local_date: string;
+  stat_duration_ms: number;
+};
+
+/** Earliest dated record, or `null` without one. */
+export interface StatisticsEarliestDateRow {
+  local_date: string | null;
+}

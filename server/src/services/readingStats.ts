@@ -7,8 +7,9 @@
  * a Reading Position.
  *
  * Each activity event commits in its own synchronous transaction:
- * verify Book → establish event identity → merge coverage → add daily totals →
- * record a qualifying completion → store the acknowledgment. A permanent
+ * verify Book → establish event identity → merge coverage → add daily (and,
+ * when the event names its local hour, hourly) totals → record a qualifying
+ * completion and its observation → store the acknowledgment. A permanent
  * rejection writes nothing; an unexpected failure rolls the record back and
  * propagates, so it stays retryable and is never acknowledged.
  */
@@ -98,9 +99,14 @@ export function updateReadingGoals(
  *
  * Built from the decoded values in a fixed order, so property order or ignored
  * extra properties on the wire never change it. `v1` versions this encoding.
+ *
+ * An event without `localHour` hashes exactly as before hourly attribution
+ * existed, so a retry of an already acknowledged older event is still a
+ * duplicate. A present `localHour` appends `['localHour', hour]`, so adding,
+ * removing or changing it under the same id is a conflict.
  */
 export function hashActivityPayload(event: ReadingActivityEvent): string {
-  const canonical = JSON.stringify([
+  const parts: unknown[] = [
     'v1',
     event.bookId,
     event.localDate,
@@ -114,9 +120,12 @@ export function hashActivityPayload(event: ReadingActivityEvent): string {
       section.intervals.map(([start, end]) => [start, end]),
     ]),
     event.completion ? [event.completion.occurredAt, event.completion.localDate] : null,
-  ]);
+  ];
+  if (event.localHour !== undefined) {
+    parts.push(['localHour', event.localHour]);
+  }
 
-  return createHash('sha256').update(canonical).digest('hex');
+  return createHash('sha256').update(JSON.stringify(parts)).digest('hex');
 }
 
 function readStoredIntervals(row: ReadingSectionCoverageRow): CharacterInterval[] {
@@ -202,6 +211,14 @@ function applySectionCoverage(
 function recordCompletion(db: DatabaseHandle, event: ReadingActivityEvent): void {
   const { completion } = event;
   if (!completion) return;
+  const occurredAt = new Date(completion.occurredAt).toISOString();
+
+  // Every accepted completion keeps its own dated observation, so a period
+  // can count a reread completed later in the same year.
+  db.prepare<[string, number, string, string]>(`
+    INSERT OR IGNORE INTO reading_completion_observations (event_id, book_id, local_date, occurred_at)
+    VALUES (?, ?, ?, ?)
+  `).run(event.id, event.bookId, completion.localDate, occurredAt);
 
   // The year comes from the captured local date, never from the instant or
   // the server clock. Normalized instants compare correctly as text.
@@ -219,7 +236,7 @@ function recordCompletion(db: DatabaseHandle, event: ReadingActivityEvent): void
     event.bookId,
     localDateYear(completion.localDate),
     completion.localDate,
-    new Date(completion.occurredAt).toISOString(),
+    occurredAt,
     event.id,
   );
 }
@@ -273,6 +290,16 @@ export function recordReadingActivity(
           duration_ms = duration_ms + excluded.duration_ms,
           characters = characters + excluded.characters
       `).run(event.bookId, event.localDate, event.durationMs, charactersAdded);
+    }
+
+    // A breakdown of the daily duration above, never an additional amount.
+    if (event.durationMs > 0 && event.localHour !== undefined) {
+      db.prepare<[number, string, number, number]>(`
+        INSERT INTO reading_hourly_activity (book_id, local_date, local_hour, duration_ms)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(book_id, local_date, local_hour) DO UPDATE SET
+          duration_ms = duration_ms + excluded.duration_ms
+      `).run(event.bookId, event.localDate, event.localHour, event.durationMs);
     }
 
     recordCompletion(db, event);

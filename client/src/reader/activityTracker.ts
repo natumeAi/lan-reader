@@ -18,7 +18,8 @@
  *
  * Completion follows `qualifiesForCompletion` and is recorded immediately as
  * its own dated record. Duration is checkpointed periodically and at every
- * lifecycle boundary; each checkpoint closes the running span exactly once.
+ * lifecycle boundary; each checkpoint closes the running span exactly once and
+ * attributes it to local hours (and days) without any extra timer.
  * Observer failures never propagate into the reader.
  */
 import type { ReadingActivitySink } from '../utils/activityDelivery';
@@ -31,7 +32,7 @@ import {
   createActivityEvents,
   createCompletionEvent,
   qualifiesForCompletion,
-  splitAtLocalMidnight,
+  splitAtLocalHour,
 } from '../utils/readingActivity';
 import type { AcceptedPosition, ReaderController, ReaderPhase } from './readerController';
 import type { ContentDocument, ReaderEngine } from './types';
@@ -256,7 +257,7 @@ export class ReaderActivityTracker {
   private checkpoint(stop: boolean) {
     const span = stop ? this.clock.stop() : this.clock.checkpoint();
     if (stop && this.checkpointTimer !== null) { clearInterval(this.checkpointTimer); this.checkpointTimer = null; }
-    const events = createActivityEvents(this.bookId, span ? splitAtLocalMidnight(span) : [], this.ledger.drain());
+    const events = createActivityEvents(this.bookId, span ? splitAtLocalHour(span) : [], this.ledger.drain());
     if (events.length) this.inputs.sink?.record(events);
   }
 
