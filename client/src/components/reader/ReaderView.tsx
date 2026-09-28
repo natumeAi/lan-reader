@@ -560,14 +560,9 @@ export function ReaderView({
           ref={containerRef}
           className="reader-epub-container"
         />
-        <div
-          ref={pageEdgeRef}
-          className={[
-            'reader-page-edge',
-            pageTurnDirection ? 'reader-page-edge-' + pageTurnDirection : '',
-          ].filter(Boolean).join(' ')}
-          aria-hidden="true"
-        />
+        {/* The paired-page renderer hides this edge; a direction class here
+            would relayout it on every drag reversal (S6 trace). */}
+        <div ref={pageEdgeRef} className="reader-page-edge" aria-hidden="true" />
       </div>
 
       {/* Gesture layer: tap thirds (prev / toggle chrome / next) + horizontal swipe */}
