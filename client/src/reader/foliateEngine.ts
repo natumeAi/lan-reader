@@ -3,7 +3,7 @@ import { View } from 'foliate-js/view.js';
 import { compare } from 'foliate-js/epubcfi.js';
 import { unzipSync, strFromU8 } from 'fflate';
 import type { FoliateBook, NavigationTarget } from './foliateTypes';
-import type { ReaderEngine, ReaderSession, ReaderState, StablePosition, NavigationCommand, NavigationResult } from './types';
+import type { ReaderEngine, ReaderSession, ReaderState, StablePosition, NavigationCommand, NavigationResult, TurnTarget } from './types';
 import type { ReaderLocation, TocItem, ReadingSection, PageRanges } from '../types/epub';
 import type { ReaderSettings } from '../hooks/useReaderSettings';
 import { getFoliateStyles } from '../hooks/useReaderSettings';
@@ -23,6 +23,7 @@ const paint = async () => { await waitForFrameOrTimeout(); await waitForFrameOrT
 // Disposal must let upstream frame callbacks drain; never race a timer here.
 const drainFrames = () => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
 const delay = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
+type MismatchReason = Extract<NavigationResult, { kind: 'mismatch' }>['reason'];
 export class FoliateEngine implements ReaderEngine {
   readonly element = new View();
   state: ReaderState = 'loading';
@@ -378,6 +379,25 @@ export class FoliateEngine implements ReaderEngine {
     // its preview. Keep that exact surface until it explicitly cancels it.
     this.trace('verified');
   }
+  /**
+   * The committed foreground reached the prepared preview: same layout and
+   * page, and the preview's anchor resolves in this document, round-trips
+   * exactly and is visible (FXL: in its own visible frame). The foreground's
+   * midpoint CFI is not string-compared with the preview's anchor.
+   */
+  private verifyTarget(expected: TurnTarget): MismatchReason | null {
+    const stable = this.stable;
+    if (!stable || stable.layout !== expected.layout) return 'layout';
+    const start = stable.location.start;
+    if (start?.index !== expected.sectionIndex) return 'section';
+    if (stable.page !== expected.page || start.displayed?.total !== expected.total) return 'page';
+    try {
+      if (this.resolve(expected.cfi).index !== expected.sectionIndex) return 'anchor';
+      const range = this.element.isFixedLayout && !expected.cfi.includes('!') ? null : this.targetRange(expected.cfi);
+      if (range && compare(this.element.getCFI(expected.sectionIndex, range), expected.cfi) !== 0) return 'anchor';
+    } catch { return 'anchor'; }
+    return this.isVisible(expected.cfi) ? null : 'anchor';
+  }
   publish() { if (this.state === 'ready' && this.stable) this.onPosition?.(this.stable); }
   async display(target: string | number) {
     await this.execute({ kind: 'display', target });
@@ -391,11 +411,21 @@ export class FoliateEngine implements ReaderEngine {
     if (command.kind === 'turn' || command.kind === 'display') {
       if (this.state !== 'ready') return { kind: 'unavailable', commandId: this.epoch };
     }
-    if (command.kind === 'turn') return this.operation(async token => {
-      if (!await turnAdjacentView(this.element, this.book!, command.direction)) return false;
-      await this.settleLayout(token);
-      if (this.alive(token)) this.commit();
-    });
+    if (command.kind === 'turn') {
+      const expected = command.expectedTarget;
+      const check: { mismatch: MismatchReason | null } = { mismatch: null };
+      const result = await this.operation(async token => {
+        // A preview prepared from another origin can never be reached by one adjacent turn.
+        if (expected && this.stable?.cfi !== expected.origin) { check.mismatch = 'origin'; return; }
+        if (!await turnAdjacentView(this.element, this.book!, command.direction)) return false;
+        await this.settleLayout(token);
+        if (!this.alive(token)) return;
+        this.commit();
+        if (expected) check.mismatch = this.verifyTarget(expected);
+      });
+      // The engine stays ready: the controller restores the origin; no candidate is published.
+      return check.mismatch && result.kind === 'verified' ? { kind: 'mismatch', commandId: result.commandId, reason: check.mismatch } : result;
+    }
     const previous = this.stable;
     return this.operation(async token => {
       if (command.kind === 'settings') {

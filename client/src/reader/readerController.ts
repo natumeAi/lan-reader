@@ -606,12 +606,26 @@ export function createReaderController(session: ReaderSession, options: Options 
     buffer.endMotion();
     setPhase('committing'); diagnostics.startPhase(turnRecord, 'handoff');
     const origin = committed;
-    const result = await execute(request);
-    if (!alive(version)) return { kind: 'cancelled' as const };
-    diagnostics.endPhase(turnRecord, 'handoff');
+    // A shown preview is the only page this turn may accept: the engine
+    // verifies it in the foreground after its single adjacent navigation.
     const lease = request.kind === 'turn' ? pair?.sides[request.direction]?.lease : undefined;
     const proof = lease?.prepared.target;
-    if (result.kind === 'verified' && (request.kind !== 'turn' || !lease || !proof || (samePositionKey(lease.request.key, key()) && result.position.location.start?.index === proof.sectionIndex && result.position.page === proof.page))) {
+    let turnCommand = request;
+    if (request.kind === 'turn' && lease && proof) {
+      if (!origin || !samePositionKey(lease.request.key, key())) {
+        // Stale preview: the foreground has not moved, so there is nothing to restore.
+        diagnostics.endPhase(turnRecord, 'handoff');
+        diagnostics.resolveInteraction(turnInteraction, 'failed', 'proof-stale');
+        clearIntents('failed', 'proof-stale', false);
+        return { kind: 'failed' as const, reason: 'proof-stale' };
+      }
+      turnCommand = { ...request, expectedTarget: { origin: origin.cfi, layout: origin.layout, sectionIndex: proof.sectionIndex, page: proof.page, total: proof.total, cfi: proof.cfi } };
+    }
+    const proven = turnCommand.kind === 'turn' && turnCommand.expectedTarget !== undefined;
+    const result = await execute(turnCommand);
+    if (!alive(version)) return { kind: 'cancelled' as const };
+    diagnostics.endPhase(turnRecord, 'handoff');
+    if (result.kind === 'verified' && (!proven || (samePositionKey(lease!.request.key, key()) && result.position.location.start?.index === proof!.sectionIndex && result.position.page === proof!.page))) {
       diagnostics.markMilestone(turnRecord, 'engineVerified');
       diagnostics.startPhase(turnRecord, 'accept');
       if (request.kind === 'turn' && activeIntent) activeIntent.committed = true;
@@ -622,15 +636,17 @@ export function createReaderController(session: ReaderSession, options: Options 
       diagnostics.endPhase(turnRecord, 'accept');
       return { kind: 'committed' as const };
     } else {
-      if (turnInteraction !== null) {
-        diagnostics.resolveInteraction(turnInteraction, result.kind === 'boundary' ? 'boundary' : result.kind === 'cancelled' ? 'cancelled' : 'failed',
-          result.kind === 'verified' ? 'proof-mismatch' : result.kind);
-      }
-      if (result.kind !== 'boundary' && result.kind !== 'unavailable') {
-        clearIntents('failed', result.kind === 'verified' ? 'proof-mismatch' : result.kind, false);
+      // After a shown preview, boundary/unavailable are proof conflicts too:
+      // restore the verified origin under the cover, never a compensating turn.
+      const conflict = proven && (result.kind === 'boundary' || result.kind === 'unavailable');
+      const reason = result.kind === 'mismatch' ? `proof-${result.reason}` : result.kind === 'verified' ? 'proof-mismatch' : conflict ? `proof-${result.kind}` : result.kind;
+      const kind = result.kind === 'cancelled' ? 'cancelled' as const : result.kind === 'boundary' && !conflict ? 'boundary' as const : 'failed' as const;
+      diagnostics.resolveInteraction(turnInteraction, kind, reason);
+      if (conflict || (result.kind !== 'boundary' && result.kind !== 'unavailable')) {
+        clearIntents('failed', reason, false);
         setPhase('recovering'); if (origin) await restore(origin, version); else setPhase('failed');
       }
-      return { kind: result.kind === 'boundary' ? 'boundary' as const : result.kind === 'cancelled' ? 'cancelled' as const : 'failed' as const, reason: result.kind };
+      return { kind, reason };
     }
   };
   const performTurn = async (next: Direction, commandOptions: TurnCommandOptions = {}, distance = 0, frozen?: Snapshot, gestureInteraction?: number | null, queuedRecord: number | null = null): Promise<TurnResult> => {
