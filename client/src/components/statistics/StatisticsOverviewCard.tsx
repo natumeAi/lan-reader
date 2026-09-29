@@ -1,11 +1,19 @@
 import type { ReactNode } from 'react';
 import type { ReadingStatisticsDto, StatisticsMetricKey } from '@lan-reader/shared';
 import { HomeCard } from '../home/HomeCard.js';
-import { formatMetricChange, joinValueParts, metricValueParts, statisticsCoverageNotices } from '../../utils/statisticsFormat.js';
+import type { ValuePart } from '../../utils/statisticsFormat.js';
+import { flatMetricChange, formatMetricChange, joinValueParts, metricValueParts } from '../../utils/statisticsFormat.js';
+
+/** Client-only 记录笔记 placeholder: not a server metric, never requested or stored. */
+const NOTES = 'notes';
+type OverviewItemKey = StatisticsMetricKey | typeof NOTES;
+
+/** The placeholder always reads zero notes. */
+const NOTES_PARTS: readonly ValuePart[] = [{ value: '0', unit: '条' }];
 
 function LineIcon({ children }: { children: ReactNode }) {
   return (
-    <svg className="statistics-metric-icon" viewBox="0 0 24 24" width="18" height="18"
+    <svg className="statistics-metric-icon" viewBox="0 0 24 24" width="16" height="16"
       aria-hidden="true" focusable="false" fill="none" stroke="currentColor"
       strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.7">
       {children}
@@ -13,7 +21,7 @@ function LineIcon({ children }: { children: ReactNode }) {
   );
 }
 
-const METRIC_ICONS: Record<StatisticsMetricKey, ReactNode> = {
+const METRIC_ICONS: Record<OverviewItemKey, ReactNode> = {
   durationMs: (
     <LineIcon>
       <circle cx="12" cy="13" r="7.5" />
@@ -55,6 +63,12 @@ const METRIC_ICONS: Record<StatisticsMetricKey, ReactNode> = {
       <path d="M12 6.6C10.3 5.3 7.9 4.8 4 5v13c3.9-.2 6.3.3 8 1.6m0-13c1.7-1.3 4.1-1.8 8-1.6v13c-3.9-.2-6.3.3-8 1.6m0-13v13" />
     </LineIcon>
   ),
+  notes: (
+    <LineIcon>
+      <path d="M10.5 20.5H7a2 2 0 0 1-2-2v-13a2 2 0 0 1 2-2h7.5a2 2 0 0 1 2 2v4M3.3 8h3.4m-3.4 4h3.4m-3.4 4h3.4M9.2 8.2h4.4" />
+      <path d="m12.5 20.5.7-3.2 6.4-6.4a1.63 1.63 0 0 1 2.3 2.3l-6.4 6.4Z" />
+    </LineIcon>
+  ),
   characters: (
     <LineIcon>
       <path d="M4.5 6.5h15m-15 5.5h15m-15 5.5h9" />
@@ -68,7 +82,7 @@ const METRIC_ICONS: Record<StatisticsMetricKey, ReactNode> = {
   ),
 };
 
-const METRIC_LABELS: Record<StatisticsMetricKey, string> = {
+const METRIC_LABELS: Record<OverviewItemKey, string> = {
   durationMs: '阅读时间',
   readingDays: '阅读天数',
   averageDailyMs: '日均阅读时长',
@@ -76,12 +90,13 @@ const METRIC_LABELS: Record<StatisticsMetricKey, string> = {
   booksRead: '累计读过',
   booksCompleted: '读完书籍',
   booksInProgress: '在读书籍',
+  notes: '记录笔记',
   characters: '阅读字数',
   charactersPerMinute: '阅读速度',
 };
 
-/** Reference pairs; 在读书籍 occupies a full row. There is intentionally no 记录笔记. */
-const METRIC_ORDER: readonly StatisticsMetricKey[] = [
+/** Five rows of reference pairs; 在读书籍 shares its row with the 记录笔记 placeholder. */
+const OVERVIEW_ORDER: readonly OverviewItemKey[] = [
   'durationMs',
   'readingDays',
   'averageDailyMs',
@@ -89,6 +104,7 @@ const METRIC_ORDER: readonly StatisticsMetricKey[] = [
   'booksRead',
   'booksCompleted',
   'booksInProgress',
+  NOTES,
   'characters',
   'charactersPerMinute',
 ];
@@ -98,21 +114,24 @@ interface StatisticsOverviewCardProps {
 }
 
 /**
- * Nine overview metrics of the selected range. Values and deltas come straight from the
- * period response; nothing is recomputed from the bookshelf or the elapsed part of a
- * period. `all` has no comparison, so it shows no change lines. Metrics are not links.
+ * Overview of the selected range in five rows of two: nine measured metrics and a static
+ * 记录笔记 placeholder (always 0 条). Values and deltas come straight from the period
+ * response; nothing is recomputed from the bookshelf or the elapsed part of a period.
+ * Without comparable data a change line compares against zero (`formatMetricChange`).
+ * `all` has no comparison, so it shows no change lines. Items are not links or buttons.
  */
 export function StatisticsOverviewCard({ statistics }: StatisticsOverviewCardProps) {
   const { overview, comparison } = statistics;
   return (
     <HomeCard className="statistics-overview-card" title="阅读概览" titleHidden>
       <ul className="statistics-metrics">
-        {METRIC_ORDER.map((key) => {
-          const parts = metricValueParts(key, overview[key]);
-          const change = comparison ? formatMetricChange(key, comparison.metrics[key]) : null;
+        {OVERVIEW_ORDER.map((key) => {
+          const parts = key === NOTES ? NOTES_PARTS : metricValueParts(key, overview[key]);
+          const change = !comparison
+            ? null
+            : key === NOTES ? flatMetricChange() : formatMetricChange(key, comparison.metrics[key], overview[key]);
           return (
-            <li key={key} className={key === 'booksInProgress' ? 'statistics-metric is-wide' : 'statistics-metric'}
-              data-metric={key}>
+            <li key={key} className="statistics-metric" data-metric={key}>
               <p className="statistics-metric-value" aria-hidden="true">
                 {parts.map((part, index) => (
                   <span key={index}>
@@ -136,10 +155,6 @@ export function StatisticsOverviewCard({ statistics }: StatisticsOverviewCardPro
           );
         })}
       </ul>
-      <p className="statistics-footnote">字数与速度按去重后的新读正文估算，重读的内容不重复计入。</p>
-      {statisticsCoverageNotices(statistics).map(notice => (
-        <p key={notice} className="statistics-footnote statistics-coverage-note">{notice}</p>
-      ))}
     </HomeCard>
   );
 }
