@@ -1,24 +1,52 @@
 /* 统计 page: range tabs, period navigation, overview, trend, ranking and calendar. Cards reuse
-   the home card frame from home.css; everything here is scoped to .reading-statistics. The
-   page never adds a transform/containment wrapper around .main-view (see home.css). */
+   the home card frame from home.css; everything here is scoped to .reading-statistics, except
+   the shell spacing below, which applies only while the statistics view is shown. The page
+   never adds a transform/containment wrapper around .main-view (see home.css). */
+
+/* Shell spacing only while the statistics view is visible: 16px side gutters instead of the
+   shared 18px (at 374px and below the shared, narrower 14px from folders.css stays) and,
+   below 720px, an 8px top floor instead of 22px that never goes under the safe-area inset.
+   --app-pad-bottom and the navigation clearance are unchanged. Browsers without :has() drop
+   these rules and keep the shared shell spacing. */
+@media (min-width: 375px) {
+  .app-shell:has(> .main-view[data-main-view="statistics"]:not([hidden])) {
+    padding-inline: 16px;
+  }
+}
+
+@media (max-width: 719px) {
+  .app-shell:has(> .main-view[data-main-view="statistics"]:not([hidden])) {
+    --app-pad-top: max(8px, env(safe-area-inset-top));
+  }
+}
 
 .reading-statistics {
+  /* A compact frame for this page; home.css keeps the 首页 defaults. */
+  --home-card-radius: 16px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 14px;
 }
 
 .reading-statistics-header {
   display: flex;
   align-items: center;
-  min-height: 46px;
-  padding: 4px 0 2px;
+}
+
+/* Smaller than the global 35px h1 (bookshelf.css), which the 首页 and 书架 titles keep. */
+.reading-statistics-header h1 {
+  font-size: 26px;
+  line-height: 1.2;
+}
+
+.reading-statistics .home-card-title {
+  font-size: 20px;
 }
 
 .reading-statistics-panel {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 14px;
 }
 
 .reading-statistics-panel:focus {
@@ -38,18 +66,18 @@
   grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 4px;
   padding: 4px;
-  border-radius: 14px;
+  border-radius: 12px;
   background: rgba(118, 118, 128, 0.12);
 }
 
 .statistics-dimension {
-  min-height: 38px;
+  min-height: 34px;
   padding: 0 4px;
   border: 0;
-  border-radius: 10px;
+  border-radius: 9px;
   background: transparent;
   color: var(--text-secondary);
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 620;
   cursor: pointer;
   transition: background-color 160ms ease, color 160ms ease, box-shadow 160ms ease;
@@ -67,7 +95,7 @@
 
 .statistics-period {
   display: grid;
-  grid-template-columns: 44px minmax(0, 1fr) 44px;
+  grid-template-columns: 36px minmax(0, 1fr) 36px;
   align-items: center;
   gap: 10px;
 }
@@ -76,7 +104,7 @@
   margin: 0;
   overflow-wrap: anywhere;
   color: var(--text-primary);
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 720;
   line-height: 1.3;
   text-align: center;
@@ -84,17 +112,25 @@
 }
 
 .statistics-period-button {
+  position: relative;
   display: grid;
-  width: 44px;
-  height: 44px;
+  width: 36px;
+  height: 36px;
   place-items: center;
   padding: 0;
   border: 1px solid rgba(29, 29, 31, 0.12);
-  border-radius: 12px;
+  border-radius: 10px;
   background: transparent;
   color: var(--text-primary);
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
+}
+
+/* The drawn button is 36px; the tap target stays 44px within the surrounding gaps. */
+.statistics-period-button::before {
+  position: absolute;
+  inset: -4px;
+  content: "";
 }
 
 .statistics-period-button:disabled {
@@ -103,8 +139,8 @@
 }
 
 .statistics-period-spacer {
-  width: 44px;
-  height: 44px;
+  width: 36px;
+  height: 36px;
 }
 
 .statistics-dimension:focus-visible,
@@ -131,10 +167,15 @@
 
 /* ---------- Overview ---------- */
 
+.statistics-overview-card {
+  --home-card-pad: 16px;
+}
+
+/* Five rows of two. No fixed height: long values wrap inside their column. */
 .statistics-metrics {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 24px 16px;
+  gap: 24px 32px;
   margin: 0;
   padding: 0;
   list-style: none;
@@ -144,11 +185,7 @@
   display: grid;
   min-width: 0;
   align-content: start;
-  gap: 6px;
-}
-
-.statistics-metric.is-wide {
-  grid-column: 1 / -1;
+  gap: 4px;
 }
 
 .statistics-metric p {
@@ -159,30 +196,30 @@
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
-  gap: 0 6px;
+  gap: 0 5px;
   color: var(--text-primary);
-  line-height: 1.15;
+  line-height: 1.2;
   font-variant-numeric: tabular-nums;
 }
 
 .statistics-metric-number {
-  font-size: 28px;
-  font-weight: 780;
+  font-size: 20px;
+  font-weight: 700;
 }
 
 .statistics-metric-unit {
-  margin-left: 3px;
-  font-size: 15px;
-  font-weight: 700;
+  margin-left: 4px;
+  font-size: 13px;
+  font-weight: 600;
 }
 
 .statistics-metric-label {
   display: flex;
   min-width: 0;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   color: var(--text-secondary);
-  font-size: 15px;
+  font-size: 14px;
   line-height: 1.3;
 }
 
@@ -200,15 +237,6 @@
 
 .statistics-metric-change.is-flat {
   color: var(--text-secondary);
-}
-
-.statistics-footnote {
-  margin: 4px 0 0;
-  padding-top: 12px;
-  border-top: 1px solid rgba(29, 29, 31, 0.08);
-  color: var(--text-secondary);
-  font-size: 12px;
-  line-height: 1.45;
 }
 
 /* ---------- Trend chart ---------- */
@@ -330,15 +358,11 @@
 
 @media (max-width: 374px) {
   .statistics-dimension {
-    font-size: 15px;
-  }
-
-  .statistics-metric-number {
-    font-size: 24px;
+    font-size: 14px;
   }
 
   .statistics-metrics {
-    gap: 20px 12px;
+    gap: 22px 16px;
   }
 }
 

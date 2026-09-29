@@ -6,14 +6,12 @@
  * shared period arithmetic; nothing here reads the network, storage or the reader.
  */
 import type {
-  ReadingStatisticsDto,
   StatisticsCalendarDayDto,
   StatisticsDimension,
   StatisticsMetricComparison,
   StatisticsMetricKey,
   StatisticsPeriod,
 } from '@lan-reader/shared';
-import { formatLocalDate } from '@lan-reader/shared';
 import type { ReadingActivityStatus } from './activityDelivery.js';
 import { deliveryNoticeOf, formatSpokenDuration } from './readingStatsFormat.js';
 
@@ -63,26 +61,6 @@ export function buildCalendarWeeks(days: readonly StatisticsCalendarDayDto[]): (
   const weeks: (StatisticsCalendarCell | null)[][] = [];
   for (let index = 0; index < cells.length; index += 7) weeks.push(cells.slice(index, index + 7));
   return weeks;
-}
-
-/** Known historical completion gaps must remain visible beside the measured counts. */
-export function statisticsCoverageNotices({ range, coverage }: Pick<ReadingStatisticsDto, 'range' | 'coverage'>): string[] {
-  const notices: string[] = [];
-  const detailStart = coverage.detailTrackingStartedAt
-    ? formatLocalDate(new Date(coverage.detailTrackingStartedAt))
-    : null;
-  if (!detailStart) {
-    notices.push('历史重复读完明细可能不完整。');
-  } else if (range.start <= detailStart) {
-    notices.push(`重复读完明细自 ${detailStart} 起记录，较早的完成记录可能不完整。`);
-  }
-  const undated = coverage.undatedCompletedBooks;
-  if (undated > 0) {
-    notices.push(range.dimension === 'all'
-      ? `汇总包含 ${undated} 本没有完成日期的历史读完书籍，无法归入具体周期。`
-      : `${undated} 本历史读完书籍没有完成日期，仅计入“总”的汇总。`);
-  }
-  return notices;
 }
 
 /** The statistics page also names durable records still awaiting server confirmation. */
@@ -197,20 +175,23 @@ const METRIC_KIND: Record<StatisticsMetricKey, MetricKind> = {
   charactersPerMinute: 'speed',
 };
 
-/** Value of one overview metric. A `null` speed (no reading time) is shown as `—`. */
+/**
+ * Value of one overview metric. A `null` speed (no reading time in the period) is shown as
+ * `0 字/分钟`: a display convention only, the decoded DTO keeps its `null`.
+ */
 export function metricValueParts(key: StatisticsMetricKey, value: number | null): ValuePart[] {
-  if (value === null) return [{ value: '—', unit: '' }];
+  const amount = value ?? 0;
   switch (METRIC_KIND[key]) {
     case 'duration':
-      return durationParts(value);
+      return durationParts(amount);
     case 'days':
-      return countParts(value, '天');
+      return countParts(amount, '天');
     case 'books':
-      return countParts(value, '本');
+      return countParts(amount, '本');
     case 'characters':
-      return characterParts(value);
+      return characterParts(amount);
     case 'speed':
-      return countParts(value, '字/分钟');
+      return countParts(amount, '字/分钟');
   }
 }
 
@@ -221,22 +202,32 @@ export function joinValueParts(parts: readonly ValuePart[]): string {
 export interface MetricChange {
   /** Visual direction marker. */
   symbol: '↑' | '↓' | '—';
-  /** Visible text after the marker: a magnitude, `持平` or `暂无可比数据`. */
+  /** Visible text after the marker: a magnitude or `持平`. */
   text: string;
   /** Complete sentence for assistive technology. */
   spoken: string;
 }
 
+/** `— 持平`: equal in both periods, e.g. the 记录笔记 placeholder (always 0 against 0). */
+export function flatMetricChange(): MetricChange {
+  return { symbol: '—', text: '持平', spoken: '与上一周期持平' };
+}
+
 /**
- * Change line against the complete previous period. Only an exact zero delta is `持平`;
- * a non-zero duration difference below one second reads `<1秒` rather than looking flat.
+ * Change line against the complete previous period. A measured `delta` is shown as is:
+ * only an exact zero is `持平`, and a non-zero duration difference below one second reads
+ * `<1秒` rather than looking flat. Without comparable data (`unavailable`) the previous
+ * period is taken as zero, so `current` (the overview value) is the increase and a zero or
+ * `null` (no reading time) current value is `持平`. This is a display convention only:
+ * neither the comparison nor the overview value is rewritten.
  */
-export function formatMetricChange(key: StatisticsMetricKey, comparison: StatisticsMetricComparison): MetricChange {
-  if (comparison.kind === 'unavailable') {
-    return { symbol: '—', text: '暂无可比数据', spoken: '与上一周期暂无可比数据' };
-  }
-  const { delta } = comparison;
-  if (delta === 0) return { symbol: '—', text: '持平', spoken: '与上一周期持平' };
+export function formatMetricChange(
+  key: StatisticsMetricKey,
+  comparison: StatisticsMetricComparison,
+  current: number | null,
+): MetricChange {
+  const delta = comparison.kind === 'delta' ? comparison.delta : current ?? 0;
+  if (delta === 0) return flatMetricChange();
   const magnitude = Math.abs(delta);
   const text = METRIC_KIND[key] === 'duration' && magnitude < SECOND_MS
     ? '<1秒'
