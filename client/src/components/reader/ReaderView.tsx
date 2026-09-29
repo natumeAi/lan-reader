@@ -30,7 +30,6 @@ import { ReaderSettingsPanel } from './ReaderSettingsPanel.js';
 import { ReaderTopBar } from './ReaderTopBar.js';
 import { TocPanel } from './TocPanel.js';
 import { exportReaderDiagnostics } from '../../reader/diagnostics';
-import { PAGE_TURN_DEBUG_STORAGE_KEY, readPageTurnDebugConfig } from '../../utils/pageTurnDiagnostics';
 
 // Open/close FLIP animation: overlay scales between the shelf cover rect and full screen.
 // Same duration/easing both directions to keep open/close symmetric.
@@ -88,7 +87,6 @@ export function ReaderView({
   }, []);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
-  const [diagnosticsEnabled, setDiagnosticsEnabled] = useState(() => readPageTurnDebugConfig().enabled);
   const [chromeVisible, setChromeVisible] = useState(false);
   // Bottom-bar panel: null | 'toc' | 'settings'
   const [activePanel, setActivePanel] = useState<'toc' | 'settings' | null>(null);
@@ -271,12 +269,6 @@ export function ReaderView({
   readerControllerRef.current = controller;
   captureCurrentProgressRef.current = captureCurrentProgress;
   const handleExportDiagnostics = () => exportReaderDiagnostics(engine, readerSettingsRef.current);
-  const handleStartDiagnostics = () => {
-    try { sessionStorage.setItem(PAGE_TURN_DEBUG_STORAGE_KEY, JSON.stringify({ enabled: true })); } catch { return; }
-    setDiagnosticsEnabled(true);
-    setActivePanel(null);
-    retry();
-  };
 
   useEffect(() => {
     const handleHistoryNavigation = (event: PopStateEvent) => {
@@ -614,9 +606,6 @@ export function ReaderView({
       )}
       {activePanel === 'settings' && (
         <ReaderSettingsPanel
-          diagnosticsEnabled={diagnosticsEnabled}
-          onStartDiagnostics={handleStartDiagnostics}
-          onExportDiagnostics={handleExportDiagnostics}
           fontFamilyId={fontFamilyId}
           fontFamilyOptions={fontFamilyOptions}
           fontSize={fontSize}
