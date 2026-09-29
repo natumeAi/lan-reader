@@ -86,6 +86,8 @@
      a shake into a flash. Each of these states instead gets a static equivalent that still
      says what it means. The delete drop zone sits outside .library-home, so it needs its
      own entry here rather than inheriting one. */
+  .book-shell.is-merge-pending .book-cover,
+  .book-shell.is-absorb-pending .folder-cover,
   .book-shell.is-sort-target .book-cover,
   .book-shell.is-sort-target .folder-cover,
   .book-shell.is-pending-save .book-cover,
@@ -99,6 +101,26 @@
   .delete-drop-zone.is-armed {
     animation: none !important;
     transition: none !important;
+  }
+
+  /* Pending merge/absorb: a static weak ring beside the cover's own shadows, no press. */
+  .book-shell.is-merge-pending .book-cover {
+    transform: none;
+    box-shadow:
+      0 18px 30px var(--book-shadow),
+      0 3px 7px rgba(38, 31, 24, 0.14),
+      inset 0 0 0 1px rgba(255, 255, 255, 0.2),
+      0 0 0 2px rgba(0, 122, 255, 0.12);
+  }
+
+  .book-shell.is-absorb-pending .folder-cover {
+    transform: none;
+    box-shadow:
+      0 18px 30px rgba(47, 47, 51, 0.16),
+      0 3px 7px rgba(47, 47, 51, 0.1),
+      inset 0 0 0 1px rgba(29, 29, 31, 0.08),
+      inset 0 1px 0 rgba(255, 255, 255, 0.62),
+      0 0 0 2px rgba(0, 122, 255, 0.12);
   }
 
   .book-shell.is-pending-save .book-cover,

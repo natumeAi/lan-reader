@@ -177,11 +177,13 @@ function App() {
     setFolderError,
   });
   const {
+    accessibility,
     activeDragModifier,
     activeDragPreview,
     activeDragWidth,
     appCollisionDetection,
     dragIntent,
+    dragIntentAnnouncement,
     dragPreviewMotion,
     getFolderOpenIgnoreUntil,
     handleDragCancel,
@@ -350,6 +352,7 @@ function App() {
 
   return (
     <DndContext
+      accessibility={accessibility}
       modifiers={[activeDragModifier]}
       sensors={sensors}
       collisionDetection={appCollisionDetection}
@@ -358,6 +361,7 @@ function App() {
       onDragMove={handleDragMove}
       onDragStart={motionPhase === 'idle' ? handleDragStart : undefined}
     >
+      <div className="visually-hidden" role="status" aria-atomic="true">{dragIntentAnnouncement}</div>
       <main className="app-shell has-main-navigation" aria-label="EPUB Reader"
         style={{
           '--main-view-phase-duration': `${MAIN_VIEW_PHASE_MS}ms`,

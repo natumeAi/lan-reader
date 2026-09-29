@@ -1,5 +1,5 @@
 /**
- * Hover dwell scheduling for drag sorting.
+ * Hover dwell scheduling for sort adoption and merge/absorb arming.
  *
  * dnd-kit recomputes collisions while `DndContext` renders, so a dwell threshold that is
  * only compared inside `collisionDetection` never matures while the pointer is stationary.

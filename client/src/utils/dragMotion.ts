@@ -15,8 +15,8 @@ export interface ShelfMotionTransition {
 }
 
 /**
- * Reorder motion of a sortable card. Kept at the reviewed 460 ms; the dwell threshold
- * (450 ms) and the touch activation delay (500 ms) are separate and deliberately unchanged.
+ * Reorder motion of a sortable card. Kept at the reviewed 460 ms; the hover dwells
+ * (`SORT_DWELL_MS`, `INTENT_DWELL_MS` below) and the touch activation delay (500 ms) are separate.
  */
 export const SHELF_SORT_TRANSITION: ShelfMotionTransition = {
   duration: 460,
@@ -51,3 +51,11 @@ export function dropAnimationConfig(reducedMotion: boolean): ShelfMotionTransiti
 
   return { duration: DROP_SETTLE_MS, easing: DROP_SETTLE_EASING };
 }
+
+// Hover dwells (UX decision D3, 2026-09-29). Changing either needs a new UX decision and an
+// update to the bookshelf drag spec. Free shelf whitespace still sorts without a dwell.
+
+/** Hover time before a card-edge sort target is adopted. */
+export const SORT_DWELL_MS = 150;
+/** Hover time in a target centre zone before merge/absorb is armed. */
+export const INTENT_DWELL_MS = 350;

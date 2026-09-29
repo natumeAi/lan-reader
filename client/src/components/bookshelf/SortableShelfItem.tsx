@@ -1,4 +1,4 @@
-import type { KeyboardEvent, MouseEvent } from 'react';
+import type { CSSProperties, KeyboardEvent, MouseEvent } from 'react';
 import type { ShelfItem } from '../../types/library.js';
 import type { DragIntent } from '../../hooks/useLibraryDrag.js';
 import type { ShelfItemActions } from './ReadOnlyShelfItem.js';
@@ -6,7 +6,7 @@ import { memo } from 'react';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { ShelfItemCover } from './ShelfItemCover.js';
-import { SHELF_SORT_TRANSITION } from '../../utils/dragMotion.js';
+import { INTENT_DWELL_MS, SHELF_SORT_TRANSITION } from '../../utils/dragMotion.js';
 import { formatBookCardAriaLabel } from '../../utils/readingProgress.js';
 
 interface SortableShelfItemProps extends ShelfItemActions {
@@ -72,9 +72,10 @@ export function SortableShelfItem({
     transition: SHELF_SORT_TRANSITION,
   });
   const style = {
+    '--intent-dwell-ms': `${INTENT_DWELL_MS}ms`,
     transform: CSS.Transform.toString(transform),
     transition,
-  };
+  } as CSSProperties;
   const isIntentTarget = dragIntent?.targetKey === item.key;
   // Sorting inserts before its target, so it reads as an opening gap rather than as the
   // merge ring, which means "this card will be consumed".
@@ -84,8 +85,8 @@ export function SortableShelfItem({
     'shelf-item',
     item.type === 'folder' ? 'is-folder-item' : '',
     isDragging ? 'is-dragging' : '',
-    isIntentTarget && dragIntent?.type === 'absorb' ? 'is-absorb-target' : '',
-    isIntentTarget && dragIntent?.type === 'merge' ? 'is-merge-target' : '',
+    isIntentTarget && dragIntent?.type === 'absorb' ? (dragIntent.armed ? 'is-absorb-target' : 'is-absorb-pending') : '',
+    isIntentTarget && dragIntent?.type === 'merge' ? (dragIntent.armed ? 'is-merge-target' : 'is-merge-pending') : '',
     isSortTarget ? 'is-sort-target' : '',
     isPendingSave ? 'is-pending-save' : '',
     isSaveFailed ? 'is-save-failed' : '',
