@@ -1,7 +1,7 @@
 import type { Book, FolderBook } from '../../types/library.js';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { BookCover } from '../bookshelf/BookCover.js';
+import { BookCover, SHELF_COVER_SIZES } from '../bookshelf/BookCover.js';
 import { BookReadingPositionIndicator } from '../bookshelf/BookReadingPositionIndicator.js';
 import { SHELF_SORT_TRANSITION } from '../../utils/dragMotion.js';
 import { formatBookCardAriaLabel } from '../../utils/readingProgress.js';
@@ -76,7 +76,12 @@ export function SortableFolderBook({
         {...listeners}
       >
         <span className="book-cover">
-          <BookCover book={book} disableNativeImageActions priority={priority} />
+          <BookCover
+            book={book}
+            disableNativeImageActions
+            priority={priority}
+            sizes={SHELF_COVER_SIZES}
+          />
           <BookReadingPositionIndicator progress={book.readingProgress} />
         </span>
         <span className="shelf-item-label">{label}</span>

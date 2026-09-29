@@ -1,5 +1,5 @@
 import type { DragPreviewItem } from '../../hooks/useLibraryDrag.js';
-import { BookCover } from './BookCover.js';
+import { BookCover, SHELF_COVER_SIZES } from './BookCover.js';
 import { ShelfItemCover } from './ShelfItemCover.js';
 
 export function DragPreview({ item }: { item: DragPreviewItem | null }) {
@@ -17,7 +17,7 @@ export function DragPreview({ item }: { item: DragPreviewItem | null }) {
     <div className={isCoverOnly ? 'drag-preview is-cover-only' : 'drag-preview'}>
       {isCoverOnly ? (
         <span className="book-cover">
-          <BookCover book={item.book} />
+          <BookCover book={item.book} sizes={SHELF_COVER_SIZES} />
         </span>
       ) : (
         <>

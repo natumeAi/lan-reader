@@ -179,6 +179,7 @@ function App() {
   const {
     activeDragModifier,
     activeDragPreview,
+    activeDragWidth,
     appCollisionDetection,
     dragIntent,
     dragPreviewMotion,
@@ -518,6 +519,7 @@ function App() {
         active={isFixedDragPreviewActive}
         item={activeDragPreview}
         motion={dragPreviewMotion}
+        width={activeDragWidth}
       />
     </DndContext>
   );

@@ -9,6 +9,14 @@ interface BookCoverProps {
   sizes?: string;
 }
 
+/**
+ * Display width of a cover in the bookshelf and Folder-panel grids. It follows the fixed
+ * column counts in base.css (3 / 4 / 5 columns below 500px, from 500px and from 640px) and
+ * the 760px shell limit. Home and statistics covers pass their own sizes, or keep the default.
+ */
+export const SHELF_COVER_SIZES =
+  '(min-width: 760px) 124px, (min-width: 640px) 16vw, (min-width: 500px) 21vw, 28vw';
+
 export function getBookCoverImage(book: CoverBook | null | undefined) {
   const smallUrl = book?.coverThumbnailUrl || null;
   const largeUrl = book?.coverThumbnail2xUrl || null;

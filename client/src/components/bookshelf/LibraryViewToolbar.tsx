@@ -7,7 +7,6 @@ interface LibraryViewToolbarProps {
   modeLabel: string;
   onSortChange: (sort: LibrarySort) => void;
   onViewChange: (view: LibraryView) => void;
-  resultCount: number;
   sort: LibrarySort;
   sortOptions: readonly { value: LibrarySort; label: string }[];
   view: LibraryView;
@@ -26,17 +25,12 @@ export function LibraryViewToolbar({
   modeLabel,
   onSortChange,
   onViewChange,
-  resultCount,
   sort,
   sortOptions,
   view,
 }: LibraryViewToolbarProps) {
   return (
-    <section className="library-view-toolbar" aria-labelledby="library-view-title">
-      <div className="library-view-heading">
-        <h2 id="library-view-title">我的书架</h2>
-        <span className="library-result-count">{resultCount} 项</span>
-      </div>
+    <section className="library-view-toolbar" aria-label="书架视图">
       <div className="library-view-controls">
         <div className="library-view-options">
           {viewOptions.map((option) => (

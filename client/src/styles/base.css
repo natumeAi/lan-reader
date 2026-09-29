@@ -5,8 +5,11 @@
   --book-cover-width: 110px;
   --book-cover-height: 165px;
   --shelf-item-height: 209px;
-  --shelf-column-gap: clamp(18px, 4vw, 28px);
+  --shelf-columns: 3;
+  --shelf-column-gap: clamp(12px, 3.5vw, 24px);
   --shelf-row-gap: 28px;
+  /* Label margin (9px) plus its two-line minimum height (34px), under a 2:3 cover. */
+  --shelf-label-block: 43px;
   --shelf-row-unit: calc(var(--shelf-item-height) + var(--shelf-row-gap));
   --shelf-panel-pad-y: 10px;
   --shelf-panel-pad-x: 6px;
@@ -35,6 +38,20 @@
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/* Fixed column counts: the shelf and the Folder panel share these, and the cover width is
+   whatever the column leaves (about 85-138px between 320px and 760px of viewport). */
+@media (min-width: 500px) {
+  :root {
+    --shelf-columns: 4;
+  }
+}
+
+@media (min-width: 640px) {
+  :root {
+    --shelf-columns: 5;
+  }
 }
 
 * {

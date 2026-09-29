@@ -2,7 +2,7 @@ import type { Dispatch, SetStateAction } from 'react';
 import type { Active, CollisionDetection, DragCancelEvent, DragEndEvent, DragMoveEvent, DragStartEvent, Modifier, UniqueIdentifier } from '@dnd-kit/core';
 import type { Book, Folder, FolderBook, ShelfItem } from '../types/library.js';
 import type { DragTarget } from '../utils/dragCollision.js';
-import type { Point } from '../utils/dragGeometry.js';
+import type { Point, Rect } from '../utils/dragGeometry.js';
 import type { MutationOutcome } from './useLibraryMutations.js';
 import type { SortDwell } from './useSortDwell.js';
 import type { LoadShelfOptions, ShelfProjection } from './useShelfData.js';
@@ -165,21 +165,56 @@ function collisionsForTarget<T extends { id: UniqueIdentifier }>({
   };
 }
 
+/** The element each draggable registers with dnd-kit: a shelf card or a Folder-panel card. */
+const draggableItemSelector = '.book-shell, .folder-book-shell';
+
+type DragStartRect = Pick<Rect, 'left' | 'top' | 'width' | 'height'>;
+
 /**
- * Pointer offset from the dragged item's centre at pickup. Keyboard dragging and fixtures
- * whose activator event carries no coordinates fall back to no offset.
+ * Box of the picked-up item at drag start, measured once for the grab offset and the width of
+ * the fixed preview.
+ *
+ * dnd-kit calls `onDragStart` before it has measured the active node: it fills
+ * `active.rect.current.initial` in a layout effect after the drag-start render, so in a browser
+ * that field is still null here. A populated rect is used as is; otherwise the item is measured
+ * from the activator event's target, which is the pressed element for the pointer sensors and
+ * the focused card button for the keyboard sensor.
  */
-function grabOffsetFromDragStart(event: DragStartEvent): Point {
-  const pointerPoint = pointFromInputEvent(event.activatorEvent);
+function measureDragStartRect(event: DragStartEvent): DragStartRect | null {
   const initialRect = event.active.rect.current.initial;
 
-  if (!pointerPoint || !initialRect) {
+  if (initialRect) {
+    return initialRect;
+  }
+
+  const target = event.activatorEvent?.target;
+  const item = typeof Element !== 'undefined' && target instanceof Element
+    ? target.closest(draggableItemSelector)
+    : null;
+
+  if (!item) {
+    return null;
+  }
+
+  const rect = item.getBoundingClientRect();
+
+  return rect.width > 0 && rect.height > 0 ? rect : null;
+}
+
+/**
+ * Pointer offset from the dragged item's centre at pickup. Keyboard dragging, an activator
+ * event without coordinates, or an item that could not be measured fall back to no offset.
+ */
+function grabOffsetFromDragStart(event: DragStartEvent, startRect: DragStartRect | null): Point {
+  const pointerPoint = pointFromInputEvent(event.activatorEvent);
+
+  if (!pointerPoint || !startRect) {
     return { x: 0, y: 0 };
   }
 
   return {
-    x: pointerPoint.x - (initialRect.left + initialRect.width / 2),
-    y: pointerPoint.y - (initialRect.top + initialRect.height / 2),
+    x: pointerPoint.x - (startRect.left + startRect.width / 2),
+    y: pointerPoint.y - (startRect.top + startRect.height / 2),
   };
 }
 
@@ -227,6 +262,12 @@ export function useLibraryDrag({
   const shelfProjectionRef = useRef<ShelfProjection | null>(null);
   const dragSession = useDragSession();
   const [activeDragPreview, setActiveDragPreview] = useState<DragPreviewItem | null>(null);
+  /**
+   * Width of the picked-up card, for the fixed preview that replaces DragOverlay when a Folder
+   * book leaves its panel. Cover width is fluid, so it is measured once at drag start; like the
+   * preview item it changes only when a drag begins or ends, never while the pointer moves.
+   */
+  const [activeDragWidth, setActiveDragWidth] = useState<number | null>(null);
   /** Only the start and end of a folder-to-shelf handoff re-render; coordinates never do. */
   const [isFixedDragPreviewActive, setIsFixedDragPreviewActive] = useState(false);
   const [dragIntent, setDragIntent] = useState<DragIntent>(idleIntent);
@@ -638,10 +679,13 @@ export function useLibraryDrag({
       // can never arm an affordance at the start of this one.
       clearDragIntent();
       deactivateFixedDragPreview();
-      // The preview must sit where DragOverlay had the item, not centred under the pointer,
-      // so the folder-to-shelf handoff does not make the cover jump.
-      dragSession.start(grabOffsetFromDragStart(event));
+      // One measurement of the picked-up item: the preview must sit where DragOverlay had the
+      // item, not centred under the pointer, so the folder-to-shelf handoff does not make the
+      // cover jump; and it must be as wide as the fluid card it came from.
+      const startRect = measureDragStartRect(event);
+      dragSession.start(grabOffsetFromDragStart(event, startRect));
       acquireShelfProjection();
+      setActiveDragWidth(startRect?.width ?? null);
 
       if (activeData?.type === 'folder-book') {
         setActiveDragPreview({
@@ -705,6 +749,7 @@ export function useLibraryDrag({
   const handleDragCancel = useCallback(
     (event: DragCancelEvent) => {
       setActiveDragPreview(null);
+      setActiveDragWidth(null);
       deactivateFixedDragPreview();
       dragSession.end();
       resetSortDwell();
@@ -939,6 +984,7 @@ export function useLibraryDrag({
   const handleDragEnd = useCallback(
     async (event: DragEndEvent) => {
       setActiveDragPreview(null);
+      setActiveDragWidth(null);
       deactivateFixedDragPreview();
       dragSession.end();
       resetSortDwell();
@@ -1005,6 +1051,7 @@ export function useLibraryDrag({
   return {
     activeDragModifier,
     activeDragPreview,
+    activeDragWidth,
     appCollisionDetection,
     dragIntent,
     dragPreviewMotion: dragSession.previewMotion,

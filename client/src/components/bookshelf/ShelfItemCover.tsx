@@ -1,5 +1,5 @@
 import type { ShelfItem } from '../../types/library.js';
-import { BookCover } from './BookCover.js';
+import { BookCover, SHELF_COVER_SIZES } from './BookCover.js';
 import { BookReadingPositionIndicator } from './BookReadingPositionIndicator.js';
 import { FolderCover } from './FolderCover.js';
 
@@ -32,6 +32,7 @@ export function ShelfItemCover({
         book={item.book}
         disableNativeImageActions={disableNativeImageActions}
         priority={priority}
+        sizes={SHELF_COVER_SIZES}
       />
       {showReadingPosition ? (
         <BookReadingPositionIndicator progress={item.book?.readingProgress} />

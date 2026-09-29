@@ -4,6 +4,8 @@ import type { DragIntent, ShelfMutationFeedback } from '../../hooks/useLibraryDr
 import type { ShelfItemActions } from './ReadOnlyShelfItem.js';
 import { useCallback, useRef } from 'react';
 import { useLibraryView } from '../../hooks/useLibraryView.js';
+import { useStuckState } from '../../hooks/useStuckState.js';
+import { normalizeLibrarySearchText } from '../../utils/libraryView.js';
 import { LibraryGrid } from './LibraryGrid.js';
 import { LibrarySearchBar } from './LibrarySearchBar.js';
 import { LibraryViewToolbar } from './LibraryViewToolbar.js';
@@ -56,7 +58,12 @@ export function LibraryHome({
 }: LibraryHomeProps) {
   const libraryView = useLibraryView({ shelfItems, catalogBooks });
   const { clearSearch } = libraryView;
+  const { isStuck, sentinelRef, stickyRef } = useStuckState();
   const savedScrollTopRef = useRef(0);
+  // Same criterion as the mode announcement: focusing the box without typing is still the list.
+  const subtitle = normalizeLibrarySearchText(libraryView.query)
+    ? `${libraryView.resultCount} 个结果`
+    : `${libraryView.resultCount} 项`;
   const catalogControlsDisabled =
     isCatalogLoading || Boolean(catalogError) || !hasLoadedCatalog;
   const operationStatus = isUploading
@@ -94,8 +101,8 @@ export function LibraryHome({
     <section className="library-home">
       <div className="library-header">
         <div>
-          <p className="eyebrow">Library</p>
           <h1>我的书架</h1>
+          <p className="library-subtitle">{subtitle}</p>
         </div>
 
         <button
@@ -117,7 +124,11 @@ export function LibraryHome({
         />
       </div>
 
-      <div className="library-search-shell">
+      <div ref={sentinelRef} className="library-search-sentinel" aria-hidden="true" />
+      <div
+        ref={stickyRef}
+        className={isStuck ? 'library-search-shell is-stuck' : 'library-search-shell'}
+      >
         <LibrarySearchBar
           bookCount={catalogBooks.length}
           catalogError={catalogError}
@@ -165,7 +176,6 @@ export function LibraryHome({
         modeLabel={libraryView.modeLabel}
         onSortChange={libraryView.selectSort}
         onViewChange={libraryView.selectView}
-        resultCount={libraryView.resultCount}
         sort={libraryView.sort}
         sortOptions={libraryView.sortOptions}
         view={libraryView.view}
