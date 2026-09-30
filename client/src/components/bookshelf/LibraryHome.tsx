@@ -26,6 +26,7 @@ interface LibraryHomeProps extends ShelfItemActions {
   onFileChange: ChangeEventHandler<HTMLInputElement>;
   onRetryCatalog: () => void;
   onRetryShelf: () => void;
+  onSortMenuOpenChange?: (open: boolean) => void;
   operationError: string;
   shelfError: string;
   shelfItems: ShelfItem[];
@@ -52,6 +53,7 @@ export function LibraryHome({
   onRequestItemMenu,
   onRetryCatalog,
   onRetryShelf,
+  onSortMenuOpenChange,
   operationError,
   shelfError,
   shelfItems,
@@ -177,6 +179,8 @@ export function LibraryHome({
         modeLabel={libraryView.modeLabel}
         onSortChange={libraryView.selectSort}
         onViewChange={libraryView.selectView}
+        onSortMenuOpenChange={onSortMenuOpenChange}
+        searchMode={libraryView.searchMode}
         sort={libraryView.sort}
         sortOptions={libraryView.sortOptions}
         view={libraryView.view}

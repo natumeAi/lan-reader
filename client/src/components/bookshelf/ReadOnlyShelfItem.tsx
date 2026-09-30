@@ -3,7 +3,7 @@ import { useItemMenuTrigger } from '../../hooks/useItemMenuTrigger.js';
 import type { ItemMenuRequest } from '../../hooks/useShelfItemMenu.js';
 import type { MouseEvent } from 'react';
 import type { Book, Folder, ShelfItem } from '../../types/library.js';
-import { memo } from 'react';
+import { memo, useCallback } from 'react';
 import { ShelfItemCover } from './ShelfItemCover.js';
 import { ShelfItemLabel } from './ShelfItemLabel.js';
 import { formatShelfBookMeta } from '../../utils/shelfCardMeta.js';
@@ -24,7 +24,10 @@ interface ReadOnlyShelfItemProps extends ShelfItemActions {
 
 /** Read-only cards never subscribe to dnd-kit, so stable props keep them out of drag renders. */
 export const ReadOnlyShelfItem = memo(function ReadOnlyShelfItem({ item, isPendingSave = false, isSaveFailed = false, onOpenBook, onOpenFolder, onRequestItemMenu, priority = false }: ReadOnlyShelfItemProps) {
-  const menuTrigger = useItemMenuTrigger(item.key, onRequestItemMenu, item);
+  const requestReadOnlyMenu = useCallback((request: ItemMenuRequest) => {
+    onRequestItemMenu?.({ ...request, readOnly: true });
+  }, [onRequestItemMenu]);
+  const menuTrigger = useItemMenuTrigger(item.key, onRequestItemMenu ? requestReadOnlyMenu : undefined, item);
   const longPress = useLongPress(menuTrigger.open);
   const name = item.type === 'folder'
     ? item.folder?.name || '文件夹'

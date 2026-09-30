@@ -1,5 +1,5 @@
 import { useId, useLayoutEffect, useRef } from 'react';
-import type { ReactNode } from 'react';
+import type { ReactNode, RefObject } from 'react';
 import { useModalDialog } from '../../hooks/useModalDialog.js';
 import { usePageScrollLock } from '../../hooks/usePageScrollLock.js';
 
@@ -9,10 +9,11 @@ interface ActionSheetProps {
   onClose: () => void;
   children: ReactNode;
   returnFocusElement?: HTMLElement | null;
+  initialFocusRef?: RefObject<HTMLElement | null>;
 }
 
 /** One modal lifetime, including when the action list changes into a picker. */
-export function ActionSheet({ title, anchorRect, onClose, children, returnFocusElement }: ActionSheetProps) {
+export function ActionSheet({ title, anchorRect, onClose, children, returnFocusElement, initialFocusRef }: ActionSheetProps) {
   const titleId = useId();
   const panelRef = useRef<HTMLElement>(null);
   /**
@@ -22,7 +23,7 @@ export function ActionSheet({ title, anchorRect, onClose, children, returnFocusE
    * dismiss the sheet.
    */
   const backdropPressRef = useRef(false);
-  const { dialogRef, onKeyDown } = useModalDialog({ open: true, onRequestClose: onClose, returnFocusElement });
+  const { dialogRef, onKeyDown } = useModalDialog({ open: true, onRequestClose: onClose, returnFocusElement, initialFocusRef });
   usePageScrollLock();
   useLayoutEffect(() => {
     const panel = panelRef.current;

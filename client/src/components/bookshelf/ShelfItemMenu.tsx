@@ -5,10 +5,11 @@ import type { ShelfOperations } from '../../hooks/useShelfOperations.js';
 import { ActionSheet } from '../common/ActionSheet.js';
 import { FolderPicker } from './FolderPicker.js';
 
-export function ShelfItemMenu({ target, anchorRect, opener, shelfItems, isSaving, operations, onClose, onOpenBook,
+export function ShelfItemMenu({ target, anchorRect, opener, shelfItems, readOnly = false, isSaving, operations, onClose, onOpenBook,
   onOpenFolder, onDelete }: {
   target: ItemMenuTarget; anchorRect: DOMRect | null; opener: HTMLElement | null; shelfItems: ShelfItem[];
   isSaving: boolean; operations: ShelfOperations; onClose: () => void;
+  readOnly?: boolean;
   onOpenBook: (book: Book, rect: DOMRect | null) => void;
   onOpenFolder: (folder: Folder, rect: DOMRect | null, options?: { startRename?: boolean }) => void;
   onDelete: (book: Book) => void;
@@ -19,6 +20,7 @@ export function ShelfItemMenu({ target, anchorRect, opener, shelfItems, isSaving
   const title = picking ? '移到文件夹' : target.type === 'folder' ? target.folder.name || '文件夹' : book?.title || '未命名书籍';
   const moveReason = isSaving ? '正在保存' : !folders.length ? '还没有文件夹' : '';
   return <ActionSheet title={title} anchorRect={anchorRect} onClose={onClose} returnFocusElement={opener}>
+    {readOnly ? <p className="action-sheet-note">当前视图不能拖动整理</p> : null}
     {picking ? <FolderPicker folders={folders} disabled={isSaving} onSelect={folder => {
       if (target.type !== 'book' || isSaving) return;
       onClose();

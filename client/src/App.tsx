@@ -132,6 +132,7 @@ function App() {
     invalidateReadingStatistics();
   }, [invalidateReadingDashboard, invalidateReadingStatistics]);
   const [recentSheetOpen, setRecentSheetOpen] = useState(false);
+  const [sortMenuOpen, setSortMenuOpen] = useState(false);
   const handleRecentSheetClosed = useCallback(() => setRecentSheetOpen(false), []);
   const handleFolderRenamed = useCallback((renamedFolder: Folder) => {
     replaceShelfFolder(renamedFolder);
@@ -245,6 +246,7 @@ function App() {
     goalDialog ||
     recentSheetOpen ||
     itemMenu.menu ||
+    sortMenuOpen ||
     ranking.session ||
     activeDragPreview,
   );
@@ -447,7 +449,7 @@ function App() {
           data-motion-direction={mainView === MAIN_VIEW.HOME ? motionDirection : undefined}
           data-motion-instant={mainView === MAIN_VIEW.HOME && motionInstant ? '' : undefined}
           hidden={mainView !== MAIN_VIEW.HOME}
-          inert={mainView !== MAIN_VIEW.HOME || recentSheetOpen || Boolean(itemMenu.menu) || Boolean(ranking.session) || motionPhase !== 'idle'}
+          inert={mainView !== MAIN_VIEW.HOME || recentSheetOpen || Boolean(itemMenu.menu) || sortMenuOpen || Boolean(ranking.session) || motionPhase !== 'idle'}
           tabIndex={-1}
           onTransitionEnd={handleMainViewTransitionEnd}
         >
@@ -481,7 +483,7 @@ function App() {
           data-motion-direction={mainView === MAIN_VIEW.SHELF ? motionDirection : undefined}
           data-motion-instant={mainView === MAIN_VIEW.SHELF && motionInstant ? '' : undefined}
           hidden={mainView !== MAIN_VIEW.SHELF}
-          inert={mainView !== MAIN_VIEW.SHELF || recentSheetOpen || Boolean(itemMenu.menu) || Boolean(ranking.session) || motionPhase !== 'idle'}
+          inert={mainView !== MAIN_VIEW.SHELF || recentSheetOpen || Boolean(itemMenu.menu) || sortMenuOpen || Boolean(ranking.session) || motionPhase !== 'idle'}
           tabIndex={-1}
           onTransitionEnd={handleMainViewTransitionEnd}
         >
@@ -506,6 +508,7 @@ function App() {
             onOpenFolder={handleOpenFolder}
             onRetryCatalog={loadCatalog}
             onRetryShelf={loadShelf}
+            onSortMenuOpenChange={setSortMenuOpen}
             shelfItems={shelfItems}
             uploadProgress={uploadProgress}
           />
@@ -518,7 +521,7 @@ function App() {
           data-motion-direction={mainView === MAIN_VIEW.STATISTICS ? motionDirection : undefined}
           data-motion-instant={mainView === MAIN_VIEW.STATISTICS && motionInstant ? '' : undefined}
           hidden={mainView !== MAIN_VIEW.STATISTICS}
-          inert={mainView !== MAIN_VIEW.STATISTICS || recentSheetOpen || Boolean(itemMenu.menu) || Boolean(ranking.session) || motionPhase !== 'idle'}
+          inert={mainView !== MAIN_VIEW.STATISTICS || recentSheetOpen || Boolean(itemMenu.menu) || sortMenuOpen || Boolean(ranking.session) || motionPhase !== 'idle'}
           tabIndex={-1}
           onTransitionEnd={handleMainViewTransitionEnd}
         >

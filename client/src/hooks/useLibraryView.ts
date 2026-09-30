@@ -19,8 +19,8 @@ const allowedSorts = new Set(Object.values(LIBRARY_SORT));
 const allowedViews = new Set(Object.values(LIBRARY_VIEW));
 
 const viewLabels = Object.freeze({
-  [LIBRARY_VIEW.ALL]: '全部',
-  [LIBRARY_VIEW.RECENT_ADDED]: '最近添加',
+  [LIBRARY_VIEW.ALL]: '书架',
+  [LIBRARY_VIEW.RECENT_ADDED]: '全部书籍',
   [LIBRARY_VIEW.FOLDERS]: '文件夹',
 });
 

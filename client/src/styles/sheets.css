@@ -12,6 +12,7 @@
 .action-sheet-actions button:disabled { color: var(--text-secondary); cursor: default; }
 .action-sheet-actions .is-danger { color: var(--danger); }
 .action-sheet-explanation { display: block; margin-top: 4px; font-size: 12px; color: var(--text-secondary); }
+.action-sheet-note { margin: 0 12px 8px; color: var(--text-secondary); font-size: 12px; line-height: 1.4; }
 .action-sheet-panel button:focus-visible { outline: 3px solid var(--accent); outline-offset: -3px; }
 .folder-picker { display: grid; gap: 4px; }
 .folder-picker .folder-picker-row { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 12px; align-items: center; }

@@ -1,5 +1,6 @@
 import type { LibrarySort, LibraryView } from '../../utils/libraryView.js';
-import { LIBRARY_VIEW } from '../../utils/libraryView.js';
+import { LIBRARY_SORT, LIBRARY_VIEW } from '../../utils/libraryView.js';
+import { SortMenuButton } from './SortMenuButton.js';
 
 interface LibraryViewToolbarProps {
   controlsDisabled: boolean;
@@ -7,6 +8,8 @@ interface LibraryViewToolbarProps {
   modeLabel: string;
   onSortChange: (sort: LibrarySort) => void;
   onViewChange: (view: LibraryView) => void;
+  onSortMenuOpenChange?: (open: boolean) => void;
+  searchMode: boolean;
   sort: LibrarySort;
   sortOptions: readonly { value: LibrarySort; label: string }[];
   view: LibraryView;
@@ -14,8 +17,8 @@ interface LibraryViewToolbarProps {
 
 
 const viewOptions = [
-  { value: LIBRARY_VIEW.ALL, label: '全部' },
-  { value: LIBRARY_VIEW.RECENT_ADDED, label: '最近添加' },
+  { value: LIBRARY_VIEW.ALL, label: '书架' },
+  { value: LIBRARY_VIEW.RECENT_ADDED, label: '全部书籍' },
   { value: LIBRARY_VIEW.FOLDERS, label: '文件夹' },
 ];
 
@@ -25,10 +28,13 @@ export function LibraryViewToolbar({
   modeLabel,
   onSortChange,
   onViewChange,
+  onSortMenuOpenChange,
+  searchMode,
   sort,
   sortOptions,
   view,
 }: LibraryViewToolbarProps) {
+  const sortLabel = sortOptions.find(option => option.value === sort)?.label ?? '';
   return (
     <section className="library-view-toolbar" aria-label="书架视图">
       <div className="library-view-controls">
@@ -46,28 +52,22 @@ export function LibraryViewToolbar({
           ))}
         </div>
         {sortOptions.length ? (
-          <select
-            aria-label="排序方式"
-            disabled={controlsDisabled}
-            value={sort}
-            onChange={(event) => {
-              const option = sortOptions.find((entry) => entry.value === event.target.value);
-              if (option) onSortChange(option.value);
-            }}
-          >
-            {sortOptions.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
+          <SortMenuButton disabled={controlsDisabled} sort={sort} options={sortOptions}
+            onChange={onSortChange} onOpenChange={onSortMenuOpenChange} />
         ) : null}
       </div>
       {!editable ? (
-        <p className="library-read-only-hint">
-          <span className="library-read-only-icon" aria-hidden="true">🔒</span>
-          <span>只读视图，不会改变手动书架顺序</span>
-        </p>
+        searchMode ? <p className="library-read-only-hint">搜索结果不能拖动整理</p>
+          : view === LIBRARY_VIEW.ALL ? (
+            <button type="button" className="library-read-only-hint" disabled={controlsDisabled}
+              onClick={() => onSortChange(LIBRARY_SORT.MANUAL)}>
+              按「{sortLabel}」排序 · <span>恢复手动顺序</span>
+            </button>
+          ) : (
+            <button type="button" className="library-read-only-hint" onClick={() => onViewChange(LIBRARY_VIEW.ALL)}>
+              此视图不能拖动整理 · <span>回到书架</span>
+            </button>
+          )
       ) : null}
       <p className="library-mode-status" role="status" aria-live="polite">
         {modeLabel}
