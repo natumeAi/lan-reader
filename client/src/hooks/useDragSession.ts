@@ -23,6 +23,10 @@ export interface DragSession {
    * while the preview is idle.
    */
   movePreview(pointerPoint: Point | null, overlayCenter: Point): void;
+  /** One boolean publisher; coordinates never reach the subscriber. */
+  onNearDeleteZoneChange(listener: ((near: boolean) => void) | null): void;
+  /** Re-evaluate after the drag-start render has mounted the delete zone. */
+  refreshDeleteZone(): void;
   /** Latest coordinate seen by the single active pointer stream. */
   pointerPoint(): Point | null;
   /** Turns the fixed preview on at the folder-to-shelf handoff and off when it ends. */
@@ -30,11 +34,13 @@ export interface DragSession {
   /** Cached shelf sortable area, refreshed on scroll/resize and per drag. */
   shelfSortArea(): Rect | null;
   /** Starts a drag with the pointer's offset from the item centre. */
-  start(grabOffset: Point): void;
+  start(grabOffset: Point, options?: { canDelete: boolean; pointerPoint: Point | null }): void;
 }
 
 import { useEffect, useMemo, useRef } from 'react';
+import { getClientRect } from '@dnd-kit/core';
 import { pointFromInputEvent, shelfSortAreaRect } from '../utils/dragGeometry.js';
+import { DELETE_ZONE_SCROLL_GUARD_PX } from '../utils/dragMotion.js';
 import { createDragPreviewMotion } from '../utils/dragPreviewMotion.js';
 
 const zeroOffset: Point = { x: 0, y: 0 };
@@ -55,6 +61,9 @@ function measureShelfSortArea(): Rect | null {
 
 export function useDragSession(): DragSession {
   const generationRef = useRef(0);
+  const canDeleteRef = useRef(false);
+  const nearDeleteZoneRef = useRef(false);
+  const nearDeleteZoneListenerRef = useRef<((near: boolean) => void) | null>(null);
   const grabOffsetRef = useRef<Point>(zeroOffset);
   const geometryCleanupRef = useRef<(() => void) | null>(null);
   const isPreviewActiveRef = useRef(false);
@@ -70,6 +79,23 @@ export function useDragSession(): DragSession {
   const previewMotion = motionRef.current;
 
   const session = useMemo<DragSession>(() => {
+    const publishNearDeleteZone = (near: boolean) => {
+      if (nearDeleteZoneRef.current === near) return;
+      nearDeleteZoneRef.current = near;
+      nearDeleteZoneListenerRef.current?.(near);
+    };
+
+    const refreshDeleteZone = () => {
+      const point = pointerPointRef.current;
+      const zone = canDeleteRef.current && point
+        ? document.querySelector('.delete-drop-zone')
+        : null;
+      publishNearDeleteZone(Boolean(
+        // Entry and armed animations must not move the auto-scroll boundary.
+        point && zone && point.y >= getClientRect(zone, { ignoreTransform: true }).top - DELETE_ZONE_SCROLL_GUARD_PX,
+      ));
+    };
+
     const writePreview = (point: Point) => {
       const offset = grabOffsetRef.current;
 
@@ -93,6 +119,7 @@ export function useDragSession(): DragSession {
         }
 
         pointerPointRef.current = point;
+        refreshDeleteZone();
 
         if (isPreviewActiveRef.current) {
           writePreview(point);
@@ -127,6 +154,7 @@ export function useDragSession(): DragSession {
 
       const invalidate = () => {
         shelfSortAreaRef.current = null;
+        refreshDeleteZone();
       };
 
       // Capture phase so a scrolling container invalidates the cache too; never keep a
@@ -148,6 +176,8 @@ export function useDragSession(): DragSession {
       end() {
         stopPointerTracking();
         stopGeometryTracking();
+        canDeleteRef.current = false;
+        publishNearDeleteZone(false);
         isPreviewActiveRef.current = false;
         grabOffsetRef.current = zeroOffset;
         previewMotion.reset();
@@ -167,6 +197,10 @@ export function useDragSession(): DragSession {
 
         writePreview(pointerPoint);
       },
+      onNearDeleteZoneChange(listener) {
+        nearDeleteZoneListenerRef.current = listener;
+      },
+      refreshDeleteZone,
       pointerPoint() {
         return pointerPointRef.current;
       },
@@ -184,13 +218,16 @@ export function useDragSession(): DragSession {
 
         return shelfSortAreaRef.current;
       },
-      start(grabOffset) {
+      start(grabOffset, options) {
         generationRef.current += 1;
         grabOffsetRef.current = grabOffset;
         isPreviewActiveRef.current = false;
         previewMotion.reset();
         startPointerTracking();
         startGeometryTracking();
+        canDeleteRef.current = options?.canDelete ?? false;
+        pointerPointRef.current = options?.pointerPoint ?? null;
+        refreshDeleteZone();
       },
     };
   }, [previewMotion]);

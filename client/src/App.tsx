@@ -34,7 +34,7 @@ import { useReadingStatistics } from './hooks/useReadingStatistics.js';
 import { useStatisticsRanking } from './hooks/useStatisticsRanking.js';
 import { useReducedMotion } from './hooks/useReducedMotion.js';
 import { useShelfData } from './hooks/useShelfData.js';
-import { dropAnimationConfig } from './utils/dragMotion.js';
+import { AUTO_SCROLL_THRESHOLD_Y, TOUCH_ACTIVATION_DELAY_MS, dropAnimationConfig } from './utils/dragMotion.js';
 import { rectIntersectsViewport } from './utils/folderMotion.js';
 import { MAIN_VIEW } from './utils/mainViewPreference.js';
 
@@ -197,6 +197,8 @@ function App() {
     handleDragMove,
     handleDragStart,
     isFixedDragPreviewActive,
+    isFolderExitPending,
+    nearDeleteZone,
     landingKey,
     mutationFeedback,
     sensors,
@@ -417,6 +419,7 @@ function App() {
   return (
     <DndContext
       accessibility={accessibility}
+      autoScroll={{ enabled: !nearDeleteZone, threshold: { x: 0, y: AUTO_SCROLL_THRESHOLD_Y } }}
       modifiers={[activeDragModifier]}
       sensors={sensors}
       collisionDetection={appCollisionDetection}
@@ -428,6 +431,7 @@ function App() {
       <div className="visually-hidden" role="status" aria-atomic="true">{dragIntentAnnouncement}</div>
       <main className="app-shell has-main-navigation" aria-label="EPUB Reader"
         style={{
+          '--touch-activation-ms': `${TOUCH_ACTIVATION_DELAY_MS}ms`,
           '--main-view-phase-duration': `${MAIN_VIEW_PHASE_MS}ms`,
           '--main-navigation-duration': `${MAIN_VIEW_PHASE_MS * 2}ms`,
         } as CSSProperties}>
@@ -543,6 +547,7 @@ function App() {
           folder={openFolder}
           originRect={folderOriginRect}
           isClosing={isFolderClosing}
+          isExitPending={isFolderExitPending}
           isLoading={isFolderLoading}
           isRenaming={isRenamingFolder}
           isRenameSaving={isSavingFolderName}

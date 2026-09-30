@@ -38,6 +38,29 @@
 
 @media (prefers-reduced-motion: reduce) {
   .shelf-toast { animation: none; }
+  .drag-preview .book-cover,
+  .drag-preview .folder-cover,
+  .delete-drop-zone,
+  .folder-exit-hint {
+    animation: none !important;
+    transition: none !important;
+  }
+
+  .drag-preview .book-cover,
+  .drag-preview .folder-cover {
+    transform: scale(1.04);
+  }
+
+  .delete-drop-zone {
+    opacity: 1;
+    transform: translateX(-50%);
+  }
+
+  .shelf-grid .book-shell:active:not(.is-dragging):not(:disabled) .book-cover,
+  .shelf-grid .book-shell:active:not(.is-dragging):not(:disabled) .folder-cover,
+  .folder-book-shell:not(.is-dragging) .folder-book-cover-button:active:not(:disabled) .book-cover {
+    transition: none !important;
+  }
   .reader-overlay,
   .reader-overlay *:not(.reader-loading-spinner),
   .folder-overlay,
@@ -89,8 +112,6 @@
      own entry here rather than inheriting one. */
   .book-shell.is-merge-pending .book-cover,
   .book-shell.is-absorb-pending .folder-cover,
-  .book-shell.is-sort-target .book-cover,
-  .book-shell.is-sort-target .folder-cover,
   .book-shell.is-pending-save .book-cover,
   .book-shell.is-pending-save .folder-cover,
   .folder-book-shell.is-pending-save .book-cover,

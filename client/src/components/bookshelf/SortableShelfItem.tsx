@@ -84,9 +84,6 @@ export function SortableShelfItem({
     transition,
   } as CSSProperties;
   const isIntentTarget = dragIntent?.targetKey === item.key;
-  // Sorting inserts before its target, so it reads as an opening gap rather than as the
-  // merge ring, which means "this card will be consumed".
-  const isSortTarget = dragIntent?.type === 'sort' && dragIntent.sortTargetKey === item.key;
   const className = [
     'book-shell',
     'shelf-item',
@@ -94,7 +91,6 @@ export function SortableShelfItem({
     isDragging ? 'is-dragging' : '',
     isIntentTarget && dragIntent?.type === 'absorb' ? (dragIntent.armed ? 'is-absorb-target' : 'is-absorb-pending') : '',
     isIntentTarget && dragIntent?.type === 'merge' ? (dragIntent.armed ? 'is-merge-target' : 'is-merge-pending') : '',
-    isSortTarget ? 'is-sort-target' : '',
     isPendingSave ? 'is-pending-save' : '',
     isSaveFailed ? 'is-save-failed' : '',
     isLanding ? 'is-landing' : '',

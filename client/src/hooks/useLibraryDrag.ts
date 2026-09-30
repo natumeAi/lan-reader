@@ -57,7 +57,7 @@ interface LibraryDragOptions {
   shelfItems: ShelfItem[];
 }
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   KeyboardCode,
   KeyboardSensor,
@@ -79,7 +79,7 @@ import {
   pointerCenterFromDragEvent,
   pointInRect,
 } from '../utils/dragGeometry.js';
-import { INTENT_DWELL_MS, SORT_DWELL_MS, TOUCH_ACTIVATION_DELAY_MS, STILL_RELEASE_TOLERANCE_PX } from '../utils/dragMotion.js';
+import { FOLDER_EXIT_DWELL_MS, INTENT_DWELL_MS, SORT_DWELL_MS, TOUCH_ACTIVATION_DELAY_MS, STILL_RELEASE_TOLERANCE_PX } from '../utils/dragMotion.js';
 import {
   normalizeShelfBookFromFolderBook,
   normalizeShelfItem,
@@ -290,6 +290,20 @@ export function useLibraryDrag({
   const dragTravelRef = useRef(0);
   const ignoreFolderClickUntilRef = useRef(0);
   const dragSession = useDragSession();
+  const [nearDeleteZone, setNearDeleteZone] = useState(false);
+  const [isFolderExitPending, setIsFolderExitPending] = useState(false);
+  const folderExitRef = useRef<{
+    book: FolderBook;
+    center: Point;
+    generation: number;
+    folderSession: number;
+  } | null>(null);
+  const folderSession = getFolderSession?.() ?? folderCloseVersion;
+
+  useLayoutEffect(() => {
+    dragSession.onNearDeleteZoneChange(setNearDeleteZone);
+    return () => dragSession.onNearDeleteZoneChange(null);
+  }, [dragSession]);
   const announcementItemsRef = useRef({ shelfItems, folderBooks });
   announcementItemsRef.current = { shelfItems, folderBooks };
   /** Spoken names use the same untitled fallbacks as the visible cards. */
@@ -319,6 +333,7 @@ export function useLibraryDrag({
   const shelfSortDwell = useSortDwell(SORT_DWELL_MS);
   const shelfIntentDwell = useSortDwell(INTENT_DWELL_MS);
   const folderSortDwell = useSortDwell(SORT_DWELL_MS);
+  const folderExitDwell = useSortDwell(FOLDER_EXIT_DWELL_MS);
   const operations = useShelfOperations({
     folderBooksByFolderId,
     shelfItems,
@@ -399,11 +414,18 @@ export function useLibraryDrag({
     folderSortDwell.reset();
   }, [folderSortDwell]);
 
+  const resetFolderExit = useCallback(() => {
+    if (folderExitRef.current) setIsFolderExitPending(false);
+    folderExitRef.current = null;
+    folderExitDwell.reset();
+  }, [folderExitDwell]);
+
   const resetSortDwell = useCallback(() => {
+    resetFolderExit();
     shelfSortDwell.reset();
     shelfIntentDwell.reset();
     folderSortDwell.reset();
-  }, [folderSortDwell, shelfSortDwell, shelfIntentDwell]);
+  }, [folderSortDwell, shelfSortDwell, shelfIntentDwell, resetFolderExit]);
 
   const deactivateFixedDragPreview = useCallback(() => {
     dragSession.setPreviewActive(false);
@@ -637,6 +659,39 @@ export function useLibraryDrag({
     ],
   );
 
+  // A Folder opening owns the exit deadline, including reopening the same id. Reset before
+  // the maturity check so a render for a new opening can never hand off the old book.
+  useLayoutEffect(() => {
+    clearFolderDragIntent();
+    resetSortDwell();
+  }, [clearFolderDragIntent, folderCloseVersion, folderSession, openFolder?.id, resetSortDwell]);
+
+  useLayoutEffect(() => {
+    dragSession.refreshDeleteZone();
+  }, [activeDragPreview, dragSession]);
+
+  // useSortDwell re-renders this host when a stationary pointer's deadline matures.
+  // The existing handoff still owns the projection, card measurement and grab offset.
+  useLayoutEffect(() => {
+    const pending = folderExitRef.current;
+    if (!pending) return;
+    const panel = document.querySelector('.folder-panel');
+    if (!openFolder || pending.folderSession !== folderSession ||
+        pending.generation !== dragSession.generation() ||
+        !panel || pointInRect(pending.center, panel.getBoundingClientRect())) {
+      resetFolderExit();
+      return;
+    }
+    if (!folderExitDwell.evaluate({
+      generation: pending.generation, targetKey: `exit:${pending.book.key}`,
+    })) return;
+
+    dragSession.setPreviewActive(true);
+    dragSession.movePreview(dragSession.pointerPoint(), pending.center);
+    setIsFixedDragPreviewActive(true);
+    beginFolderBookShelfDrag(pending.book);
+  });
+
   const handleDropOnDelete = useCallback(
     (event: DragEndEvent) => {
       const activeData = readDragData(event.active);
@@ -679,7 +734,13 @@ export function useLibraryDrag({
       // cover jump; and it must be as wide as the fluid card it came from.
       const startRect = measureDragStartRect(event);
       dragTravelRef.current = 0;
-      dragSession.start(grabOffsetFromDragStart(event, startRect));
+      dragSession.start(grabOffsetFromDragStart(event, startRect), {
+        canDelete: activeData?.type === 'book' || activeData?.type === 'folder-book',
+        pointerPoint: pointFromInputEvent(event.activatorEvent),
+      });
+      if (isTouchActivator(event.activatorEvent) && typeof navigator.vibrate === 'function') {
+        navigator.vibrate(10);
+      }
       acquireShelfProjection();
       setActiveDragWidth(startRect?.width ?? null);
 
@@ -734,14 +795,17 @@ export function useLibraryDrag({
         return;
       }
 
-      if (!pointInRect(activeCenter, folderPanel.getBoundingClientRect())) {
-        dragSession.setPreviewActive(true);
-        dragSession.movePreview(dragSession.pointerPoint(), activeCenter);
-        setIsFixedDragPreviewActive(true);
-        beginFolderBookShelfDrag(activeData.book);
+      if (pointInRect(activeCenter, folderPanel.getBoundingClientRect())) {
+        resetFolderExit();
+        return;
       }
+
+      const generation = dragSession.generation();
+      if (!folderExitRef.current) setIsFolderExitPending(true);
+      folderExitRef.current = { book: activeData.book, center: activeCenter, generation, folderSession };
+      folderExitDwell.evaluate({ generation, targetKey: `exit:${activeData.book.key}` });
     },
-    [beginFolderBookShelfDrag, dragSession, openFolder, readDragData],
+    [dragSession, folderExitDwell, folderSession, openFolder, readDragData, resetFolderExit],
   );
 
   const handleDragCancel = useCallback(
@@ -1040,12 +1104,12 @@ export function useLibraryDrag({
     ],
   );
 
-  const getFolderOpenIgnoreUntil = useCallback(() => ignoreFolderClickUntilRef.current, []);
+  useEffect(() => () => {
+    folderExitRef.current = null;
+    folderExitDwell.reset();
+  }, [folderExitDwell]);
 
-  useEffect(() => {
-    clearFolderDragIntent();
-    resetSortDwell();
-  }, [clearFolderDragIntent, folderCloseVersion, resetSortDwell]);
+  const getFolderOpenIgnoreUntil = useCallback(() => ignoreFolderClickUntilRef.current, []);
 
   useEffect(
     () => () => {
@@ -1071,6 +1135,8 @@ export function useLibraryDrag({
     handleDragMove,
     handleDragStart,
     isFixedDragPreviewActive,
+    isFolderExitPending,
+    nearDeleteZone,
     landingKey,
     mutationFeedback,
     operations,

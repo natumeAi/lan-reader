@@ -15,11 +15,11 @@ export interface ShelfMotionTransition {
 }
 
 /**
- * Reorder motion of a sortable card. Kept at the reviewed 460 ms; the hover dwells
- * (`SORT_DWELL_MS`, `INTENT_DWELL_MS` below) and the touch activation delay (500 ms) are separate.
+ * Reorder motion of a sortable card (UX decision D8); the hover dwells
+ * (`SORT_DWELL_MS`, `INTENT_DWELL_MS` below) and the touch activation delay (350 ms) are separate.
  */
 export const SHELF_SORT_TRANSITION: ShelfMotionTransition = {
-  duration: 460,
+  duration: 280,
   easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
 };
 
@@ -60,5 +60,12 @@ export const SORT_DWELL_MS = 150;
 /** Hover time in a target centre zone before merge/absorb is armed. */
 export const INTENT_DWELL_MS = 350;
 
-export const TOUCH_ACTIVATION_DELAY_MS = 500;
+export const TOUCH_ACTIVATION_DELAY_MS = 350;
 export const STILL_RELEASE_TOLERANCE_PX = 6;
+
+/** Time outside the Folder panel before handing a book to the shelf. */
+export const FOLDER_EXIT_DWELL_MS = 250;
+/** Vertical viewport fraction used for edge auto-scroll away from the delete zone. */
+export const AUTO_SCROLL_THRESHOLD_Y = 0.12;
+/** Stop auto-scroll this far above the delete zone while dragging a book. */
+export const DELETE_ZONE_SCROLL_GUARD_PX = 120;

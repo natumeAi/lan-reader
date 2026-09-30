@@ -452,6 +452,7 @@ h1 {
     0 8px 14px rgba(38, 31, 24, 0.16),
     inset 0 0 0 1px rgba(255, 255, 255, 0.24);
   transform: scale(1.04);
+  animation: drag-lift 160ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 .fixed-drag-preview {
@@ -493,6 +494,7 @@ h1 {
   line-height: 1;
   pointer-events: none;
   transform: translateX(-50%);
+  animation: delete-zone-enter 180ms ease-out;
   transition:
     background 140ms ease,
     box-shadow 140ms ease,
@@ -719,15 +721,6 @@ h1 {
    confirms, and a failure marks the same cards briefly. The Folder panel shares this
    vocabulary, so its cards use the same class names and keyframes.
    Every animation below has a static reduced-motion equivalent in pwa.css. */
-
-.book-shell.is-sort-target .book-cover,
-.book-shell.is-sort-target .folder-cover {
-  box-shadow:
-    0 12px 22px rgba(38, 31, 24, 0.16),
-    inset 5px 0 0 rgba(0, 122, 255, 0.34),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.24);
-  transform: translateX(6px) scale(0.99);
-}
 
 .book-shell.is-pending-save .book-cover,
 .book-shell.is-pending-save .folder-cover,
@@ -1148,4 +1141,23 @@ h1 {
   50% {
     transform: translateX(-50%) scale(1.11);
   }
+}
+
+@media (pointer: coarse) {
+  .shelf-grid .book-shell:active:not(.is-dragging):not(:disabled) .book-cover,
+  .shelf-grid .book-shell:active:not(.is-dragging):not(:disabled) .folder-cover,
+  .folder-book-shell:not(.is-dragging) .folder-book-cover-button:active:not(:disabled) .book-cover {
+    transform: scale(0.96);
+    transition: transform var(--touch-activation-ms) cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+}
+
+@keyframes drag-lift {
+  from { transform: scale(0.96); }
+  to { transform: scale(1.04); }
+}
+
+@keyframes delete-zone-enter {
+  from { opacity: 0; transform: translate(-50%, 24px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
 }

@@ -19,6 +19,7 @@ interface FolderOverlayProps {
   error: string;
   folder: Folder | null;
   isClosing: boolean;
+  isExitPending?: boolean;
   isLoading: boolean;
   isRenaming: boolean;
   isRenameSaving: boolean;
@@ -43,6 +44,7 @@ export function FolderOverlay({
   error,
   folder,
   isClosing,
+  isExitPending = false,
   isLoading,
   isRenaming,
   isRenameSaving,
@@ -108,8 +110,12 @@ export function FolderOverlay({
       <section
         ref={panelRef}
         className="folder-panel"
+        data-exit-pending={isExitPending ? 'true' : undefined}
         data-origin-motion={originRect ? 'true' : undefined}
       >
+        {isExitPending ? (
+          <div className="folder-exit-hint" role="status">拖出到书架</div>
+        ) : null}
         <header className="folder-panel-header">
           {isRenaming ? (
             <div className="folder-title-editor">
