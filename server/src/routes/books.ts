@@ -11,12 +11,14 @@ import type { NextFunction, Request, Response } from 'express';
 import { Router } from 'express';
 import multer from 'multer';
 import type {
+  BatchDeleteResponse,
   BookResponse,
   BooksResponse,
   CatalogBooksResponse,
 } from '@lan-reader/shared';
 import { badRequest, notFound } from '../http/httpError.js';
 import {
+  parseBatchBookIds,
   parseBookId,
   parseBookIds,
   parseOptionalFolderId,
@@ -25,6 +27,7 @@ import {
 } from '../http/requestInput.js';
 import {
   addBookFileToLibrary,
+  batchDeleteBooks,
   deleteBookById,
   formatBook,
   getBookById,
@@ -214,6 +217,16 @@ router.get('/:id/file', (req, res, next) => {
     res.setHeader('Content-Type', 'application/epub+zip');
     res.setHeader('Cache-Control', 'private, no-cache');
     res.sendFile(filePath);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/batch-delete', (req, res: Response<BatchDeleteResponse>, next) => {
+  try {
+    const db = requireDatabase(req);
+    const bookIds = parseBatchBookIds(readRequestBody(req).bookIds);
+    res.json(batchDeleteBooks(db, bookIds));
   } catch (err) {
     next(err);
   }

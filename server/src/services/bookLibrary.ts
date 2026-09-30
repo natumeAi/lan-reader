@@ -9,10 +9,10 @@
  */
 import { existsSync, readdirSync, statSync, unlinkSync } from 'node:fs';
 import path from 'node:path';
-import type { BookDto, CatalogBookDto } from '@lan-reader/shared';
+import type { BatchDeleteResponse, BookDto, CatalogBookDto } from '@lan-reader/shared';
 import { requireQueryResult } from '../db/queryResult.js';
 import type { BookRow, CatalogBookRow, CountRow, DatabaseHandle } from '../db/rows.js';
-import { conflict, internalError } from '../http/httpError.js';
+import { conflict, internalError, readErrorStatus } from '../http/httpError.js';
 import {
   booksDir,
   ensureBookDirectory,
@@ -482,6 +482,28 @@ export function deleteBookById(db: DatabaseHandle, id: number): BookDto | null {
   removeBookFileFromLibrary(db, bookFilePath);
 
   return formatBook(book);
+}
+
+/** Files are not transactional: attempt every id through the single-delete path. */
+export function batchDeleteBooks(db: DatabaseHandle, bookIds: number[]): BatchDeleteResponse {
+  const result: BatchDeleteResponse = { deleted: [], failed: [] };
+  for (const id of bookIds) {
+    try {
+      const book = deleteBookById(db, id);
+      if (book) result.deleted.push(book);
+      else result.failed.push({ id, message: 'Book not found' });
+    } catch (error) {
+      // A partial-success response never reaches the Express error handler.
+      const status = readErrorStatus(error);
+      if (status >= 500) console.error(`Failed to delete book ${id}`, error);
+      // Match the HTTP boundary's sanitization for internal/file-system errors.
+      const message = status < 500 && error instanceof Error
+        ? error.message
+        : 'Internal Server Error';
+      result.failed.push({ id, message });
+    }
+  }
+  return result;
 }
 
 function listEpubFilesRecursive(dir: string): string[] {

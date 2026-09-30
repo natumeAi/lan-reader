@@ -3,6 +3,7 @@ import {
   requireRecord, requireArray, requireInteger, requireNumber,
 } from '@lan-reader/shared';
 import type {
+  BatchDeleteResponse, BatchFolderImportResponse, BatchMoveToShelfResponse,
   BookDto, CatalogBookDto, FolderDto, LibrarySnapshot, ReadingPositionDto,
   ShelfItemDto, SnapshotBookDto,
 } from '@lan-reader/shared';
@@ -122,6 +123,42 @@ export function decodeMoveToShelf(value: unknown) {
     books: requireArray(r['books'], 'books').map(decodeBook),
     shelfItems: requireArray(r['shelfItems'], 'shelfItems').map(decodeShelfItem),
     removedFolderId: nullableNumber(r['removedFolderId'], 'removedFolderId'),
+  };
+}
+function positiveInteger(value: unknown, field: string): number {
+  const id = requireInteger(value, field);
+  if (id <= 0) throw new WireDecodeError(`${field} must be a positive integer`);
+  return id;
+}
+function decodeRemovedFolderIds(value: unknown): number[] {
+  return requireArray(value, 'removedFolderIds')
+    .map(id => positiveInteger(id, 'removedFolderIds entry'));
+}
+export function decodeBatchFolderImport(value: unknown): BatchFolderImportResponse {
+  const r = requireRecord(value, 'response');
+  return {
+    ...decodeFolderMutation(r),
+    removedFolderIds: decodeRemovedFolderIds(r['removedFolderIds']),
+  };
+}
+export function decodeBatchMoveToShelf(value: unknown): BatchMoveToShelfResponse {
+  const r = requireRecord(value, 'response');
+  return {
+    shelfItems: requireArray(r['shelfItems'], 'shelfItems').map(decodeShelfItem),
+    removedFolderIds: decodeRemovedFolderIds(r['removedFolderIds']),
+  };
+}
+export function decodeBatchDelete(value: unknown): BatchDeleteResponse {
+  const r = requireRecord(value, 'response');
+  return {
+    deleted: requireArray(r['deleted'], 'deleted').map(decodeBook),
+    failed: requireArray(r['failed'], 'failed').map(value => {
+      const failure = requireRecord(value, 'failed entry');
+      return {
+        id: positiveInteger(failure['id'], 'failed.id'),
+        message: string(failure['message'], 'failed.message'),
+      };
+    }),
   };
 }
 export function decodeProgress(value: unknown) {

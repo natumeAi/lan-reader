@@ -10,7 +10,7 @@
  */
 import type { Request } from 'express';
 import type { ShelfItemType, ShelfOrderItem } from '@lan-reader/shared';
-import { isRecord } from '@lan-reader/shared';
+import { isRecord, MAX_BATCH_BOOK_IDS } from '@lan-reader/shared';
 import type { DatabaseHandle } from '../db/rows.js';
 import { badRequest, serviceUnavailable } from './httpError.js';
 
@@ -103,6 +103,30 @@ export function parseBookIds(value: unknown): number[] {
   }
 
   return bookIds;
+}
+
+/** Batch-only limits preserve the existing order routes' accepted inputs. */
+export function parseBatchBookIds(value: unknown): number[] {
+  if (!Array.isArray(value)) {
+    throw badRequest('bookIds must be an array');
+  }
+  if (value.length === 0) {
+    throw badRequest('bookIds must not be empty');
+  }
+  if (value.length > MAX_BATCH_BOOK_IDS) {
+    throw badRequest(`bookIds must contain at most ${MAX_BATCH_BOOK_IDS} entries`);
+  }
+
+  try {
+    return parseBookIds(value);
+  } catch (error) {
+    // JSON objects can make Number() throw instead of producing NaN. Keep this
+    // normalization batch-only so legacy endpoints retain their exact behavior.
+    if (error instanceof TypeError) {
+      throw badRequest('book id must be a positive integer');
+    }
+    throw error;
+  }
 }
 
 export function parseShelfItems(value: unknown): ShelfOrderItem[] {
