@@ -404,6 +404,6 @@ WSL2 在没有程序运行时会自动关机，其中的 Docker 和容器也会�
 
 ## 版本
 
-当前版本：**3.0**
+当前版本：**3.1**
 
 完整变更记录与发布说明请查看 [GitHub Releases](https://github.com/natumeAi/lan-reader/releases)。
