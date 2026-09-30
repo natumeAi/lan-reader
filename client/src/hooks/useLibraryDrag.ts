@@ -532,8 +532,11 @@ export function useLibraryDrag({
         y: collisionRect.top + collisionRect.height / 2,
       };
       moveShelfBookFolderPreview(args.pointerCoordinates, activeCenter);
+      // Spring reparenting can leave dnd-kit's active rect at the old geometry.
+      // The fixed preview already owns the pointer's grab-offset-aware centre.
+      const folderCenter = shelfBookFolderDragRef.current?.center ?? activeCenter;
       const target = resolveFolderDragTarget({
-        activeCenter,
+        activeCenter: folderCenter,
         activeId: String(active.id),
         activeType: shelfBookFolderDragRef.current ? 'folder-book' : active.data.current?.type,
         deletePoint: (shelfBookFolderDragRef.current ? args.pointerCoordinates : dragSession.pointerPoint()) || activeCenter,

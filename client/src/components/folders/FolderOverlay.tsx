@@ -5,6 +5,7 @@ import type { Book, Folder, FolderBook } from '../../types/library.js';
 import type { ShelfMutationFeedback } from '../../hooks/useLibraryDrag.js';
 import type { snapshotRect } from '../../utils/folderMotion.js';
 import { useLayoutEffect, useRef } from 'react';
+import { useDndContext } from '@dnd-kit/core';
 import { rectSortingStrategy, SortableContext } from '@dnd-kit/sortable';
 import { useModalDialog } from '../../hooks/useModalDialog.js';
 import { usePageScrollLock } from '../../hooks/usePageScrollLock.js';
@@ -183,7 +184,7 @@ export function FolderOverlay({
           </button>
         </header>
 
-        <div className="folder-panel-content">
+        <FolderPanelContent books={books} isClosing={isClosing}>
           {error ? (
             <p className="folder-status error-message" role="alert">
               {error}
@@ -222,9 +223,21 @@ export function FolderOverlay({
               <p>这个文件夹是空的</p>
             </div>
           )}
-        </div>
+        </FolderPanelContent>
       </section>
       {toast}
     </div>
   );
+}
+
+// Keep the broad dnd context subscription out of the overlay and its card tree.
+function FolderPanelContent({ books, children, isClosing }: {
+  books: FolderBook[]; children: ReactNode; isClosing: boolean;
+}) {
+  const { measureDroppableContainers } = useDndContext();
+  return <div className="folder-panel-content" onAnimationEnd={event => {
+    if (event.target !== event.currentTarget || isClosing) return;
+    // Spring opening measures cards during scale-in; refresh once entry settles.
+    measureDroppableContainers(books.map(book => book.key));
+  }}>{children}</div>;
 }
