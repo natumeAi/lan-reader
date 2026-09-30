@@ -181,7 +181,10 @@ router.patch('/:id/import-book/:bookId', (req, res: Response<FolderMutationRespo
     const folderId = parsePositiveInteger(req.params.id, 'folder id');
     const bookId = parsePositiveInteger(req.params.bookId, 'book id');
 
-    res.json(moveShelfBookToFolder(db, folderId, bookId));
+    const body = readRequestBody(req);
+    const bookIds = Object.hasOwn(body, 'bookIds') ? parseBookIds(body.bookIds) : undefined;
+
+    res.json(moveShelfBookToFolder(db, folderId, bookId, { bookIds }));
   } catch (err) {
     next(err);
   }

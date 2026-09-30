@@ -243,6 +243,7 @@ export function moveShelfBookToFolder(
   db: DatabaseHandle,
   folderId: number,
   bookId: number,
+  options: { bookIds?: number[] } = {},
 ): FolderMutationResponse {
   return db.transaction((): FolderMutationResponse => {
     const folder = getFolder(db, folderId);
@@ -278,6 +279,9 @@ export function moveShelfBookToFolder(
        WHERE id = ?
          AND folder_id IS NULL`,
     ).run(folderId, nextSortOrder, bookId);
+
+    // The nested order transaction is a savepoint: membership and ordering roll back together.
+    if (options.bookIds !== undefined) updateFolderBookOrder(db, folderId, options.bookIds);
 
     return {
       folder: requireQueryResult(getFolder(db, folderId), 'folder'),
@@ -415,6 +419,7 @@ export function updateFolderBookOrder(
 
   const requestedBookIds = new Set(bookIds);
   const hasCurrentFolderBooks =
+    bookIds.length === currentBookIds.length &&
     currentBookIds.length === requestedBookIds.size &&
     currentBookIds.every((bookId) => requestedBookIds.has(bookId));
 
