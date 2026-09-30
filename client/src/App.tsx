@@ -18,6 +18,9 @@ import { RecentReadingSheet } from './components/home/RecentReadingSheet.js';
 import { ReadingHome } from './components/home/ReadingHome.js';
 import { ReadingStatistics } from './components/statistics/ReadingStatistics.js';
 import { StatisticsRankingDetail } from './components/statistics/StatisticsRankingDetail.js';
+import { ShelfItemMenu } from './components/bookshelf/ShelfItemMenu.js';
+import { useShelfItemMenu } from './hooks/useShelfItemMenu.js';
+import type { ItemMenuRequest } from './hooks/useShelfItemMenu.js';
 import { useBookDeletion } from './hooks/useBookDeletion.js';
 import { useFolderState } from './hooks/useFolderState.js';
 import { useLibraryDrag } from './hooks/useLibraryDrag.js';
@@ -161,11 +164,12 @@ function App() {
     setIsSavingFolderOrder,
     setOpenFolder,
   } = useFolderState({ onFolderRenamed: handleFolderRenamed });
+  const itemMenu = useShelfItemMenu({ shelfItems, folderBooks, openFolder });
   const {
     deleteCandidateBook,
     handleCancelDeleteBook,
     handleConfirmDeleteBook,
-    handleDropBookOnDelete,
+    requestDeleteBook,
     isDeletingBook,
   } = useBookDeletion({
     clearReaderBookIfDeleted,
@@ -194,6 +198,7 @@ function App() {
     landingKey,
     mutationFeedback,
     sensors,
+    operations,
   } = useLibraryDrag({
     beginShelfProjection,
     folderBooks,
@@ -203,7 +208,8 @@ function App() {
     isSavingFolderOrder,
     isSavingOrder,
     loadShelf,
-    onDropOnDelete: handleDropBookOnDelete,
+    onDropOnDelete: requestDeleteBook,
+    onRequestItemMenu: itemMenu.request,
     openFolder,
     setError: setOperationError,
     setFolderBooks,
@@ -216,6 +222,14 @@ function App() {
     setShelfItems,
     shelfItems,
   });
+  // A card's right-click or menu key never opens a menu underneath an active drag. The drag's
+  // own still-release request is made after the drag ended and goes to `itemMenu.request`.
+  const dragActiveRef = useRef(false);
+  dragActiveRef.current = Boolean(activeDragPreview);
+  const { request: requestItemMenu } = itemMenu;
+  const handleRequestCardMenu = useCallback((request: ItemMenuRequest) => {
+    if (!dragActiveRef.current) requestItemMenu(request);
+  }, [requestItemMenu]);
   // The reader, an open/closing Folder, the delete and goal dialogs and an active drag each
   // own interaction; the main views cannot be switched underneath them.
   const isMainNavigationBlocked = Boolean(
@@ -225,6 +239,7 @@ function App() {
     deleteCandidateBook ||
     goalDialog ||
     recentSheetOpen ||
+    itemMenu.menu ||
     ranking.session ||
     activeDragPreview,
   );
@@ -294,9 +309,10 @@ function App() {
     void loadShelf();
   }, [clearReaderBookIfDeleted, loadShelf]);
 
-  const handleOpenFolder = useCallback((folder: Folder, originRect: DOMRect | null) => {
+  const handleOpenFolder = useCallback((folder: Folder, originRect: DOMRect | null, options?: { startRename?: boolean }) => {
     if (motionPhase !== 'idle') return;
     openFolderFromShelf(folder, {
+      startRename: options?.startRename,
       books: folderBooksByFolderId.get(folder.id) || [],
       ignoreUntil: getFolderOpenIgnoreUntil(),
       isShelfBusy: isSavingOrder,
@@ -379,7 +395,7 @@ function App() {
           data-motion-direction={mainView === MAIN_VIEW.HOME ? motionDirection : undefined}
           data-motion-instant={mainView === MAIN_VIEW.HOME && motionInstant ? '' : undefined}
           hidden={mainView !== MAIN_VIEW.HOME}
-          inert={mainView !== MAIN_VIEW.HOME || recentSheetOpen || Boolean(ranking.session) || motionPhase !== 'idle'}
+          inert={mainView !== MAIN_VIEW.HOME || recentSheetOpen || Boolean(itemMenu.menu) || Boolean(ranking.session) || motionPhase !== 'idle'}
           tabIndex={-1}
           onTransitionEnd={handleMainViewTransitionEnd}
         >
@@ -413,7 +429,7 @@ function App() {
           data-motion-direction={mainView === MAIN_VIEW.SHELF ? motionDirection : undefined}
           data-motion-instant={mainView === MAIN_VIEW.SHELF && motionInstant ? '' : undefined}
           hidden={mainView !== MAIN_VIEW.SHELF}
-          inert={mainView !== MAIN_VIEW.SHELF || recentSheetOpen || Boolean(ranking.session) || motionPhase !== 'idle'}
+          inert={mainView !== MAIN_VIEW.SHELF || recentSheetOpen || Boolean(itemMenu.menu) || Boolean(ranking.session) || motionPhase !== 'idle'}
           tabIndex={-1}
           onTransitionEnd={handleMainViewTransitionEnd}
         >
@@ -434,6 +450,7 @@ function App() {
             mutationFeedback={mutationFeedback}
             onFileChange={handleFileChange}
             onOpenBook={handleOpenBook}
+            onRequestItemMenu={handleRequestCardMenu}
             onOpenFolder={handleOpenFolder}
             onRetryCatalog={loadCatalog}
             onRetryShelf={loadShelf}
@@ -449,7 +466,7 @@ function App() {
           data-motion-direction={mainView === MAIN_VIEW.STATISTICS ? motionDirection : undefined}
           data-motion-instant={mainView === MAIN_VIEW.STATISTICS && motionInstant ? '' : undefined}
           hidden={mainView !== MAIN_VIEW.STATISTICS}
-          inert={mainView !== MAIN_VIEW.STATISTICS || recentSheetOpen || Boolean(ranking.session) || motionPhase !== 'idle'}
+          inert={mainView !== MAIN_VIEW.STATISTICS || recentSheetOpen || Boolean(itemMenu.menu) || Boolean(ranking.session) || motionPhase !== 'idle'}
           tabIndex={-1}
           onTransitionEnd={handleMainViewTransitionEnd}
         >
@@ -470,6 +487,8 @@ function App() {
           onClose={handleRecentSheetClosed}
           onOpenBook={(book, rect) => { setRecentSheetOpen(false); handleOpenBook(book, rect); }} /> : null}
         <FolderOverlay
+          menuOpen={Boolean(itemMenu.menu)}
+          onRequestItemMenu={handleRequestCardMenu}
           books={folderBooks}
           error={folderError}
           folder={openFolder}
@@ -506,6 +525,9 @@ function App() {
           armed={dragIntent.type === 'delete'}
           visible={activeDragPreview?.type === 'book' || activeDragPreview?.type === 'folder-book'}
         />
+        {itemMenu.menu ? <ShelfItemMenu {...itemMenu.menu} shelfItems={shelfItems}
+          isSaving={isSavingOrder || isSavingFolderOrder} operations={operations} onClose={itemMenu.close}
+          onOpenBook={handleOpenBook} onOpenFolder={handleOpenFolder} onDelete={requestDeleteBook} /> : null}
         <DeleteConfirmDialog
           book={deleteCandidateBook}
           isDeleting={isDeletingBook}

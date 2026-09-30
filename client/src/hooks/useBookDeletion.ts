@@ -29,7 +29,7 @@ export function useBookDeletion({
   const [deleteCandidateBook, setDeleteCandidateBook] = useState<Book | null>(null);
   const [isDeletingBook, setIsDeletingBook] = useState(false);
 
-  const handleDropBookOnDelete = useCallback(
+  const requestDeleteBook = useCallback(
     (book: Book) => {
       setError('');
       setFolderError('');
@@ -96,7 +96,7 @@ export function useBookDeletion({
     deleteCandidateBook,
     handleCancelDeleteBook,
     handleConfirmDeleteBook,
-    handleDropBookOnDelete,
+    requestDeleteBook,
     isDeletingBook,
   };
 }

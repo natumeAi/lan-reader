@@ -39,6 +39,7 @@ export const LibraryGrid = memo(function LibraryGrid({
   onImport,
   onOpenBook,
   onOpenFolder,
+  onRequestItemMenu,
   query,
   view,
 }: LibraryGridProps) {
@@ -76,6 +77,7 @@ export const LibraryGrid = memo(function LibraryGrid({
               key={item.key}
               onOpenBook={onOpenBook}
               onOpenFolder={onOpenFolder}
+              onRequestItemMenu={onRequestItemMenu}
               priority={index < 8}
             />
           ))}
@@ -85,10 +87,13 @@ export const LibraryGrid = memo(function LibraryGrid({
       <div className="shelf-grid read-only-grid" aria-label="只读书架列表">
         {items.map((item, index) => (
           <ReadOnlyShelfItem
+            isPendingSave={isPendingSave(item.type === 'book' && item.book.folderId != null ? `folder-book:${item.id}` : item.key)}
+            isSaveFailed={isSaveFailed(item.type === 'book' && item.book.folderId != null ? `folder-book:${item.id}` : item.key)}
             item={item}
             key={item.key}
             onOpenBook={onOpenBook}
             onOpenFolder={onOpenFolder}
+            onRequestItemMenu={onRequestItemMenu}
             priority={index < 8}
           />
         ))}

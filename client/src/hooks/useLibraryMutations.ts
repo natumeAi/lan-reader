@@ -36,11 +36,18 @@ export interface LibraryMutationOptions {
   setShelfItems: Dispatch<SetStateAction<ShelfItem[]>>;
 }
 export interface MoveFolderBookToShelfInput {
+  /**
+   * Whether a failure reopens the Folder with its previous books (the default, for moves started
+   * inside that Folder). `false` reports the failure on the shelf instead, for moves started
+   * while the Folder is not open, such as from a search result.
+   */
+  restoreFolderOnFailure?: boolean;
   book: FolderBook;
   folder: Folder;
   onOutcome?: (outcome: MutationOutcome) => void;
   onSettled?: () => void;
-  orderItems: ShelfOrderItem[];
+  /** Complete shelf order including the moved book; omitted, the server places it after the Folder. */
+  orderItems?: ShelfOrderItem[];
   previousFolderBooks: FolderBook[];
   previousShelfItems: ShelfItem[];
   projection: ShelfProjection | null;
@@ -226,6 +233,7 @@ export function useLibraryMutations({
     async ({
       book,
       folder,
+      restoreFolderOnFailure = true,
       onOutcome,
       onSettled,
       orderItems,
@@ -246,6 +254,11 @@ export function useLibraryMutations({
         rollback(error) {
           setShelfItems(previousShelfItems);
 
+          if (!restoreFolderOnFailure) {
+            setError(errorMessage(error, '无法移出书籍'));
+            return;
+          }
+
           // Reopening the Folder is only correct while the user is still in that Folder session.
           if (!isFolderSessionStillCurrent(session)) {
             return;
@@ -263,6 +276,7 @@ export function useLibraryMutations({
       isFolderSessionStillCurrent,
       readFolderSession,
       runShelfMutation,
+      setError,
       setFolderBooks,
       setFolderError,
       setIsFolderLoading,

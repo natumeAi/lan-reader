@@ -139,3 +139,7 @@
     transform: translateX(-50%) scale(1.06);
   }
 }
+
+@media (prefers-reduced-motion: reduce) {
+  .action-sheet-panel { animation: none; transform: none; }
+}

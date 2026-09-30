@@ -5,7 +5,7 @@ import { errorMessage, isAbortError } from '../api/transport.js';
 
 interface FolderRequest { controller: AbortController | null; folderId: number | null; requestId: number }
 interface FolderStateOptions { onFolderRenamed?: (folder: Folder) => void }
-export interface FolderOpenOptions { ignoreUntil?: number; isShelfBusy?: boolean; originRect?: MotionRect | null; books?: Book[] }
+export interface FolderOpenOptions { startRename?: boolean; ignoreUntil?: number; isShelfBusy?: boolean; originRect?: MotionRect | null; books?: Book[] }
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -113,8 +113,8 @@ export function useFolderState({ onFolderRenamed }: FolderStateOptions = {}) {
       (Array.isArray(options.books) ? options.books : []).map(normalizeFolderBook),
     );
     setFolderError('');
-    setFolderNameDraft('');
-    setIsRenamingFolder(false);
+    setFolderNameDraft(options.startRename ? folder.name || '文件夹' : '');
+    setIsRenamingFolder(Boolean(options.startRename));
     setIsFolderLoading(false);
     // A new opening never inherits the previous opening's persistence state.
     setIsSavingFolderOrder(false);

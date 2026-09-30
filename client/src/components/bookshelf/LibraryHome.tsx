@@ -49,6 +49,7 @@ export function LibraryHome({
   onFileChange,
   onOpenBook,
   onOpenFolder,
+  onRequestItemMenu,
   onRetryCatalog,
   onRetryShelf,
   operationError,
@@ -194,6 +195,7 @@ export function LibraryHome({
         onImport={handleImport}
         onOpenBook={onOpenBook}
         onOpenFolder={onOpenFolder}
+        onRequestItemMenu={onRequestItemMenu}
         query={libraryView.query}
         view={libraryView.view}
       />

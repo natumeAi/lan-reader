@@ -1,0 +1,25 @@
+.action-sheet-overlay { position: fixed; inset: 0; z-index: 110; display: flex; align-items: flex-end; justify-content: center; }
+.action-sheet-overlay:focus { outline: none; }
+.action-sheet-backdrop { position: absolute; inset: 0; background: rgba(20, 20, 24, .32); }
+.action-sheet-panel { position: relative; width: 100%; max-height: calc(100dvh - 24px); padding: 10px 20px max(16px, env(safe-area-inset-bottom)); box-sizing: border-box; border-radius: 24px 24px 0 0; background: var(--surface); color: var(--text-primary); overflow-y: auto; animation: action-sheet-enter 180ms cubic-bezier(.22, 1, .36, 1); }
+.action-sheet-handle { width: 36px; height: 4px; margin: 0 auto 8px; border-radius: 9px; background: var(--text-secondary); opacity: .35; }
+.action-sheet-header { display: flex; align-items: center; gap: 12px; justify-content: space-between; }
+.action-sheet-header h2 { margin: 0; font-size: 18px; overflow-wrap: anywhere; }
+.action-sheet-header button { flex: 0 0 44px; width: 44px; min-height: 44px; border: 0; border-radius: 50%; background: transparent; color: inherit; font-size: 26px; }
+.action-sheet-actions { display: grid; gap: 4px; }
+.action-sheet-actions button { width: 100%; min-height: 48px; padding: 12px; border: 0; border-radius: 12px; background: transparent; color: inherit; text-align: left; font: inherit; cursor: pointer; }
+.action-sheet-actions button:hover:not(:disabled) { background: var(--surface-soft); }
+.action-sheet-actions button:disabled { color: var(--text-secondary); cursor: default; }
+.action-sheet-actions .is-danger { color: var(--danger); }
+.action-sheet-explanation { display: block; margin-top: 4px; font-size: 12px; color: var(--text-secondary); }
+.action-sheet-panel button:focus-visible { outline: 3px solid var(--accent); outline-offset: -3px; }
+.folder-picker { display: grid; gap: 4px; }
+.folder-picker .folder-picker-row { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 12px; align-items: center; }
+.folder-picker-row .folder-cover { width: 44px; height: 66px; }
+.folder-picker-name { display: block; overflow-wrap: anywhere; }
+.folder-picker-count { display: block; margin-top: 4px; font-size: 12px; color: var(--text-secondary); }
+@keyframes action-sheet-enter { from { transform: translateY(100%); } to { transform: translateY(0); } }
+@media (min-width: 640px) {
+  .action-sheet-panel { position: fixed; left: var(--sheet-left, 12px); top: var(--sheet-top, 12px); width: 280px; max-height: calc(100dvh - 24px); padding: 12px; border-radius: 16px; box-shadow: 0 12px 48px rgba(0, 0, 0, .2); animation: none; }
+  .action-sheet-handle { display: none; }
+}

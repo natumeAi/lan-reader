@@ -1,3 +1,5 @@
+import { useItemMenuTrigger } from '../../hooks/useItemMenuTrigger.js';
+import type { ItemMenuRequest } from '../../hooks/useShelfItemMenu.js';
 import type { Book, FolderBook } from '../../types/library.js';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
@@ -7,6 +9,7 @@ import { SHELF_SORT_TRANSITION } from '../../utils/dragMotion.js';
 import { formatBookCardAriaLabel } from '../../utils/readingProgress.js';
 
 interface SortableFolderBookProps {
+  onRequestItemMenu?: (request: ItemMenuRequest) => void;
   book: FolderBook;
   disabled?: boolean;
   isPendingSave?: boolean;
@@ -21,8 +24,10 @@ export function SortableFolderBook({
   isPendingSave = false,
   isSaveFailed = false,
   onOpenBook,
+  onRequestItemMenu,
   priority = false,
 }: SortableFolderBookProps) {
+  const menuTrigger = useItemMenuTrigger(book.key, onRequestItemMenu);
   const {
     attributes,
     isDragging,
@@ -74,6 +79,14 @@ export function SortableFolderBook({
         }}
         {...attributes}
         {...listeners}
+        onPointerDown={menuTrigger.onPointerDown}
+        onContextMenu={menuTrigger.onContextMenu}
+        onKeyDown={event => {
+          if (menuTrigger.onKeyDown(event)) return;
+          // Enter keeps the button's native click (open); during a keyboard drag the sensor
+          // cancels that default when Enter drops, so it must not be opened here directly.
+          listeners?.onKeyDown?.(event);
+        }}
       >
         <span className="book-cover">
           <BookCover

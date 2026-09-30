@@ -1,3 +1,6 @@
+import { useLongPress } from '../../hooks/useLongPress.js';
+import { useItemMenuTrigger } from '../../hooks/useItemMenuTrigger.js';
+import type { ItemMenuRequest } from '../../hooks/useShelfItemMenu.js';
 import type { MouseEvent } from 'react';
 import type { Book, Folder, ShelfItem } from '../../types/library.js';
 import { memo } from 'react';
@@ -5,17 +8,22 @@ import { ShelfItemCover } from './ShelfItemCover.js';
 import { formatBookCardAriaLabel } from '../../utils/readingProgress.js';
 
 export interface ShelfItemActions {
+  onRequestItemMenu?: (request: ItemMenuRequest) => void;
   onOpenBook: (book: Book, originRect: DOMRect | null) => void;
   onOpenFolder: (folder: Folder, originRect: DOMRect | null) => void;
 }
 interface ReadOnlyShelfItemProps extends ShelfItemActions {
+  isPendingSave?: boolean;
+  isSaveFailed?: boolean;
   item: ShelfItem;
   priority?: boolean;
 }
 
 
 /** Read-only cards never subscribe to dnd-kit, so stable props keep them out of drag renders. */
-export const ReadOnlyShelfItem = memo(function ReadOnlyShelfItem({ item, onOpenBook, onOpenFolder, priority = false }: ReadOnlyShelfItemProps) {
+export const ReadOnlyShelfItem = memo(function ReadOnlyShelfItem({ item, isPendingSave = false, isSaveFailed = false, onOpenBook, onOpenFolder, onRequestItemMenu, priority = false }: ReadOnlyShelfItemProps) {
+  const menuTrigger = useItemMenuTrigger(item.key, onRequestItemMenu, item);
+  const longPress = useLongPress(menuTrigger.open);
   const name = item.type === 'folder'
     ? item.folder?.name || '文件夹'
     : item.book?.title || '未命名书籍';
@@ -39,12 +47,17 @@ export const ReadOnlyShelfItem = memo(function ReadOnlyShelfItem({ item, onOpenB
 
   return (
     <button
-      className="book-shell shelf-item read-only-shelf-item"
+      className={`book-shell shelf-item read-only-shelf-item${isPendingSave ? ' is-pending-save' : ''}${isSaveFailed ? ' is-save-failed' : ''}`}
+      aria-busy={isPendingSave || undefined}
       type="button"
       aria-label={label}
       data-readonly="true"
       data-book-id={item.type === 'book' ? item.book?.id : undefined}
       data-folder-id={item.type === 'folder' ? item.folder?.id : undefined}
+      {...longPress}
+      onPointerDown={event => { menuTrigger.onPointerDown(event); longPress.onPointerDown(event); }}
+      onContextMenu={menuTrigger.onContextMenu}
+      onKeyDown={menuTrigger.onKeyDown}
       onClick={handleClick}
     >
       <ShelfItemCover item={item} priority={priority} showReadingPosition />

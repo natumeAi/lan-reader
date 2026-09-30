@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { LibraryMutationOptions, LibraryMutations, MutationOutcome } from './useLibraryMutations.js';
+import type { Folder, FolderBook, ShelfItem } from '../types/library.js';
+import { toShelfOrderItem } from '../utils/libraryItems.js';
 import type { ShelfProjection } from './useShelfData.js';
 import { LANDING_SETTLE_MS, SAVE_FAILURE_FEEDBACK_MS } from '../utils/dragMotion.js';
 import { useLibraryMutations } from './useLibraryMutations.js';
@@ -17,10 +19,15 @@ export type ShelfMutationFeedback =
   | { status: 'pending' | 'failed'; intent: ShelfMutationIntent; keys: readonly string[] };
 
 export interface ShelfOperationsOptions extends LibraryMutationOptions {
+  shelfItems: ShelfItem[];
+  folderBooks: FolderBook[];
+  openFolder: Folder | null;
   beginShelfProjection?: () => ShelfProjection;
 }
 
 export interface ShelfOperations {
+  moveShelfBookToFolder(item: Extract<ShelfItem, { type: 'book' }>, folder: Folder): Promise<void>;
+  moveFolderBookToShelf(book: FolderBook, folder: Folder): Promise<void>;
   mutations: LibraryMutations;
   mutationFeedback: ShelfMutationFeedback;
   landingKey: string | null;
@@ -36,6 +43,9 @@ const idleMutationFeedback: ShelfMutationFeedback = { status: 'idle' };
 /** One mutation scope and visual lifetime shared by every operation on this shelf. */
 export function useShelfOperations({
   beginShelfProjection,
+  shelfItems,
+  folderBooks,
+  openFolder,
   ...mutationOptions
 }: ShelfOperationsOptions): ShelfOperations {
   const feedbackTokenRef = useRef(0);
@@ -138,9 +148,47 @@ export function useShelfOperations({
     [clearFailureTimer, releaseShelfProjection],
   );
 
+  const { setIsSavingOrder, setError, setFolderError } = mutationOptions;
+  const moveShelfBookToFolder = useCallback(async (item: Extract<ShelfItem, { type: 'book' }>, folder: Folder) => {
+    const projection = beginShelfProjection?.() ?? null;
+    setIsSavingOrder(true);
+    setError('');
+    await mutations.moveShelfBookToFolder({
+      bookId: item.id, folderId: folder.id, projection, previousShelfItems: shelfItems,
+      onOutcome: beginMutationFeedback('absorb', [item.key, `folder:${folder.id}`]),
+    });
+  }, [beginShelfProjection, beginMutationFeedback, mutations, setError, setIsSavingOrder, shelfItems]);
+
+  const moveFolderBookToShelf = useCallback(async (book: FolderBook, folder: Folder) => {
+    const projection = beginShelfProjection?.() ?? null;
+    const folderIndex = shelfItems.findIndex(item => item.type === 'folder' && item.id === folder.id);
+    // The book lands right after its Folder. A Folder this shelf does not show cannot anchor a
+    // client order, so the server's own placement (also right after the Folder) is used instead.
+    const orderItems = folderIndex < 0 ? undefined : [
+      ...shelfItems.slice(0, folderIndex + 1).map(toShelfOrderItem),
+      { type: 'book' as const, id: book.id },
+      ...shelfItems.slice(folderIndex + 1).map(toShelfOrderItem),
+    ];
+    const report = beginMutationFeedback('move-out', [book.key]);
+    setIsSavingOrder(true);
+    setError('');
+    setFolderError('');
+    await mutations.moveFolderBookToShelf({
+      book, folder, orderItems, projection, previousShelfItems: shelfItems, previousFolderBooks: folderBooks,
+      restoreFolderOnFailure: openFolder?.id === folder.id,
+      onOutcome(outcome) {
+        report(outcome);
+        if (outcome === 'published') markLanding(`book:${book.id}`);
+      },
+    });
+  }, [beginShelfProjection, beginMutationFeedback, folderBooks, markLanding, mutations, openFolder?.id,
+    setError, setFolderError, setIsSavingOrder, shelfItems]);
+
   // Stable identity between feedback changes, so consumers can list it as a dependency.
   return useMemo(
     () => ({
+      moveShelfBookToFolder,
+      moveFolderBookToShelf,
       mutations,
       mutationFeedback,
       landingKey,
@@ -151,6 +199,8 @@ export function useShelfOperations({
       releaseShelfProjection,
     }),
     [
+      moveShelfBookToFolder,
+      moveFolderBookToShelf,
       acquireShelfProjection,
       beginMutationFeedback,
       landingKey,

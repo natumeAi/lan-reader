@@ -1,3 +1,4 @@
+import type { ItemMenuRequest } from '../../hooks/useShelfItemMenu.js';
 import type { FormEventHandler } from 'react';
 import { MAX_FOLDER_NAME_LENGTH } from '@lan-reader/shared';
 import type { Book, Folder, FolderBook } from '../../types/library.js';
@@ -11,6 +12,8 @@ import { folderPanelMotion } from '../../utils/folderMotion.js';
 import { SortableFolderBook } from './SortableFolderBook.js';
 
 interface FolderOverlayProps {
+  menuOpen?: boolean;
+  onRequestItemMenu?: (request: ItemMenuRequest) => void;
   books: FolderBook[];
   error: string;
   folder: Folder | null;
@@ -32,6 +35,8 @@ interface FolderOverlayProps {
 
 
 export function FolderOverlay({
+  menuOpen = false,
+  onRequestItemMenu,
   books,
   error,
   folder,
@@ -88,6 +93,7 @@ export function FolderOverlay({
 
   return (
     <div
+      inert={menuOpen}
       ref={dialogRef}
       className={overlayClassName}
       role="dialog"
@@ -195,6 +201,7 @@ export function FolderOverlay({
                       mutationFeedback.status === 'failed' && Boolean(feedbackKeys?.includes(book.key))
                     }
                     key={book.key}
+                    onRequestItemMenu={onRequestItemMenu}
                     onOpenBook={onOpenBook}
                     priority={index < 8}
                   />

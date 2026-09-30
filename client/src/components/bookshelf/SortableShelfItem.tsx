@@ -2,6 +2,7 @@ import type { CSSProperties, KeyboardEvent, MouseEvent } from 'react';
 import type { ShelfItem } from '../../types/library.js';
 import type { DragIntent } from '../../hooks/useLibraryDrag.js';
 import type { ShelfItemActions } from './ReadOnlyShelfItem.js';
+import { useItemMenuTrigger } from '../../hooks/useItemMenuTrigger.js';
 import { memo } from 'react';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
@@ -53,8 +54,10 @@ export function SortableShelfItem({
   item,
   onOpenBook,
   onOpenFolder,
+  onRequestItemMenu,
   priority = false,
 }: SortableShelfItemProps) {
+  const menuTrigger = useItemMenuTrigger(item.key, onRequestItemMenu, item);
   const {
     attributes,
     isDragging,
@@ -111,6 +114,7 @@ export function SortableShelfItem({
     }
   };
   const handleKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
+    if (menuTrigger.onKeyDown(event)) return;
     if (event.key === 'Enter') {
       event.preventDefault();
       handleClick(event);
@@ -133,6 +137,8 @@ export function SortableShelfItem({
       onClick={handleClick}
       {...attributes}
       {...listeners}
+      onPointerDown={menuTrigger.onPointerDown}
+      onContextMenu={menuTrigger.onContextMenu}
       onKeyDown={handleKeyDown}
     >
       <ShelfItemContent item={item} name={name} priority={priority} />
