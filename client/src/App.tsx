@@ -34,6 +34,7 @@ import { useReadingStatistics } from './hooks/useReadingStatistics.js';
 import { useStatisticsRanking } from './hooks/useStatisticsRanking.js';
 import { useReducedMotion } from './hooks/useReducedMotion.js';
 import { useShelfData } from './hooks/useShelfData.js';
+import { useFileDropImport } from './hooks/useFileDropImport.js';
 import { AUTO_SCROLL_THRESHOLD_Y, TOUCH_ACTIVATION_DELAY_MS, dropAnimationConfig } from './utils/dragMotion.js';
 import { rectIntersectsViewport } from './utils/folderMotion.js';
 import { MAIN_VIEW } from './utils/mainViewPreference.js';
@@ -82,6 +83,11 @@ function App() {
   const focusHandoffRef = useRef<HTMLButtonElement | null>(null);
   const {
     beginShelfProjection,
+    enqueue,
+    uploadEntries,
+    retryUpload,
+    removeUpload,
+    acknowledgeUploads,
     catalogBooks,
     catalogError,
     folderBooksByFolderId,
@@ -255,6 +261,11 @@ function App() {
     ranking.session ||
     activeDragPreview,
   );
+
+  const fileDrop = useFileDropImport({
+    enabled: mainView === MAIN_VIEW.SHELF && motionPhase === 'idle' && !isMainNavigationBlocked,
+    onFiles: enqueue,
+  });
 
   useLayoutEffect(() => {
     setNavigationBlocked(isMainNavigationBlocked);
@@ -494,6 +505,11 @@ function App() {
           onTransitionEnd={handleMainViewTransitionEnd}
         >
           <LibraryHome
+            uploadEntries={uploadEntries}
+            onRetryUpload={retryUpload}
+            onRemoveUpload={removeUpload}
+            onUploadsReplaced={acknowledgeUploads}
+            importRejection={fileDrop.rejection}
             operations={operations}
             onSelectionActiveChange={setSelectionActive}
             onBookDeleted={handleBookDeleted}
@@ -601,6 +617,9 @@ function App() {
           onCancel={handleCancelDeleteBook}
           onConfirm={handleConfirmDeleteBook}
         />
+        {fileDrop.isFileDragOver ? <div className="file-drop-overlay" role="status" aria-live="polite">
+          <div className="file-drop-prompt">松手导入 EPUB</div>
+        </div> : null}
       </main>
       {/* The overlay settles onto the accepted destination (or back to the origin on a
           cancel) instead of vanishing. While the fixed preview owns the visual the overlay

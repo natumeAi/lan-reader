@@ -38,6 +38,11 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .upload-placeholder-progress::after {
+    animation: none !important;
+    transform: translateX(75%);
+  }
+
   .shelf-toast { animation: none; }
   .drag-preview .book-cover,
   .drag-preview .folder-cover,

@@ -2,6 +2,8 @@ import type { ChangeEventHandler, RefObject } from 'react';
 import type { CatalogBook, ShelfItem } from '../../types/library.js';
 import type { DragIntent, ShelfMutationFeedback } from '../../hooks/useLibraryDrag.js';
 import type { ShelfItemActions } from './ReadOnlyShelfItem.js';
+import type { UploadEntry } from '../../hooks/useUploadBooks.js';
+import type { UploadPlaceholderActions } from './UploadPlaceholderCard.js';
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { ShelfOperations } from '../../hooks/useShelfOperations.js';
 import { useShelfSelection } from '../../hooks/useShelfSelection.js';
@@ -17,7 +19,10 @@ import { LibraryGrid } from './LibraryGrid.js';
 import { LibrarySearchBar } from './LibrarySearchBar.js';
 import { LibraryViewToolbar } from './LibraryViewToolbar.js';
 
-interface LibraryHomeProps extends ShelfItemActions {
+interface LibraryHomeProps extends ShelfItemActions, UploadPlaceholderActions {
+  uploadEntries?: readonly UploadEntry[];
+  onUploadsReplaced?: (ids: readonly string[]) => void;
+  importRejection?: string;
   operations?: ShelfOperations;
   onSelectionActiveChange?: (active: boolean) => void;
   onBookDeleted?: (id: number) => void;
@@ -46,6 +51,11 @@ interface LibraryHomeProps extends ShelfItemActions {
 
 
 export function LibraryHome({
+  uploadEntries,
+  onRetryUpload,
+  onRemoveUpload,
+  onUploadsReplaced,
+  importRejection = '',
   operations,
   onSelectionActiveChange,
   onBookDeleted,
@@ -75,6 +85,15 @@ export function LibraryHome({
   uploadProgress,
 }: LibraryHomeProps) {
   const libraryView = useLibraryView({ shelfItems, catalogBooks });
+  const markLanding = operations?.markLanding;
+  useLayoutEffect(() => {
+    if (!markLanding || !onUploadsReplaced || !uploadEntries?.length) return;
+    const keys = new Set(shelfItems.map(item => item.key));
+    const arrived = uploadEntries.filter(entry => entry.status === 'uploaded' && keys.has(`book:${entry.bookId}`));
+    if (!arrived.length) return;
+    arrived.forEach(entry => markLanding(`book:${entry.bookId}`));
+    onUploadsReplaced(arrived.map(entry => entry.id));
+  }, [markLanding, onUploadsReplaced, shelfItems, uploadEntries]);
   const selection = useShelfSelection(libraryView.visibleItems, isSavingOrder);
   const [picker, setPicker] = useState<{ opener: HTMLElement; anchorRect: DOMRect } | null>(null);
   const deleteOpenerRef = useRef<HTMLElement | null>(null);
@@ -169,7 +188,7 @@ export function LibraryHome({
           className="upload-button"
           type="button"
           onClick={() => fileInputRef.current?.click()}
-          disabled={isUploading || selection.active}
+          disabled={selection.active}
           aria-label="上传 EPUB"
         >
           <span className="upload-button-icon" aria-hidden="true" />
@@ -222,6 +241,8 @@ export function LibraryHome({
         </div>
       ) : null}
 
+      {importRejection ? <p className="library-operation-error" role="alert">{importRejection}</p> : null}
+
       <p
         className="status-message library-operation-status"
         role="status"
@@ -247,6 +268,10 @@ export function LibraryHome({
       />
 
       <LibraryGrid
+        uploadEntries={uploadEntries}
+        onRetryUpload={onRetryUpload}
+        onRemoveUpload={onRemoveUpload}
+        landingKeys={operations?.landingKeys}
         selection={selection}
         dragIntent={dragIntent}
         editable={libraryView.editable}
@@ -262,6 +287,7 @@ export function LibraryHome({
         onOpenFolder={onOpenFolder}
         onRequestItemMenu={onRequestItemMenu}
         query={libraryView.query}
+        searchMode={libraryView.searchMode}
         view={libraryView.view}
       />
       {selection.active ? <SelectionActionBar books={selectedBooks} hasFolders={Boolean(folders.length)}

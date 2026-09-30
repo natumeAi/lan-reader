@@ -15,6 +15,7 @@ export interface ShelfItemActions {
   onOpenFolder: (folder: Folder, originRect: DOMRect | null) => void;
 }
 interface ReadOnlyShelfItemProps extends ShelfItemActions {
+  isLanding?: boolean;
   isPendingSave?: boolean;
   isSaveFailed?: boolean;
   selection?: { selected: boolean; disabled: boolean; onToggle: (key: string) => void };
@@ -24,7 +25,7 @@ interface ReadOnlyShelfItemProps extends ShelfItemActions {
 
 
 /** Read-only cards never subscribe to dnd-kit, so stable props keep them out of drag renders. */
-export const ReadOnlyShelfItem = memo(function ReadOnlyShelfItem({ selection, item, isPendingSave = false, isSaveFailed = false, onOpenBook, onOpenFolder, onRequestItemMenu, priority = false }: ReadOnlyShelfItemProps) {
+export const ReadOnlyShelfItem = memo(function ReadOnlyShelfItem({ selection, item, isLanding = false, isPendingSave = false, isSaveFailed = false, onOpenBook, onOpenFolder, onRequestItemMenu, priority = false }: ReadOnlyShelfItemProps) {
   const requestReadOnlyMenu = useCallback((request: ItemMenuRequest) => {
     onRequestItemMenu?.({ ...request, readOnly: true });
   }, [onRequestItemMenu]);
@@ -57,7 +58,7 @@ export const ReadOnlyShelfItem = memo(function ReadOnlyShelfItem({ selection, it
 
   return (
     <button
-      className={`book-shell shelf-item read-only-shelf-item${isPendingSave ? ' is-pending-save' : ''}${isSaveFailed ? ' is-save-failed' : ''}${selection ? ' selection-shelf-item' : ''}${selection?.selected ? ' is-selected' : ''}`}
+      className={`book-shell shelf-item read-only-shelf-item${isLanding ? ' is-landing' : ''}${isPendingSave ? ' is-pending-save' : ''}${isSaveFailed ? ' is-save-failed' : ''}${selection ? ' selection-shelf-item' : ''}${selection?.selected ? ' is-selected' : ''}`}
       aria-busy={isPendingSave || undefined}
       aria-pressed={selection && item.type === 'book' ? selection.selected : undefined}
       disabled={selection ? selection.disabled || item.type === 'folder' : undefined}

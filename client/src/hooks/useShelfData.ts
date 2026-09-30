@@ -239,10 +239,15 @@ export function useShelfData({ restoreReaderBook }: ShelfDataOptions = {}) {
   }, [applySnapshot]);
 
   const {
+    enqueue,
+    uploadEntries,
+    retryUpload,
+    removeUpload,
+    acknowledgeUploads,
     handleFileChange,
     isUploading,
     uploadProgress,
-  } = useUploadBooks({ loadShelf, setError: setOperationError });
+  } = useUploadBooks({ loadShelf });
 
   useEffect(() => {
     void loadShelf({ allowCached: true });
@@ -290,6 +295,11 @@ export function useShelfData({ restoreReaderBook }: ShelfDataOptions = {}) {
   }, []);
 
   return {
+    enqueue,
+    uploadEntries,
+    retryUpload,
+    removeUpload,
+    acknowledgeUploads,
     beginShelfProjection,
     catalogBooks,
     catalogError,

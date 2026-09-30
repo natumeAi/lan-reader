@@ -44,6 +44,7 @@ export interface ShelfOperations {
   mutations: LibraryMutations;
   mutationFeedback: ShelfMutationFeedback;
   landingKey: string | null;
+  landingKeys: readonly string[];
   beginMutationFeedback(intent: ShelfMutationIntent, keys: readonly string[]): (outcome: MutationOutcome) => void;
   markLanding(key: string): void;
   acquireShelfProjection(): void;
@@ -65,11 +66,12 @@ export function useShelfOperations({
 }: ShelfOperationsOptions): ShelfOperations {
   const feedbackTokenRef = useRef(0);
   const failureTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const landingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const landingTimersRef = useRef(new Map<string, ReturnType<typeof setTimeout>>());
   const shelfProjectionRef = useRef<ShelfProjection | null>(null);
   const [mutationFeedback, setMutationFeedback] = useState<ShelfMutationFeedback>(idleMutationFeedback);
   /** Key of a card that has just arrived from a Folder and is settling into the shelf. */
   const [landingKey, setLandingKey] = useState<string | null>(null);
+  const [landingKeys, setLandingKeys] = useState<readonly string[]>([]);
   const dismissUndoRef = useRef<() => void>(() => {});
   const getMutationSession = useCallback(() => feedbackTokenRef.current, []);
   const rawMutations = useLibraryMutations({ ...mutationOptions, getMutationSession });
@@ -148,15 +150,14 @@ export function useShelfOperations({
 
   /** A card that replaced the temporary Folder item settles in place instead of appearing abruptly. */
   const markLanding = useCallback((key: string) => {
-    if (landingTimerRef.current !== null) {
-      clearTimeout(landingTimerRef.current);
-    }
-
+    clearTimeout(landingTimersRef.current.get(key));
     setLandingKey(key);
-    landingTimerRef.current = setTimeout(() => {
-      landingTimerRef.current = null;
-      setLandingKey(null);
-    }, LANDING_SETTLE_MS);
+    setLandingKeys(keys => keys.includes(key) ? keys : [...keys, key]);
+    landingTimersRef.current.set(key, setTimeout(() => {
+      landingTimersRef.current.delete(key);
+      setLandingKeys(keys => keys.filter(item => item !== key));
+      setLandingKey(current => current === key ? null : current);
+    }, LANDING_SETTLE_MS));
   }, []);
 
   const releaseShelfProjection = useCallback(() => {
@@ -183,10 +184,8 @@ export function useShelfOperations({
       // Feedback deadlines never outlive the host; a stale failure cannot reappear.
       clearFailureTimer();
 
-      if (landingTimerRef.current !== null) {
-        clearTimeout(landingTimerRef.current);
-        landingTimerRef.current = null;
-      }
+      landingTimersRef.current.forEach(clearTimeout);
+      landingTimersRef.current.clear();
 
       // Never leave a projection held after unmount; a background refresh must not stay suppressed.
       releaseShelfProjection();
@@ -300,6 +299,7 @@ export function useShelfOperations({
       mutations,
       mutationFeedback,
       landingKey,
+      landingKeys,
       beginMutationFeedback,
       markLanding,
       acquireShelfProjection,
@@ -314,6 +314,7 @@ export function useShelfOperations({
       acquireShelfProjection,
       beginMutationFeedback,
       landingKey,
+      landingKeys,
       markLanding,
       mutationFeedback,
       mutations,
