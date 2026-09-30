@@ -13,6 +13,8 @@ export interface ShelfToastNotice {
 }
 interface UndoEntry {
   token: number;
+  /** Only this Folder's current panel may have its error cleared when undo starts. */
+  folderId?: number;
   isApplicable(): boolean;
   run(): Promise<MutationOutcome>;
   intent: ShelfMutationIntent;
@@ -97,7 +99,7 @@ export function useShelfUndo(
           const books = data.books.map(normalizeFolderBook);
           const snapshot = latest.current.folderBooksByFolderId;
           register({ token, message: `已将 ${input.books.length} 本书移入「${data.folder.name}」` }, !fromRoot ? null : {
-            token, intent: 'move-out', keys: [...input.books.map(book => `book:${book.id}`), `folder:${data.folder.id}`],
+            token, folderId: data.folder.id, intent: 'move-out', keys: [...input.books.map(book => `book:${book.id}`), `folder:${data.folder.id}`],
             isApplicable: () => shelfMatches(expected) && folderMatches(data.folder.id, books, snapshot),
             async run() {
               const first = await step(onOutcome => raw.batchMoveToShelf({
@@ -131,7 +133,7 @@ export function useShelfUndo(
           // The batch API deletes an emptied source; importing into that deleted id cannot undo it.
           const folder = source?.type === 'folder' && !data.removedFolderIds.includes(source.id) ? source.folder : null;
           register({ token, message: `已将 ${input.books.length} 本书移到书架` }, !singleSource || !folder || !previousBooks ? null : {
-            token, intent: 'absorb', keys: [...input.books.map(book => `book:${book.id}`), `folder:${folder.id}`],
+            token, folderId: folder.id, intent: 'absorb', keys: [...input.books.map(book => `book:${book.id}`), `folder:${folder.id}`],
             isApplicable: () => shelfMatches(expected) && folderMatches(folder.id, remaining, snapshot),
             async run() {
               let restored = remaining;
@@ -143,7 +145,7 @@ export function useShelfUndo(
               if (first !== 'published') return first;
               const second = await step(onOutcome => raw.saveFolderBookOrder({
                 folderId: folder.id, reorderedFolderBooks: previousBooks, previousFolderBooks: restored,
-                publishToFolder: latest.current.openFolder?.id === folder.id,
+                publishToFolder: latest.current.openFolder?.id === folder.id, sessionScoped: false,
                 projection: projection(), onOutcome,
               }));
               if (second === 'failed') latest.current.setError('已移回，文件夹顺序未恢复');
@@ -177,18 +179,18 @@ export function useShelfUndo(
       },
       async saveFolderBookOrder(input) {
         const token = getToken();
-        const session = latest.current.getFolderSession?.();
         await raw.saveFolderBookOrder({ ...input, onPublished(data) {
           input.onPublished?.(data);
           const expected = data.books.map(normalizeFolderBook);
           const snapshot = latest.current.folderBooksByFolderId;
           register({ token, message: '已调整文件夹顺序', light: true }, {
-            token, intent: 'sort', keys: expected.map(book => book.key),
-            isApplicable: () => latest.current.openFolder?.id === input.folderId
-              && latest.current.getFolderSession?.() === session && folderMatches(input.folderId, expected, snapshot),
+            token, folderId: input.folderId, intent: 'sort', keys: expected.map(book => book.key),
+            isApplicable: () => folderMatches(input.folderId, expected, snapshot),
             run: () => step(onOutcome => raw.saveFolderBookOrder({
               folderId: input.folderId, reorderedFolderBooks: input.previousFolderBooks,
-              previousFolderBooks: latest.current.folderBooks, projection: projection(), onOutcome,
+              previousFolderBooks: folderBooks(input.folderId) ?? expected,
+              publishToFolder: latest.current.openFolder?.id === input.folderId, sessionScoped: false,
+              projection: projection(), onOutcome,
             })),
           });
         } });
@@ -202,7 +204,7 @@ export function useShelfUndo(
           const books = data.books.map(normalizeFolderBook);
           const snapshot = latest.current.folderBooksByFolderId;
           register({ token, message: `已移入「${data.folder.name}」` }, item?.type !== 'book' ? null : {
-            token, intent: 'move-out', keys: [`book:${input.bookId}`, `folder:${input.folderId}`],
+            token, folderId: input.folderId, intent: 'move-out', keys: [`book:${input.bookId}`, `folder:${input.folderId}`],
             isApplicable: () => shelfMatches(expected) && folderMatches(input.folderId, books, snapshot),
             run: () => step(onOutcome => raw.moveFolderBookToShelf({
               folder: data.folder, book: normalizeFolderBook(item.book),
@@ -227,7 +229,7 @@ export function useShelfUndo(
           const remaining = data.books.map(normalizeFolderBook);
           const snapshot = latest.current.folderBooksByFolderId;
           register({ token, message: '已移到书架' }, !data.folder || !restorable ? null : {
-            token, intent: 'absorb', keys: [`book:${input.book.id}`, `folder:${input.folder.id}`],
+            token, folderId: input.folder.id, intent: 'absorb', keys: [`book:${input.book.id}`, `folder:${input.folder.id}`],
             isApplicable: () => shelfMatches(expected) && folderMatches(input.folder.id, remaining, snapshot),
             async run() {
               let restored = remaining;
@@ -238,7 +240,7 @@ export function useShelfUndo(
               if (first !== 'published') return first;
               const second = await step(onOutcome => raw.saveFolderBookOrder({
                 folderId: input.folder.id, previousFolderBooks: restored, reorderedFolderBooks: previousBooks,
-                publishToFolder: latest.current.openFolder?.id === input.folder.id,
+                publishToFolder: latest.current.openFolder?.id === input.folder.id, sessionScoped: false,
                 projection: projection(), onOutcome,
               }));
               if (second === 'failed') latest.current.setError('已移回，顺序未恢复');
@@ -255,7 +257,7 @@ export function useShelfUndo(
           const books = data.books.map(normalizeFolderBook);
           const snapshot = latest.current.folderBooksByFolderId;
           register({ token, message: `已创建「${data.folder.name}」`, createdFolder: data.folder }, {
-            token, intent: 'move-out', keys: [`folder:${data.folder.id}`, ...books.map(book => `book:${book.id}`)],
+            token, folderId: data.folder.id, intent: 'move-out', keys: [`folder:${data.folder.id}`, ...books.map(book => `book:${book.id}`)],
             isApplicable: () => shelfMatches(expected) && folderMatches(data.folder.id, books, snapshot),
             async run() {
               let previousShelfItems = latest.current.shelfItems;
@@ -296,7 +298,7 @@ export function useShelfUndo(
       return;
     }
     latest.current.setError('');
-    latest.current.setFolderError('');
+    if (undo.folderId !== undefined && latest.current.openFolder?.id === undo.folderId) latest.current.setFolderError('');
     setSaving(true);
     const outcome = await undo.run();
     if (getToken() !== token) return;

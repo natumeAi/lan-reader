@@ -12,7 +12,8 @@ import type { BatchShelfState } from '../utils/shelfBatchProjection.js';
  *
  * A mutation owns its result only while it is still the newest mutation of its scope, no newer
  * operation of either scope has begun (`getMutationSession`, the shared operations generation),
- * and, for a Folder mutation, the Folder opening that started it is still current. Scopes share
+ * and, for an ordinary Folder mutation, the Folder opening that started it is still current.
+ * Undo order steps retain result ownership across openings but guard panel writes separately. Scopes share
  * state (a failed move-out restores the Folder panel) and an undo spans both, so a newer
  * operation in one scope supersedes an in-flight result in the other.
  * A stale completion never writes visible state, never reports an error and never clears a
@@ -93,6 +94,8 @@ export interface SaveShelfItemOrderInput {
   projection: ShelfProjection | null;
 }
 export interface SaveFolderBookOrderInput {
+  /** Undo stays owned across Folder close/reopen; ordinary sorts remain session-scoped. */
+  sessionScoped?: boolean;
   /** Closed-folder undo persists order without writing another Folder panel. */
   publishToFolder?: boolean;
   onPublished?: (data: Awaited<ReturnType<typeof updateFolderBookOrder>>) => void;
@@ -139,7 +142,7 @@ interface ShelfMutationRun<T> {
   rollback: (error: unknown) => void;
 }
 interface FolderMutationRun<T> extends ShelfMutationRun<T> {
-  session: number;
+  session: number | null;
 }
 
 import { useCallback, useEffect, useMemo, useRef } from 'react';
@@ -255,7 +258,7 @@ export function useLibraryMutations({
       const token = folderMutationRef.current + 1;
       folderMutationRef.current = token;
       if (projection) projectionsRef.current.add(projection);
-      const isCurrent = () => folderMutationRef.current === token && getMutationSession?.() === operationSession && isFolderSessionStillCurrent(session);
+      const isCurrent = () => folderMutationRef.current === token && getMutationSession?.() === operationSession && (session === null || isFolderSessionStillCurrent(session));
       projection?.discardPendingSnapshots();
 
       try {
@@ -344,6 +347,7 @@ export function useLibraryMutations({
 
           // Reopening the Folder is only correct while the user is still in that Folder session.
           if (!isFolderSessionStillCurrent(session)) {
+            setError(errorMessage(error, '无法移出书籍'));
             return;
           }
 
@@ -454,25 +458,26 @@ export function useLibraryMutations({
   );
 
   const saveFolderBookOrder = useCallback(
-    async ({ folderId, publishToFolder = true, onPublished, onOutcome, previousFolderBooks, projection, reorderedFolderBooks }: SaveFolderBookOrderInput) => {
+    async ({ folderId, publishToFolder = true, sessionScoped = true, onPublished, onOutcome, previousFolderBooks, projection, reorderedFolderBooks }: SaveFolderBookOrderInput) => {
+      const session = readFolderSession();
       await runFolderMutation({
         onOutcome,
         projection,
-        session: readFolderSession(),
+        session: sessionScoped ? session : null,
         request: () => updateFolderBookOrder(folderId, reorderedFolderBooks.map((book) => book.id)),
         publish(data) {
-          if (publishToFolder) setFolderBooks((data.books || reorderedFolderBooks).map(normalizeFolderBook));
+          if (publishToFolder && isFolderSessionStillCurrent(session)) setFolderBooks((data.books || reorderedFolderBooks).map(normalizeFolderBook));
           onPublished?.(data);
         },
         rollback(error) {
-          if (publishToFolder) {
+          if (publishToFolder && isFolderSessionStillCurrent(session)) {
             setFolderBooks(previousFolderBooks);
             setFolderError(errorMessage(error, '无法保存文件夹顺序'));
           }
         },
       });
     },
-    [readFolderSession, runFolderMutation, setFolderBooks, setFolderError],
+    [isFolderSessionStillCurrent, readFolderSession, runFolderMutation, setFolderBooks, setFolderError],
   );
 
   const applyBatchState = useCallback((state: BatchShelfState) => {

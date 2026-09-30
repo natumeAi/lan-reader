@@ -31,6 +31,8 @@ export interface DragSession {
   refreshDeleteZone(): void;
   /** Latest coordinate seen by the single active pointer stream. */
   pointerPoint(): Point | null;
+  /** Release coordinate captured before the sensor ends the drag. */
+  releasePoint(): Point | null;
   /** Turns the fixed preview on at the folder-to-shelf handoff and off when it ends. */
   setPreviewActive(active: boolean): void;
   /** Cached shelf sortable area, refreshed on scroll/resize and per drag. */
@@ -72,6 +74,7 @@ export function useDragSession(): DragSession {
   const motionRef = useRef<DragPreviewMotion | null>(null);
   const pointerCleanupRef = useRef<(() => void) | null>(null);
   const pointerPointRef = useRef<Point | null>(null);
+  const releasePointRef = useRef<Point | null>(null);
   const shelfSortAreaRef = useRef<Rect | null>(null);
 
   if (!motionRef.current) {
@@ -108,6 +111,7 @@ export function useDragSession(): DragSession {
       pointerCleanupRef.current?.();
       pointerCleanupRef.current = null;
       pointerPointRef.current = null;
+      releasePointRef.current = null;
     };
 
     const movePointer = (point: Point) => {
@@ -131,17 +135,30 @@ export function useDragSession(): DragSession {
 
       // One stream only. Pointer events already describe mouse, touch and pen, so adding
       // the legacy streams next to them handles every movement two or three times.
-      const eventNames = typeof window.PointerEvent === 'function'
-        ? ['pointermove']
-        : ['mousemove', 'touchmove'];
+      const hasPointerEvents = typeof window.PointerEvent === 'function';
+      const eventNames = hasPointerEvents ? ['pointermove'] : ['mousemove', 'touchmove'];
+      const endEventNames = hasPointerEvents ? ['pointerup'] as const : ['mouseup', 'touchend'] as const;
+      const recordReleasePoint = (event: MouseEvent | TouchEvent) => {
+        // Remaining touches belong to fingers still down, never to this release.
+        releasePointRef.current = pointFromInputEvent('changedTouches' in event
+          ? { changedTouches: event.changedTouches } : event);
+      };
 
       for (const eventName of eventNames) {
         window.addEventListener(eventName, updatePointerPoint, { passive: true });
       }
 
+      // Capture the same stream's endpoint before the sensor ends it, even without a move.
+      for (const eventName of endEventNames) {
+        window.addEventListener(eventName, recordReleasePoint, { capture: true, passive: true });
+      }
+
       pointerCleanupRef.current = () => {
         for (const eventName of eventNames) {
           window.removeEventListener(eventName, updatePointerPoint);
+        }
+        for (const eventName of endEventNames) {
+          window.removeEventListener(eventName, recordReleasePoint, { capture: true });
         }
       };
     };
@@ -207,6 +224,9 @@ export function useDragSession(): DragSession {
       refreshDeleteZone,
       pointerPoint() {
         return pointerPointRef.current;
+      },
+      releasePoint() {
+        return releasePointRef.current;
       },
       setPreviewActive(active) {
         isPreviewActiveRef.current = active;

@@ -858,6 +858,10 @@ export function useLibraryDrag({
 
   const handleDragEnd = useCallback(
     async (event: DragEndEvent) => {
+      const activatorPoint = pointFromInputEvent(event.activatorEvent);
+      const releasePoint = dragSession.releasePoint();
+      const releaseTravel = activatorPoint && releasePoint
+        ? Math.hypot(releasePoint.x - activatorPoint.x, releasePoint.y - activatorPoint.y) : 0;
       sensorPointerRef.current = null;
       clearFolderExitHandoff();
       setActiveDragPreview(null);
@@ -867,7 +871,7 @@ export function useLibraryDrag({
       resetSortDwell();
 
       const projection = takeShelfProjection();
-      const travel = Math.max(dragTravelRef.current, Math.hypot(event.delta.x, event.delta.y));
+      const travel = Math.max(dragTravelRef.current, Math.hypot(event.delta.x, event.delta.y), releaseTravel);
       dragTravelRef.current = 0;
 
       // A touch pickup held still and released without an adopted target is a long press:

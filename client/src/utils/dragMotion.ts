@@ -63,7 +63,7 @@ export const INTENT_DWELL_MS = 350;
 export const SPRING_OPEN_DWELL_MS = 800;
 
 export const TOUCH_ACTIVATION_DELAY_MS = 350;
-export const STILL_RELEASE_TOLERANCE_PX = 6;
+export const STILL_RELEASE_TOLERANCE_PX = 8;
 
 /** Time outside the Folder panel before handing a book to the shelf. */
 export const FOLDER_EXIT_DWELL_MS = 250;

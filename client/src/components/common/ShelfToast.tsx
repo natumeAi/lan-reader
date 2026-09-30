@@ -37,22 +37,22 @@ export function ShelfToast({ message, actions = [], light = false, duration = 50
       started = Date.now();
       timer = setTimeout(() => { timer = null; dismiss.current(); }, remaining);
     };
-    const enter = () => { hovered = true; pause(); };
-    const leave = () => { hovered = false; resume(); };
+    const enter = (event: PointerEvent) => { if (event.pointerType === 'mouse') { hovered = true; pause(); } };
+    const leave = (event: PointerEvent) => { if (event.pointerType === 'mouse') { hovered = false; resume(); } };
     const focus = () => { focused = true; pause(); };
     const blur = (event: FocusEvent) => {
       focused = event.relatedTarget instanceof Node && node.contains(event.relatedTarget);
       resume();
     };
-    node.addEventListener('mouseenter', enter);
-    node.addEventListener('mouseleave', leave);
+    node.addEventListener('pointerenter', enter);
+    node.addEventListener('pointerleave', leave);
     node.addEventListener('focusin', focus);
     node.addEventListener('focusout', blur);
     resume();
     return () => {
       pause();
-      node.removeEventListener('mouseenter', enter);
-      node.removeEventListener('mouseleave', leave);
+      node.removeEventListener('pointerenter', enter);
+      node.removeEventListener('pointerleave', leave);
       node.removeEventListener('focusin', focus);
       node.removeEventListener('focusout', blur);
     };
