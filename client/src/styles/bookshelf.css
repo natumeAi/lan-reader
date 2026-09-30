@@ -421,7 +421,7 @@ h1 {
   -webkit-tap-highlight-color: transparent;
   content-visibility: auto;
   /* The width comes from the grid; only the height of an off-screen card needs an estimate
-     (a mid-range 2:3 cover plus its label), and `auto` prefers the last rendered height. */
+     (a mid-range 2:3 cover plus title and metadata), and `auto` prefers the last rendered height. */
   contain-intrinsic-block-size: auto calc(158px + var(--shelf-label-block));
 }
 
@@ -789,7 +789,7 @@ h1 {
   inset: 0;
   z-index: 1;
   background:
-    linear-gradient(115deg, rgba(255, 255, 255, 0.32), rgba(255, 255, 255, 0) 34%),
+    linear-gradient(115deg, rgba(255, 255, 255, 0.15), rgba(255, 255, 255, 0) 34%),
     linear-gradient(180deg, rgba(255, 255, 255, 0.14), rgba(0, 0, 0, 0.05));
   content: "";
   pointer-events: none;
@@ -844,37 +844,6 @@ h1 {
   box-shadow: none;
 }
 
-.book-reading-position-percent,
-.book-reading-position-finished {
-  position: absolute;
-  right: 7px;
-  bottom: 10px;
-  display: grid;
-  min-width: 26px;
-  min-height: 22px;
-  place-items: center;
-  padding: 4px 6px;
-  border-radius: 999px;
-  background: rgba(18, 18, 20, 0.78);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.24);
-  color: #fff;
-  font-size: 10px;
-  font-weight: 760;
-  font-variant-numeric: tabular-nums;
-  line-height: 1;
-  backdrop-filter: blur(8px);
-}
-
-.book-reading-position-finished {
-  width: 26px;
-  height: 26px;
-  min-width: 0;
-  min-height: 0;
-  padding: 0;
-  background: rgba(40, 174, 74, 0.96);
-  font-size: 15px;
-}
-
 .shelf-item-label {
   display: -webkit-box;
   width: 100%;
@@ -892,14 +861,29 @@ h1 {
   -webkit-line-clamp: 2;
 }
 
-.shelf-item-context {
-  display: -webkit-box;
+.shelf-item-meta {
+  display: block;
   width: 100%;
-  margin-top: -5px;
+  min-width: 0;
+  height: 18px;
   overflow: hidden;
   color: var(--text-secondary);
   font-size: 11px;
-  line-height: 1.3;
+  font-variant-numeric: tabular-nums;
+  line-height: 18px;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shelf-item-context {
+  display: -webkit-box;
+  width: 100%;
+  height: 30px;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 15px;
   overflow-wrap: anywhere;
   text-align: center;
   text-overflow: ellipsis;
@@ -908,8 +892,8 @@ h1 {
 }
 
 .skeleton-label {
-  /* Same height as a real one-to-two-line label, so loaded cards do not shift the rows. */
-  min-height: 34px;
+  /* Include the metadata row so loading and loaded cards have the same height. */
+  min-height: calc(var(--shelf-label-block) - 9px);
   border-radius: 7px;
   background:
     linear-gradient(90deg, rgba(255, 255, 255, 0), rgba(255, 255, 255, 0.48), rgba(255, 255, 255, 0)),

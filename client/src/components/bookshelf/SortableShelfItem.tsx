@@ -7,6 +7,8 @@ import { memo } from 'react';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { ShelfItemCover } from './ShelfItemCover.js';
+import { ShelfItemLabel } from './ShelfItemLabel.js';
+import { formatShelfBookMeta } from '../../utils/shelfCardMeta.js';
 import { INTENT_DWELL_MS, SHELF_SORT_TRANSITION } from '../../utils/dragMotion.js';
 import { formatBookCardAriaLabel } from '../../utils/readingProgress.js';
 
@@ -40,7 +42,9 @@ const ShelfItemContent = memo(function ShelfItemContent({ item, name, priority }
         priority={priority}
         showReadingPosition
       />
-      <span className="shelf-item-label">{name}</span>
+      <ShelfItemLabel name={name} meta={item.type === 'folder'
+        ? `${item.folder.bookCount} 本`
+        : formatShelfBookMeta(item.book.author, item.book.readingProgress)} />
     </>
   );
 });
@@ -102,8 +106,8 @@ export function SortableShelfItem({
       ? item.folder?.name || '文件夹'
       : item.book?.title || '未命名书籍';
   const label = item.type === 'book'
-    ? formatBookCardAriaLabel(name, item.book?.readingProgress)
-    : name;
+    ? formatBookCardAriaLabel(name, item.book.readingProgress, item.book.author)
+    : `文件夹 ${name}，${item.folder.bookCount} 本`;
   const handleClick = (event: MouseEvent<HTMLButtonElement> | KeyboardEvent<HTMLButtonElement>) => {
     if (item.type === 'folder') {
       const rect = event.currentTarget.querySelector('.folder-cover')?.getBoundingClientRect();

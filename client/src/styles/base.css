@@ -8,8 +8,8 @@
   --shelf-columns: 3;
   --shelf-column-gap: clamp(12px, 3.5vw, 24px);
   --shelf-row-gap: 28px;
-  /* Label margin (9px) plus its two-line minimum height (34px), under a 2:3 cover. */
-  --shelf-label-block: 43px;
+  /* Label margin (9px), two-line title (34px) and one-line metadata (18px). */
+  --shelf-label-block: 61px;
   --shelf-row-unit: calc(var(--shelf-item-height) + var(--shelf-row-gap));
   --shelf-panel-pad-y: 10px;
   --shelf-panel-pad-x: 6px;

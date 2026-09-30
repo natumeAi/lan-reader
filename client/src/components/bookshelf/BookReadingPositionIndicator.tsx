@@ -11,11 +11,6 @@ export function BookReadingPositionIndicator({ progress }: { progress?: number |
       >
         <span style={{ width: `${presentation.barWidth}%` }} />
       </span>
-      {presentation.state === 'finished' ? (
-        <span className="book-reading-position-finished">✓</span>
-      ) : (
-        <span className="book-reading-position-percent">{presentation.label}</span>
-      )}
     </span>
   );
 }

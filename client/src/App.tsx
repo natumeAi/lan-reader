@@ -14,6 +14,7 @@ import { FixedDragPreview } from './components/bookshelf/FixedDragPreview.js';
 import { LibraryHome } from './components/bookshelf/LibraryHome.js';
 import { MainNavigation } from './components/common/MainNavigation.js';
 import { ShelfToast } from './components/common/ShelfToast.js';
+import type { ShelfToastAction } from './components/common/ShelfToast.js';
 import { FolderOverlay } from './components/folders/FolderOverlay.js';
 import { RecentReadingSheet } from './components/home/RecentReadingSheet.js';
 import { ReadingHome } from './components/home/ReadingHome.js';
@@ -357,7 +358,9 @@ function App() {
     }
 
     setOpenFolder(updatedFolderItem.folder);
-    setFolderBooks(folderBooksByFolderId.get(openFolder.id) || []);
+    const snapshotBooks = folderBooksByFolderId.get(openFolder.id);
+    // A newly published Folder can open before its first reconciling snapshot arrives.
+    if (snapshotBooks) setFolderBooks(snapshotBooks);
   }, [
     finishCloseFolder,
     folderBooksByFolderId,
@@ -374,12 +377,41 @@ function App() {
   useEffect(() => {
     if (!isShelfNoticeVisible) dismissToast();
   }, [dismissToast, isShelfNoticeVisible]);
+  const notice = operations.toast;
+  const toastActionsBlocked = isSavingFolderName || isSavingFolderOrder || isFolderClosing;
+  const renameAction: ShelfToastAction | null = notice?.createdFolder ? {
+    label: '重命名',
+    disabled: toastActionsBlocked,
+    onClick() {
+      if (toastActionsBlocked || motionPhase !== 'idle' || activeDragPreview || itemMenu.menu || deleteCandidateBook) return;
+      const folder = operations.getCreatedFolder(notice.token);
+      if (!folder) return;
+      if (openFolder?.id === folder.id) {
+        handleStartFolderRename();
+        return;
+      }
+      const originRect = document.querySelector(`[data-folder-id="${folder.id}"] .folder-cover`)
+        ?.getBoundingClientRect() ?? null;
+      // Only this current publication may bypass the drop-click shield and merge
+      // reconciliation flag. Card/menu opens retain their ordinary busy guards.
+      openFolderFromShelf(folder, { startRename: true, originRect,
+        books: folderBooksByFolderId.get(folder.id) ?? folder.previewBooks });
+      void loadShelf({ background: true, allowCached: false });
+    },
+  } : null;
+  const undoAction: ShelfToastAction | null = operations.undoEntry
+    ? { label: '撤销', disabled: isSavingFolderName, onClick: () => {
+      if (!isSavingFolderName) void operations.runUndo();
+    } } : null;
+  const toastActions: readonly [] | readonly [ShelfToastAction] | readonly [ShelfToastAction, ShelfToastAction]
+    = renameAction && undoAction ? [renameAction, undoAction]
+      : renameAction ? [renameAction] : undoAction ? [undoAction] : [];
   // Hidden while dragging; drag start has already dismissed the previous notice.
   const shelfToast = operations.toast && isShelfNoticeVisible && !activeDragPreview && (
     <ShelfToast key={operations.toast.token} message={operations.toast.message}
       light={operations.toast.light} duration={operations.toast.duration}
       onDismiss={dismissToast}
-      actions={operations.undoEntry ? [{ label: '撤销', onClick: () => { void operations.runUndo(); } }] : []} />
+      actions={toastActions} />
   );
 
   return (

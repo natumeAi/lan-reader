@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 
 export interface ShelfToastAction {
   label: string;
+  disabled?: boolean;
   onClick(): void;
 }
 interface ShelfToastProps {
@@ -69,7 +70,7 @@ export function ShelfToast({ message, actions = [], light = false, duration = 50
     <div ref={element} className={`shelf-toast${light ? ' shelf-toast--light' : ''}`} role="status" aria-live="polite">
       <span>{message}</span>
       {actions.map(action => (
-        <button type="button" key={action.label} onClick={() => runAction(action)}>{action.label}</button>
+        <button type="button" disabled={action.disabled} key={action.label} onClick={() => runAction(action)}>{action.label}</button>
       ))}
     </div>
   );

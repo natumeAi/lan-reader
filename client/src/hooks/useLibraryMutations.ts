@@ -59,6 +59,7 @@ export interface MoveFolderBookToShelfInput {
   projection: ShelfProjection | null;
 }
 export interface CreateFolderInput {
+  name?: string;
   onPublished?: (data: Awaited<ReturnType<typeof createFolderFromBooks>>) => void;
   onOutcome?: (outcome: MutationOutcome) => void;
   previousShelfItems: ShelfItem[];
@@ -305,11 +306,13 @@ export function useLibraryMutations({
   );
 
   const createFolder = useCallback(
-    async ({ onPublished, onOutcome, previousShelfItems, projection, sourceBookId, targetBookId }: CreateFolderInput) => {
+    async ({ name, onPublished, onOutcome, previousShelfItems, projection, sourceBookId, targetBookId }: CreateFolderInput) => {
       await runShelfMutation({
         onOutcome,
         projection,
-        request: () => createFolderFromBooks(sourceBookId, targetBookId),
+        request: () => name === undefined
+          ? createFolderFromBooks(sourceBookId, targetBookId)
+          : createFolderFromBooks(sourceBookId, targetBookId, name),
         publish(data) {
           setShelfItems((data.shelfItems || []).map(normalizeShelfItem));
           onPublished?.(data);

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { LibraryMutationOptions, LibraryMutations, MutationOutcome } from './useLibraryMutations.js';
 import type { Folder, FolderBook, ShelfItem } from '../types/library.js';
 import { toShelfOrderItem } from '../utils/libraryItems.js';
+import { suggestFolderName } from '../utils/folderNaming.js';
 import type { ShelfProjection } from './useShelfData.js';
 import { LANDING_SETTLE_MS, SAVE_FAILURE_FEEDBACK_MS } from '../utils/dragMotion.js';
 import { useShelfUndo } from './useShelfUndo.js';
@@ -32,6 +33,7 @@ export interface ShelfOperations {
   toast: ShelfToastNotice | null;
   undoEntry: { token: number } | null;
   runUndo(): Promise<void>;
+  getCreatedFolder(token: number): Folder | null;
   dismissToast(): void;
   moveShelfBookToFolder(item: Extract<ShelfItem, { type: 'book' }>, folder: Folder): Promise<void>;
   moveFolderBookToShelf(book: FolderBook, folder: Folder): Promise<void>;
@@ -123,7 +125,18 @@ export function useShelfOperations({
     [clearFailureTimer, setIsSavingFolderOrder, setIsSavingOrder],
   );
 
-  const { mutations, undoEntry, toast, dismissToast, runUndo } = useShelfUndo(rawMutations, {
+  const namedMutations = useMemo<LibraryMutations>(() => ({
+    ...rawMutations,
+    createFolder(input) {
+      const source = input.previousShelfItems.find(item => item.type === 'book' && item.id === input.sourceBookId);
+      const target = input.previousShelfItems.find(item => item.type === 'book' && item.id === input.targetBookId);
+      const name = input.name ?? (source?.type === 'book' && target?.type === 'book'
+        ? suggestFolderName(source.book.title, target.book.title) : null);
+      return rawMutations.createFolder({ ...input, ...(name === null ? {} : { name }) });
+    },
+  }), [rawMutations]);
+
+  const { mutations, undoEntry, toast, dismissToast, runUndo, getCreatedFolder } = useShelfUndo(namedMutations, {
     ...mutationOptions, shelfItems, folderBooks, openFolder, folderBooksByFolderId, beginShelfProjection,
   }, getMutationSession, beginMutationFeedback);
   dismissUndoRef.current = dismissToast;
@@ -215,7 +228,7 @@ export function useShelfOperations({
   // Stable identity between feedback changes, so consumers can list it as a dependency.
   return useMemo(
     () => ({
-      toast, undoEntry, runUndo, dismissToast,
+      toast, undoEntry, runUndo, dismissToast, getCreatedFolder,
       moveShelfBookToFolder,
       moveFolderBookToShelf,
       mutations,
@@ -228,7 +241,7 @@ export function useShelfOperations({
       releaseShelfProjection,
     }),
     [
-      toast, undoEntry, runUndo, dismissToast,
+      toast, undoEntry, runUndo, dismissToast, getCreatedFolder,
       moveShelfBookToFolder,
       moveFolderBookToShelf,
       acquireShelfProjection,

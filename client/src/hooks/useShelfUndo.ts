@@ -1,10 +1,11 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
 import type { LibraryMutations, MutationOutcome } from './useLibraryMutations.js';
 import type { ShelfOperationsOptions, ShelfMutationIntent } from './useShelfOperations.js';
-import type { FolderBook, ShelfItem } from '../types/library.js';
+import type { Folder, FolderBook, ShelfItem } from '../types/library.js';
 import { normalizeFolderBook, normalizeShelfItem, toShelfOrderItem } from '../utils/libraryItems.js';
 
 export interface ShelfToastNotice {
+  createdFolder?: Folder;
   token: number;
   message: string;
   light?: boolean;
@@ -46,6 +47,13 @@ export function useShelfUndo(
     setUndoEntry(undo);
     setToast(notice);
   }, [getToken]);
+  // A notice can outlive a background snapshot. Resolve its Folder at click time,
+  // and reject callbacks invalidated synchronously by dismissal or a newer operation.
+  const getCreatedFolder = useCallback((token: number): Folder | null => {
+    if (entry.current?.token !== token || getToken() !== token || toast?.token !== token) return null;
+    const item = latest.current.shelfItems.find(item => item.type === 'folder' && item.id === toast.createdFolder?.id);
+    return item?.type === 'folder' ? item.folder : null;
+  }, [getToken, toast]);
   /** An undo is the newest operation of both scopes: every card and menu stays busy until it settles. */
   const setSaving = useCallback((saving: boolean) => {
     latest.current.setIsSavingOrder(saving);
@@ -171,7 +179,7 @@ export function useShelfUndo(
           const expected = data.shelfItems.map(normalizeShelfItem);
           const books = data.books.map(normalizeFolderBook);
           const snapshot = latest.current.folderBooksByFolderId;
-          register({ token, message: `已创建「${data.folder.name}」` }, {
+          register({ token, message: `已创建「${data.folder.name}」`, createdFolder: data.folder }, {
             token, intent: 'move-out', keys: [`folder:${data.folder.id}`, ...books.map(book => `book:${book.id}`)],
             isApplicable: () => shelfMatches(expected) && folderMatches(data.folder.id, books, snapshot),
             async run() {
@@ -225,5 +233,5 @@ export function useShelfUndo(
     if (outcome === 'failed') void latest.current.loadShelf({ background: true, allowCached: false });
   }, [beginFeedback, getToken, register, setSaving]);
 
-  return { mutations, undoEntry, toast, dismissToast, runUndo };
+  return { mutations, undoEntry, toast, dismissToast, runUndo, getCreatedFolder };
 }

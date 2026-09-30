@@ -2,7 +2,7 @@ import type { ShelfOrderItem } from '@lan-reader/shared';
 import { request, jsonBody } from './transport.js';
 import { decodeBooks, decodeShelf, decodeFolderResponse, decodeFolderMutation, decodeMoveToShelf } from './decoders.js';
 export const listShelfItems = () => request('/api/folders/shelf', decodeShelf, { errorMessage: '无法加载书架' });
-export const createFolderFromBooks = (sourceBookId: number, targetBookId: number) => request('/api/folders', decodeFolderMutation, { method: 'POST', ...jsonBody({ sourceBookId, targetBookId }), errorMessage: status => status === 409 ? '只能用书架上的两本书创建文件夹' : '无法创建文件夹' });
+export const createFolderFromBooks = (sourceBookId: number, targetBookId: number, name?: string) => request('/api/folders', decodeFolderMutation, { method: 'POST', ...jsonBody({ sourceBookId, targetBookId, ...(name === undefined ? {} : { name }) }), errorMessage: status => status === 409 ? '只能用书架上的两本书创建文件夹' : '无法创建文件夹' });
 export const listFolderBooks = (folderId: number, options: { signal?: AbortSignal } = {}) => request(`/api/folders/${folderId}/books`, decodeBooks, { signal: options.signal, errorMessage: status => status === 404 ? '文件夹不存在' : '无法加载文件夹' });
 export const renameFolder = (folderId: number, name: string) => request(`/api/folders/${folderId}`, decodeFolderResponse, { method: 'PATCH', ...jsonBody({ name }), errorMessage: status => status === 404 ? '文件夹不存在' : '无法重命名文件夹' });
 export const moveShelfBookToFolder = (folderId: number, bookId: number) => request(`/api/folders/${folderId}/import-book/${bookId}`, decodeFolderMutation, { method: 'PATCH', errorMessage: status => status === 409 ? '只能移动书架上的书籍' : '无法移入文件夹' });
