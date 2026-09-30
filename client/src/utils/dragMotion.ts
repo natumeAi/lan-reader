@@ -59,6 +59,8 @@ export function dropAnimationConfig(reducedMotion: boolean): ShelfMotionTransiti
 export const SORT_DWELL_MS = 150;
 /** Hover time in a target centre zone before merge/absorb is armed. */
 export const INTENT_DWELL_MS = 350;
+/** Total centre-zone dwell before a root Book opens its destination Folder (D13). */
+export const SPRING_OPEN_DWELL_MS = 800;
 
 export const TOUCH_ACTIVATION_DELAY_MS = 350;
 export const STILL_RELEASE_TOLERANCE_PX = 6;

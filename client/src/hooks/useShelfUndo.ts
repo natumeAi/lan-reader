@@ -206,6 +206,7 @@ export function useShelfUndo(
             isApplicable: () => shelfMatches(expected) && folderMatches(input.folderId, books, snapshot),
             run: () => step(onOutcome => raw.moveFolderBookToShelf({
               folder: data.folder, book: normalizeFolderBook(item.book),
+              publishMembership: input.bookIds !== undefined,
               orderItems: input.previousShelfItems.map(toShelfOrderItem), previousShelfItems: latest.current.shelfItems,
               previousFolderBooks: books, restoreFolderOnFailure: latest.current.openFolder?.id === input.folderId,
               projection: projection(), onOutcome,

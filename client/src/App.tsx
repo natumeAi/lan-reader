@@ -1,4 +1,4 @@
-import type { Book, Folder } from './types/library.js';
+import type { Book, Folder, FolderBook } from './types/library.js';
 import type { MainView } from './utils/mainViewPreference.js';
 import type { GoalKind } from './utils/readingStatsFormat.js';
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
@@ -177,6 +177,12 @@ function App() {
     setIsSavingFolderOrder,
     setOpenFolder,
   } = useFolderState({ onFolderRenamed: handleFolderRenamed });
+  const openFolderForDrag = useCallback((folder: Folder, books: FolderBook[], originRect: DOMRect | null) => {
+    if (motionPhase !== 'idle' || selectionActive || isSavingOrder || isSavingFolderOrder ||
+        isSavingFolderName || isFolderClosing) return false;
+    return openFolderFromShelf(folder, { books, originRect, springLoaded: true });
+  }, [isFolderClosing, isSavingFolderName, isSavingFolderOrder, isSavingOrder, motionPhase,
+    openFolderFromShelf, selectionActive]);
   const itemMenu = useShelfItemMenu({ shelfItems, folderBooks, openFolder });
   const {
     deleteCandidateBook,
@@ -225,6 +231,8 @@ function App() {
     isSavingOrder,
     loadShelf,
     onDropOnDelete: requestDeleteBook,
+    openFolderForDrag,
+    closeFolderForDrag: finishCloseFolder,
     onRequestItemMenu: itemMenu.request,
     openFolder,
     setError: setOperationError,
@@ -333,7 +341,7 @@ function App() {
   }, [clearReaderBookIfDeleted, loadShelf]);
 
   const handleOpenFolder = useCallback((folder: Folder, originRect: DOMRect | null, options?: { startRename?: boolean }) => {
-    if (motionPhase !== 'idle' || selectionActive) return;
+    if (motionPhase !== 'idle' || selectionActive || activeDragPreview) return;
     openFolderFromShelf(folder, {
       startRename: options?.startRename,
       books: folderBooksByFolderId.get(folder.id) || [],
@@ -345,6 +353,7 @@ function App() {
   }, [
     folderBooksByFolderId,
     getFolderOpenIgnoreUntil,
+    activeDragPreview,
     isSavingOrder,
     loadShelf,
     motionPhase,
@@ -368,7 +377,7 @@ function App() {
   }
 
   useEffect(() => {
-    if (!openFolder || isSavingFolderOrder) return;
+    if (!openFolder || isSavingFolderOrder || isSavingOrder || activeDragPreview) return;
 
     const updatedFolderItem = shelfItems.find(
       (item) => item.type === 'folder' && item.id === openFolder.id,
@@ -386,6 +395,8 @@ function App() {
     finishCloseFolder,
     folderBooksByFolderId,
     isSavingFolderOrder,
+    isSavingOrder,
+    activeDragPreview,
     openFolder?.id,
     setFolderBooks,
     setOpenFolder,
@@ -580,7 +591,7 @@ function App() {
           isLoading={isFolderLoading}
           isRenaming={isRenamingFolder}
           isRenameSaving={isSavingFolderName}
-          isSavingOrder={isSavingFolderOrder}
+          isSavingOrder={isSavingFolderOrder || isSavingOrder}
           mutationFeedback={mutationFeedback}
           onClose={handleCloseFolder}
           onOpenBook={handleOpenBook}

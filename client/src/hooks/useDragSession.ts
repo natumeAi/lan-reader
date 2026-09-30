@@ -23,6 +23,8 @@ export interface DragSession {
    * while the preview is idle.
    */
   movePreview(pointerPoint: Point | null, overlayCenter: Point): void;
+  /** Feed an existing sensor move after reparenting detaches its original event target. */
+  movePointer(point: Point): void;
   /** One boolean publisher; coordinates never reach the subscriber. */
   onNearDeleteZoneChange(listener: ((near: boolean) => void) | null): void;
   /** Re-evaluate after the drag-start render has mounted the delete zone. */
@@ -108,6 +110,12 @@ export function useDragSession(): DragSession {
       pointerPointRef.current = null;
     };
 
+    const movePointer = (point: Point) => {
+      pointerPointRef.current = point;
+      refreshDeleteZone();
+      if (isPreviewActiveRef.current) writePreview(point);
+    };
+
     const startPointerTracking = () => {
       stopPointerTracking();
 
@@ -118,12 +126,7 @@ export function useDragSession(): DragSession {
           return;
         }
 
-        pointerPointRef.current = point;
-        refreshDeleteZone();
-
-        if (isPreviewActiveRef.current) {
-          writePreview(point);
-        }
+        movePointer(point);
       };
 
       // One stream only. Pointer events already describe mouse, touch and pen, so adding
@@ -197,6 +200,7 @@ export function useDragSession(): DragSession {
 
         writePreview(pointerPoint);
       },
+      movePointer,
       onNearDeleteZoneChange(listener) {
         nearDeleteZoneListenerRef.current = listener;
       },

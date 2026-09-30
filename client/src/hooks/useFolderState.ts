@@ -5,7 +5,7 @@ import { errorMessage, isAbortError } from '../api/transport.js';
 
 interface FolderRequest { controller: AbortController | null; folderId: number | null; requestId: number }
 interface FolderStateOptions { onFolderRenamed?: (folder: Folder) => void }
-export interface FolderOpenOptions { startRename?: boolean; ignoreUntil?: number; isShelfBusy?: boolean; originRect?: MotionRect | null; books?: Book[] }
+export interface FolderOpenOptions { startRename?: boolean; ignoreUntil?: number; isShelfBusy?: boolean; originRect?: MotionRect | null; books?: Book[]; springLoaded?: boolean }
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -95,8 +95,8 @@ export function useFolderState({ onFolderRenamed }: FolderStateOptions = {}) {
   const handleOpenFolder = useCallback((folder: Folder, options: FolderOpenOptions = {}) => {
     const ignoreUntil = options.ignoreUntil || 0;
 
-    if (!folder || options.isShelfBusy || performance.now() < ignoreUntil) {
-      return;
+    if (!folder || options.isShelfBusy || (!options.springLoaded && performance.now() < ignoreUntil)) {
+      return false;
     }
 
     if (folderCloseTimeoutRef.current) {
@@ -118,6 +118,7 @@ export function useFolderState({ onFolderRenamed }: FolderStateOptions = {}) {
     setIsFolderLoading(false);
     // A new opening never inherits the previous opening's persistence state.
     setIsSavingFolderOrder(false);
+    return true;
   }, [invalidateFolderRequest]);
 
   const handleCloseFolder = useCallback((options: { originRect?: MotionRect | null } = {}) => {

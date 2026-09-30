@@ -41,6 +41,8 @@ interface LibraryDragOptions {
   loadShelf: (options?: LoadShelfOptions) => unknown;
   onRequestItemMenu?: (request: ItemMenuRequest) => void;
   onDropOnDelete?: (book: Book) => void;
+  openFolderForDrag?: (folder: Folder, books: FolderBook[], originRect: DOMRect | null) => boolean;
+  closeFolderForDrag?: () => void;
   openFolder: Folder | null;
   setError: (message: string) => void;
   setFolderBooks: Dispatch<SetStateAction<FolderBook[]>>;
@@ -74,7 +76,7 @@ import {
   collisionForKey,
   pointFromInputEvent,
 } from '../utils/dragGeometry.js';
-import { FOLDER_EXIT_DWELL_MS, INTENT_DWELL_MS, SORT_DWELL_MS, TOUCH_ACTIVATION_DELAY_MS, STILL_RELEASE_TOLERANCE_PX } from '../utils/dragMotion.js';
+import { FOLDER_EXIT_DWELL_MS, INTENT_DWELL_MS, SPRING_OPEN_DWELL_MS, SORT_DWELL_MS, TOUCH_ACTIVATION_DELAY_MS, STILL_RELEASE_TOLERANCE_PX } from '../utils/dragMotion.js';
 import { createDragAnnouncements, DRAG_SCREEN_READER_INSTRUCTIONS, dragIntentAnnouncement } from '../utils/dragAnnouncements.js';
 import { useDragSession } from './useDragSession.js';
 import { useFolderHandoff } from './useFolderHandoff.js';
@@ -264,6 +266,8 @@ export function useLibraryDrag({
   isSavingOrder,
   loadShelf,
   onDropOnDelete,
+  openFolderForDrag,
+  closeFolderForDrag,
   onRequestItemMenu,
   openFolder,
   setError,
@@ -302,6 +306,8 @@ export function useLibraryDrag({
   const shelfIntentDwell = useSortDwell(INTENT_DWELL_MS);
   const folderSortDwell = useSortDwell(SORT_DWELL_MS);
   const folderExitDwell = useSortDwell(FOLDER_EXIT_DWELL_MS);
+  const springDwell = useSortDwell(SPRING_OPEN_DWELL_MS);
+  const sensorPointerRef = useRef<Point | null>(null);
   const operations = useShelfOperations({
     catalogBooks,
     setCatalogBooks,
@@ -362,8 +368,9 @@ export function useLibraryDrag({
     dragIntentRef.current = idleIntent;
     shelfSortDwell.reset();
     shelfIntentDwell.reset();
+    springDwell.reset();
     setDragIntent(dragIntentRef.current);
-  }, [shelfSortDwell, shelfIntentDwell]);
+  }, [shelfSortDwell, shelfIntentDwell, springDwell]);
 
   const clearFolderDragIntent = useCallback(() => {
     folderSortDwell.reset();
@@ -396,6 +403,11 @@ export function useLibraryDrag({
 
   const {
     deactivateFixedDragPreview,
+    evaluateSpringTarget,
+    shelfBookFolderDragRef,
+    handleShelfBookFolderDragEnd,
+    moveShelfBookFolderPreview,
+    restoreShelfBookFolderDrag,
     folderBookShelfDragRef,
     handleFolderBookDragMove,
     handleFolderBookShelfDragEnd,
@@ -405,6 +417,10 @@ export function useLibraryDrag({
     restoreFolderBookShelfDrag,
   } = useFolderHandoff({
     activeDragPreview,
+    folderBooksByFolderId,
+    openFolderForDrag,
+    closeFolderForDrag,
+    springDwell,
     clearDragIntent,
     clearFolderDragIntent,
     dragSession,
@@ -448,6 +464,11 @@ export function useLibraryDrag({
   }), [lookupDragName]);
   const readDragData = useCallback((active: Active): DragData | null => {
     const key = String(active.id);
+    const spring = shelfBookFolderDragRef.current;
+    if (spring?.item.key === key) {
+      const book = folderBooks.find(candidate => candidate.key === key);
+      return book ? { type: 'folder-book', book } : null;
+    }
     const type: unknown = active.data.current?.type;
     if (type === 'folder-book') {
       const book = folderBookShelfDragRef.current?.book.key === key
@@ -491,10 +512,11 @@ export function useLibraryDrag({
       // Published after resolution so the sort affordance only appears on a target the
       // dwell has actually adopted, never on one that is still maturing.
       publishDragIntent(shelfIntentForTarget(target, resolved.sortTargetKey, resolved.armed ?? false));
+      evaluateSpringTarget(String(active.id), target, resolved.armed ?? false, activeCenter);
 
       return resolved.collisions;
     },
-    [dragSession, publishDragIntent, shelfItems, shelfSortDwell, shelfIntentDwell],
+    [dragSession, evaluateSpringTarget, publishDragIntent, shelfItems, shelfSortDwell, shelfIntentDwell],
   );
 
   const folderCollisionDetection = useCallback<CollisionDetection>(
@@ -504,11 +526,12 @@ export function useLibraryDrag({
         x: collisionRect.left + collisionRect.width / 2,
         y: collisionRect.top + collisionRect.height / 2,
       };
+      moveShelfBookFolderPreview(args.pointerCoordinates, activeCenter);
       const target = resolveFolderDragTarget({
         activeCenter,
         activeId: String(active.id),
-        activeType: active.data.current?.type,
-        deletePoint: dragSession.pointerPoint() || activeCenter,
+        activeType: shelfBookFolderDragRef.current ? 'folder-book' : active.data.current?.type,
+        deletePoint: (shelfBookFolderDragRef.current ? args.pointerCoordinates : dragSession.pointerPoint()) || activeCenter,
         droppableEntries: droppableContainers,
         droppableRects,
         items: folderBooks,
@@ -532,16 +555,18 @@ export function useLibraryDrag({
         target,
       }).collisions;
     },
-    [dragSession, folderBooks, folderSortDwell, publishDragIntent],
+    [dragSession, folderBooks, folderSortDwell, moveShelfBookFolderPreview, publishDragIntent],
   );
 
   const activeDragModifier = useCallback<Modifier>((args) => args.transform, []);
 
   const appCollisionDetection = useCallback<CollisionDetection>(
     (args) => {
+      // Ref only during collision rendering; handleDragMove publishes proximity afterwards.
+      sensorPointerRef.current = args.pointerCoordinates;
       const activeType = args.active.data.current?.type;
 
-      if (activeType === 'folder-book' && !folderBookShelfDragRef.current) {
+      if (shelfBookFolderDragRef.current || (activeType === 'folder-book' && !folderBookShelfDragRef.current)) {
         return folderCollisionDetection(args);
       }
 
@@ -555,7 +580,10 @@ export function useLibraryDrag({
       const activeData = readDragData(event.active);
       let book: Book | null;
 
-      if (folderBookShelfDragRef.current) {
+      if (shelfBookFolderDragRef.current) {
+        book = shelfBookFolderDragRef.current.item.book;
+        restoreShelfBookFolderDrag(false);
+      } else if (folderBookShelfDragRef.current) {
         book = folderBookShelfDragRef.current.book;
         restoreFolderBookShelfDrag();
       } else {
@@ -575,11 +603,12 @@ export function useLibraryDrag({
       onDropOnDelete?.(book);
       return true;
     },
-    [clearDragIntent, clearFolderDragIntent, onDropOnDelete, readDragData, restoreFolderBookShelfDrag],
+    [clearDragIntent, clearFolderDragIntent, onDropOnDelete, readDragData, restoreFolderBookShelfDrag, restoreShelfBookFolderDrag],
   );
 
   const handleDragStart = useCallback(
     (event: DragStartEvent) => {
+      sensorPointerRef.current = null;
       const activeData = readDragData(event.active);
 
       resetSortDwell();
@@ -624,6 +653,9 @@ export function useLibraryDrag({
 
   const handleDragMove = useCallback(
     (event: DragMoveEvent) => {
+      // Detached touch events no longer bubble to window after either handoff. Reuse
+      // the sensor's raw point in the same session, including after returning to the shelf.
+      if (sensorPointerRef.current) dragSession.movePointer(sensorPointerRef.current);
       // Ref only: coordinate updates must never render the host.
       dragTravelRef.current = Math.max(dragTravelRef.current, Math.hypot(event.delta.x, event.delta.y));
       const activeData = readDragData(event.active);
@@ -634,18 +666,21 @@ export function useLibraryDrag({
 
       handleFolderBookDragMove(event, activeData.book);
     },
-    [handleFolderBookDragMove, readDragData],
+    [dragSession, handleFolderBookDragMove, readDragData],
   );
 
   const handleDragCancel = useCallback(
     (event: DragCancelEvent) => {
+      sensorPointerRef.current = null;
       setActiveDragPreview(null);
       setActiveDragWidth(null);
       deactivateFixedDragPreview();
       dragSession.end();
       resetSortDwell();
 
-      if (folderBookShelfDragRef.current) {
+      if (shelfBookFolderDragRef.current) {
+        restoreShelfBookFolderDrag(false);
+      } else if (folderBookShelfDragRef.current) {
         restoreFolderBookShelfDrag();
       } else if (event.active.data.current?.type === 'folder-book') {
         clearFolderDragIntent();
@@ -664,6 +699,7 @@ export function useLibraryDrag({
       releaseShelfProjection,
       resetSortDwell,
       restoreFolderBookShelfDrag,
+      restoreShelfBookFolderDrag,
     ],
   );
 
@@ -813,6 +849,7 @@ export function useLibraryDrag({
 
   const handleDragEnd = useCallback(
     async (event: DragEndEvent) => {
+      sensorPointerRef.current = null;
       setActiveDragPreview(null);
       setActiveDragWidth(null);
       deactivateFixedDragPreview();
@@ -825,7 +862,7 @@ export function useLibraryDrag({
 
       // A touch pickup held still and released without an adopted target is a long press:
       // it opens the item menu instead of ending as an empty drag, and mutates nothing.
-      if (onRequestItemMenu && isStillTouchRelease(event, travel, dragIntentRef.current, folderBookShelfDragRef.current !== null)) {
+      if (onRequestItemMenu && isStillTouchRelease(event, travel, dragIntentRef.current, folderBookShelfDragRef.current !== null || shelfBookFolderDragRef.current !== null)) {
         const target = event.activatorEvent?.target;
         const card = target instanceof Element ? target.closest(draggableItemSelector) : null;
         const cover = card?.querySelector('.book-cover, .folder-cover');
@@ -840,6 +877,12 @@ export function useLibraryDrag({
 
       if (event.over?.id === DELETE_DROPZONE_ID && handleDropOnDelete(event)) {
         projection?.release();
+        return;
+      }
+
+      if (shelfBookFolderDragRef.current) {
+        ignoreFolderClickUntilRef.current = performance.now() + 300;
+        await handleShelfBookFolderDragEnd(event, projection);
         return;
       }
 
@@ -860,6 +903,7 @@ export function useLibraryDrag({
       dragSession,
       handleDropOnDelete,
       handleFolderBookShelfDragEnd,
+      handleShelfBookFolderDragEnd,
       handleFolderDragEnd,
       handleShelfDragEnd,
       clearDragIntent,

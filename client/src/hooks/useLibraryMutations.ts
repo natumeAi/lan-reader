@@ -46,6 +46,8 @@ export interface LibraryMutationOptions {
   setFolderBooksByFolderId?: Dispatch<SetStateAction<Map<number, FolderBook[]>>>;
 }
 export interface MoveFolderBookToShelfInput {
+  /** Spring move-in Undo keeps membership and the open panel valid without a successful refresh. */
+  publishMembership?: boolean;
   onPublished?: (data: Awaited<ReturnType<typeof moveFolderBookToShelf>>) => void;
   /**
    * Whether a failure reopens the Folder with its previous books (the default, for moves started
@@ -73,6 +75,9 @@ export interface CreateFolderInput {
   targetBookId: number;
 }
 export interface MoveShelfBookToFolderInput {
+  bookIds?: number[];
+  /** Present for a spring handoff; panel publication is guarded by its opening session. */
+  previousFolderBooks?: FolderBook[];
   onPublished?: (data: Awaited<ReturnType<typeof moveShelfBookToFolder>>) => void;
   bookId: number;
   folderId: number;
@@ -124,7 +129,8 @@ export interface LibraryMutations {
   saveShelfItemOrder(input: SaveShelfItemOrderInput): Promise<void>;
 }
 interface ShelfMutationRun<T> {
-  refreshOnFailure?: boolean;
+  /** Batches always reconcile; a spring move only refreshes a failure it still owns. */
+  refreshOnFailure?: boolean | 'current';
   onOutcome?: (outcome: MutationOutcome) => void;
   onSettled?: () => void;
   projection: ShelfProjection | null;
@@ -231,7 +237,7 @@ export function useLibraryMutations({
         // that snapshot describes is the authoritative one.
         releaseProjection(projection);
         onOutcome?.(isOwned ? 'failed' : 'stale');
-        if (refreshOnFailure) void refreshAuthoritatively();
+        if (refreshOnFailure && (isOwned || refreshOnFailure === true)) void refreshAuthoritatively();
       } finally {
         onSettled?.();
 
@@ -293,6 +299,7 @@ export function useLibraryMutations({
       book,
       folder,
       restoreFolderOnFailure = true,
+      publishMembership = false,
       onPublished,
       onOutcome,
       onSettled,
@@ -310,6 +317,21 @@ export function useLibraryMutations({
         request: () => moveFolderBookToShelf(folder.id, book.id, orderItems),
         publish(data) {
           setShelfItems((data.shelfItems || []).map(normalizeShelfItem));
+          if (publishMembership) {
+            const books = data.books.map(normalizeFolderBook);
+            setFolderBooksByFolderId?.(previous => {
+              const next = new Map(previous);
+              if (data.folder) next.set(folder.id, books);
+              else next.delete(folder.id);
+              return next;
+            });
+            setCatalogBooks?.(previous => previous.map(candidate => candidate.id === book.id
+              ? { ...candidate, ...data.book, folderName: null } : candidate));
+            if (isFolderSessionStillCurrent(session)) {
+              setOpenFolder(current => current?.id === folder.id ? data.folder : current);
+              setFolderBooks(books);
+            }
+          }
           onPublished?.(data);
         },
         rollback(error) {
@@ -344,6 +366,8 @@ export function useLibraryMutations({
       setIsRenamingFolder,
       setOpenFolder,
       setShelfItems,
+      setFolderBooksByFolderId,
+      setCatalogBooks,
     ],
   );
 
@@ -369,22 +393,45 @@ export function useLibraryMutations({
   );
 
   const moveShelfBookToFolderMutation = useCallback(
-    async ({ bookId, folderId, onPublished, onOutcome, previousShelfItems, projection }: MoveShelfBookToFolderInput) => {
+    async ({ bookId, bookIds, folderId, onPublished, onOutcome, previousShelfItems, previousFolderBooks, projection }: MoveShelfBookToFolderInput) => {
+      const session = readFolderSession();
       await runShelfMutation({
         onOutcome,
         projection,
-        request: () => moveShelfBookToFolder(folderId, bookId),
+        refreshOnFailure: bookIds !== undefined ? 'current' : false,
+        request: () => bookIds === undefined
+          ? moveShelfBookToFolder(folderId, bookId)
+          : moveShelfBookToFolder(folderId, bookId, bookIds),
         publish(data) {
           setShelfItems((data.shelfItems || []).map(normalizeShelfItem));
+          if (bookIds !== undefined) {
+            // Publish membership as well as the visible panel: a failed refresh must not
+            // let App's snapshot-to-panel effect restore the pre-import book set.
+            setFolderBooksByFolderId?.(previous => {
+              const next = new Map(previous);
+              next.set(folderId, data.books.map(normalizeFolderBook));
+              return next;
+            });
+            setCatalogBooks?.(books => books.map(book => book.id === bookId
+              ? { ...book, folderId, folderName: data.folder.name } : book));
+          }
+          if (previousFolderBooks && isFolderSessionStillCurrent(session)) {
+            setOpenFolder(data.folder);
+            setFolderBooks(data.books.map(normalizeFolderBook));
+          }
           onPublished?.(data);
         },
         rollback(error) {
           setShelfItems(previousShelfItems);
+          if (previousFolderBooks && isFolderSessionStillCurrent(session)) {
+            setFolderBooks(previousFolderBooks);
+            setFolderError(errorMessage(error, '无法移入文件夹'));
+          }
           setError(errorMessage(error, '无法移入文件夹'));
         },
       });
     },
-    [runShelfMutation, setError, setShelfItems],
+    [isFolderSessionStillCurrent, readFolderSession, runShelfMutation, setError, setFolderBooks, setFolderError, setOpenFolder, setShelfItems, setFolderBooksByFolderId, setCatalogBooks],
   );
 
   const saveShelfItemOrder = useCallback(

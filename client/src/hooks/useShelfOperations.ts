@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { LibraryMutationOptions, LibraryMutations, MutationOutcome } from './useLibraryMutations.js';
+import type { LibraryMutationOptions, LibraryMutations, MoveShelfBookToFolderInput, MutationOutcome } from './useLibraryMutations.js';
 import type { Book, CatalogBook, Folder, FolderBook, ShelfItem } from '../types/library.js';
 import { toShelfOrderItem } from '../utils/libraryItems.js';
 import { suggestFolderName } from '../utils/folderNaming.js';
@@ -39,6 +39,7 @@ export interface ShelfOperations {
   runUndo(): Promise<void>;
   getCreatedFolder(token: number): Folder | null;
   dismissToast(): void;
+  moveShelfBookToFolderAt(input: MoveShelfBookToFolderInput & { reorderedFolderBooks: FolderBook[] }): Promise<void>;
   moveShelfBookToFolder(item: Extract<ShelfItem, { type: 'book' }>, folder: Folder): Promise<void>;
   moveFolderBookToShelf(book: FolderBook, folder: Folder): Promise<void>;
   mutations: LibraryMutations;
@@ -204,6 +205,17 @@ export function useShelfOperations({
     });
   }, [beginShelfProjection, beginMutationFeedback, mutations, setError, setIsSavingOrder, shelfItems]);
 
+  const moveShelfBookToFolderAt = useCallback(async (input: MoveShelfBookToFolderInput & { reorderedFolderBooks: FolderBook[] }) => {
+    const report = beginMutationFeedback('absorb', [`book:${input.bookId}`, `folder-book:${input.bookId}`, `folder:${input.folderId}`]);
+    setIsSavingOrder(true);
+    setError('');
+    setFolderError('');
+    mutationOptions.setFolderBooks(input.reorderedFolderBooks);
+    await mutations.moveShelfBookToFolder({ ...input,
+      bookIds: input.reorderedFolderBooks.map(book => book.id), onOutcome: report,
+    });
+  }, [beginMutationFeedback, mutations, mutationOptions.setFolderBooks, setError, setFolderError, setIsSavingOrder]);
+
   const moveFolderBookToShelf = useCallback(async (book: FolderBook, folder: Folder) => {
     const projection = beginShelfProjection?.() ?? null;
     const folderIndex = shelfItems.findIndex(item => item.type === 'folder' && item.id === folder.id);
@@ -295,6 +307,7 @@ export function useShelfOperations({
       batchMoveToFolder, batchMoveToShelf, batchDelete,
       toast, undoEntry, runUndo, dismissToast, getCreatedFolder,
       moveShelfBookToFolder,
+      moveShelfBookToFolderAt,
       moveFolderBookToShelf,
       mutations,
       mutationFeedback,
@@ -310,6 +323,7 @@ export function useShelfOperations({
       batchMoveToFolder, batchMoveToShelf, batchDelete,
       toast, undoEntry, runUndo, dismissToast, getCreatedFolder,
       moveShelfBookToFolder,
+      moveShelfBookToFolderAt,
       moveFolderBookToShelf,
       acquireShelfProjection,
       beginMutationFeedback,
