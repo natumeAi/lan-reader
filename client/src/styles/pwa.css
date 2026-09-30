@@ -14,7 +14,7 @@
   justify-content: center;
   gap: 14px;
   overflow: hidden;
-  background: #fff;
+  background: var(--color-surface);
   color: var(--text-secondary);
   font-size: 15px;
   overscroll-behavior: none;
@@ -24,7 +24,7 @@
   display: block;
   width: 28px;
   height: 28px;
-  border: 2.5px solid rgba(0, 0, 0, 0.1);
+  border: 2.5px solid var(--color-spinner-track);
   border-top-color: var(--accent);
   border-radius: 50%;
   animation: spin 0.75s linear infinite;
@@ -130,19 +130,19 @@
     transform: none;
     box-shadow:
       0 18px 30px var(--book-shadow),
-      0 3px 7px rgba(38, 31, 24, 0.14),
-      inset 0 0 0 1px rgba(255, 255, 255, 0.2),
-      0 0 0 2px rgba(0, 122, 255, 0.12);
+      0 3px 7px var(--color-shadow-book-detail),
+      inset 0 0 0 1px var(--color-highlight-20),
+      0 0 0 2px var(--color-accent-ring-pending);
   }
 
   .book-shell.is-absorb-pending .folder-cover {
     transform: none;
     box-shadow:
-      0 18px 30px rgba(47, 47, 51, 0.16),
-      0 3px 7px rgba(47, 47, 51, 0.1),
-      inset 0 0 0 1px rgba(29, 29, 31, 0.08),
-      inset 0 1px 0 rgba(255, 255, 255, 0.62),
-      0 0 0 2px rgba(0, 122, 255, 0.12);
+      0 18px 30px var(--color-shadow-folder),
+      0 3px 7px var(--color-shadow-folder-small),
+      inset 0 0 0 1px var(--color-separator-soft),
+      inset 0 1px 0 var(--color-highlight-62),
+      0 0 0 2px var(--color-accent-ring-pending);
   }
 
   .book-shell.is-pending-save .book-cover,

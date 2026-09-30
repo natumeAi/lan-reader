@@ -37,10 +37,10 @@ h1 {
   place-items: center;
   border: 0;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.92);
+  background: var(--color-surface-glass);
   box-shadow:
-    0 12px 28px rgba(47, 47, 51, 0.12),
-    inset 0 0 0 1px rgba(29, 29, 31, 0.08);
+    0 12px 28px var(--color-shadow-folder-control),
+    inset 0 0 0 1px var(--color-separator-soft);
   color: var(--accent);
   cursor: pointer;
   transition:
@@ -55,7 +55,7 @@ h1 {
 }
 
 .upload-button:focus-visible {
-  outline: 3px solid rgba(0, 122, 255, 0.24);
+  outline: 3px solid var(--color-accent-ring);
   outline-offset: 3px;
 }
 
@@ -127,7 +127,7 @@ h1 {
   margin: -4px -8px 0;
   padding: 4px 8px;
   background: transparent;
-  box-shadow: 0 1px 0 rgba(112, 82, 48, 0);
+  box-shadow: 0 1px 0 var(--color-shelf-sticky-shadow-clear);
   transition:
     background-color 160ms ease,
     box-shadow 160ms ease,
@@ -138,8 +138,8 @@ h1 {
 /* Only a pinned bar needs a surface. It is a warm, translucent cousin of the wood page
    background, so content scrolling underneath stays legible without a grey slab. */
 .library-search-shell.is-stuck {
-  background: rgba(248, 242, 231, 0.84);
-  box-shadow: 0 1px 0 rgba(112, 82, 48, 0.16);
+  background: var(--color-shelf-sticky-surface);
+  box-shadow: 0 1px 0 var(--color-shelf-sticky-shadow);
   -webkit-backdrop-filter: blur(18px) saturate(1.12);
   backdrop-filter: blur(18px) saturate(1.12);
 }
@@ -156,14 +156,14 @@ h1 {
   gap: 8px;
   padding: 0 8px;
   border-radius: 14px;
-  background: rgba(255, 255, 255, 0.92);
-  box-shadow: inset 0 0 0 1px rgba(29, 29, 31, 0.08);
+  background: var(--color-surface-glass);
+  box-shadow: inset 0 0 0 1px var(--color-separator-soft);
 }
 
 .library-search-control:focus-within {
   box-shadow:
-    inset 0 0 0 1px rgba(29, 29, 31, 0.08),
-    0 0 0 3px rgba(0, 122, 255, 0.24);
+    inset 0 0 0 1px var(--color-separator-soft),
+    0 0 0 3px var(--color-accent-ring);
 }
 
 .library-search-icon {
@@ -171,7 +171,7 @@ h1 {
   width: 16px;
   height: 16px;
   flex: 0 0 auto;
-  border: 2px solid rgba(29, 29, 31, 0.5);
+  border: 2px solid var(--color-text-icon);
   border-radius: 999px;
 }
 
@@ -182,7 +182,7 @@ h1 {
   width: 7px;
   height: 2px;
   border-radius: 999px;
-  background: rgba(29, 29, 31, 0.5);
+  background: var(--color-text-icon);
   content: "";
   transform: rotate(45deg);
 }
@@ -200,7 +200,7 @@ h1 {
 }
 
 .library-search-input::placeholder {
-  color: rgba(110, 110, 115, 0.82);
+  color: var(--color-text-placeholder);
 }
 
 .library-search-input:disabled {
@@ -230,7 +230,7 @@ h1 {
 .empty-state button {
   border: 0;
   border-radius: 11px;
-  background: rgba(118, 118, 128, 0.12);
+  background: var(--color-fill);
   color: var(--accent);
   cursor: pointer;
   font-size: 13px;
@@ -309,8 +309,8 @@ h1 {
   margin: 0;
   padding: 9px 14px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.94);
-  box-shadow: 0 10px 28px rgba(29, 29, 31, 0.16);
+  background: var(--color-surface-notice);
+  box-shadow: 0 10px 28px var(--color-shadow-notice);
   transform: translateX(-50%);
 }
 
@@ -334,7 +334,7 @@ h1 {
   gap: 4px;
   padding: 3px;
   border-radius: 14px;
-  background: rgba(118, 118, 128, 0.1);
+  background: var(--color-fill-subtle);
 }
 
 .library-view-options button {
@@ -346,10 +346,10 @@ h1 {
 }
 
 .library-view-options button[aria-pressed="true"] {
-  background: rgba(255, 255, 255, 0.94);
+  background: var(--color-surface-notice);
   box-shadow:
-    0 1px 4px rgba(29, 29, 31, 0.1),
-    inset 0 0 0 1px rgba(29, 29, 31, 0.06);
+    0 1px 4px var(--color-shadow-control),
+    inset 0 0 0 1px var(--color-separator-selected);
   color: var(--text-primary);
 }
 
@@ -483,9 +483,9 @@ button.library-read-only-hint:focus-visible {
 .drag-preview .book-cover,
 .drag-preview .folder-cover {
   box-shadow:
-    0 24px 38px rgba(38, 31, 24, 0.26),
-    0 8px 14px rgba(38, 31, 24, 0.16),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.24);
+    0 24px 38px var(--color-shadow-book-drag),
+    0 8px 14px var(--color-shadow-book-small),
+    inset 0 0 0 1px var(--color-highlight-24);
   transform: scale(1.04);
   animation: drag-lift 160ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
@@ -519,11 +519,11 @@ button.library-read-only-hint:focus-visible {
   padding: 0 17px;
   border: 0;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.92);
+  background: var(--color-surface-glass);
   box-shadow:
-    0 16px 34px rgba(29, 29, 31, 0.18),
-    inset 0 0 0 1px rgba(29, 29, 31, 0.08);
-  color: rgba(29, 29, 31, 0.72);
+    0 16px 34px var(--color-shadow-drop-zone),
+    inset 0 0 0 1px var(--color-separator-soft);
+  color: var(--color-text-drop-zone);
   font-size: 14px;
   font-weight: 700;
   line-height: 1;
@@ -538,22 +538,22 @@ button.library-read-only-hint:focus-visible {
 }
 
 .delete-drop-zone.is-over {
-  background: rgba(255, 59, 48, 0.96);
+  background: var(--color-danger-fill);
   box-shadow:
-    0 18px 38px rgba(190, 31, 24, 0.28),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.22);
-  color: #fff;
+    0 18px 38px var(--color-shadow-danger-hover),
+    inset 0 0 0 1px var(--color-highlight-22);
+  color: var(--color-text-inverse);
   transform: translateX(-50%) scale(1.06);
 }
 
 /* Armed means "release now and this book is deleted", which must not look like the
    merely visible zone. */
 .delete-drop-zone.is-armed {
-  background: rgba(255, 59, 48, 0.96);
+  background: var(--color-danger-fill);
   box-shadow:
-    0 18px 38px rgba(190, 31, 24, 0.32),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.28);
-  color: #fff;
+    0 18px 38px var(--color-shadow-danger-armed),
+    inset 0 0 0 1px var(--color-highlight-28);
+  color: var(--color-text-inverse);
   font-weight: 800;
   animation: delete-zone-armed 900ms ease-in-out infinite;
 }
@@ -605,7 +605,7 @@ button.library-read-only-hint:focus-visible {
 .delete-confirm-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(20, 20, 24, 0.26);
+  background: var(--color-backdrop);
   backdrop-filter: blur(14px) saturate(1.06);
 }
 
@@ -616,17 +616,17 @@ button.library-read-only-hint:focus-visible {
   gap: 12px;
   overflow: hidden;
   border-radius: 18px;
-  background: rgba(250, 250, 252, 0.96);
+  background: var(--color-surface-raised);
   box-shadow:
-    0 28px 60px rgba(29, 29, 31, 0.26),
-    0 8px 20px rgba(29, 29, 31, 0.14),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.6);
+    0 28px 60px var(--color-shadow-panel),
+    0 8px 20px var(--color-shadow-panel-detail),
+    inset 0 0 0 1px var(--color-highlight-60);
   text-align: center;
 }
 
 .delete-confirm-panel h2 {
   margin: 22px 20px 0;
-  color: rgba(29, 29, 31, 0.94);
+  color: var(--color-text-heading);
   font-size: 18px;
   font-weight: 760;
   line-height: 1.28;
@@ -635,7 +635,7 @@ button.library-read-only-hint:focus-visible {
 
 .delete-confirm-panel p {
   margin: 0 22px 6px;
-  color: rgba(29, 29, 31, 0.58);
+  color: var(--color-text-description);
   font-size: 14px;
   line-height: 1.45;
 }
@@ -643,7 +643,7 @@ button.library-read-only-hint:focus-visible {
 .delete-confirm-actions {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  border-top: 1px solid rgba(29, 29, 31, 0.1);
+  border-top: 1px solid var(--color-separator);
 }
 
 .delete-confirm-actions button {
@@ -662,7 +662,7 @@ button.library-read-only-hint:focus-visible {
 }
 
 .delete-confirm-actions button + button {
-  border-left: 1px solid rgba(29, 29, 31, 0.1);
+  border-left: 1px solid var(--color-separator);
 }
 
 .delete-confirm-actions button:disabled {
@@ -671,17 +671,17 @@ button.library-read-only-hint:focus-visible {
 }
 
 .delete-confirm-actions button.is-danger {
-  color: rgb(215, 0, 21);
+  color: var(--color-danger-text);
   font-weight: 760;
 }
 
 .book-shell:focus-visible .book-cover {
-  outline: 3px solid rgba(0, 122, 255, 0.3);
+  outline: 3px solid var(--color-accent-ring-cover);
   outline-offset: 5px;
 }
 
 .book-shell:focus-visible .folder-cover {
-  outline: 3px solid rgba(0, 122, 255, 0.3);
+  outline: 3px solid var(--color-accent-ring-cover);
   outline-offset: 5px;
 }
 
@@ -692,17 +692,17 @@ button.library-read-only-hint:focus-visible {
 
 .book-shell.is-dragging .book-cover {
   box-shadow:
-    0 24px 38px rgba(38, 31, 24, 0.26),
-    0 8px 14px rgba(38, 31, 24, 0.16),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.24);
+    0 24px 38px var(--color-shadow-book-drag),
+    0 8px 14px var(--color-shadow-book-small),
+    inset 0 0 0 1px var(--color-highlight-24);
   transform: scale(1.04);
 }
 
 .book-shell.is-dragging .folder-cover {
   box-shadow:
-    0 24px 38px rgba(47, 47, 51, 0.2),
-    0 8px 14px rgba(47, 47, 51, 0.12),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.56);
+    0 24px 38px var(--color-shadow-folder-drag),
+    0 8px 14px var(--color-shadow-folder-control),
+    inset 0 0 0 1px var(--color-highlight-56);
   transform: scale(1.04);
 }
 
@@ -713,19 +713,19 @@ button.library-read-only-hint:focus-visible {
 .book-shell.is-merge-pending .book-cover {
   box-shadow:
     0 18px 30px var(--book-shadow),
-    0 3px 7px rgba(38, 31, 24, 0.14),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.2),
-    0 0 0 3px rgba(0, 122, 255, 0.12);
+    0 3px 7px var(--color-shadow-book-detail),
+    inset 0 0 0 1px var(--color-highlight-20),
+    0 0 0 3px var(--color-accent-ring-pending);
   transform: scale(0.97);
 }
 
 .book-shell.is-absorb-pending .folder-cover {
   box-shadow:
-    0 18px 30px rgba(47, 47, 51, 0.16),
-    0 3px 7px rgba(47, 47, 51, 0.1),
-    inset 0 0 0 1px rgba(29, 29, 31, 0.08),
-    inset 0 1px 0 rgba(255, 255, 255, 0.62),
-    0 0 0 3px rgba(0, 122, 255, 0.12);
+    0 18px 30px var(--color-shadow-folder),
+    0 3px 7px var(--color-shadow-folder-small),
+    inset 0 0 0 1px var(--color-separator-soft),
+    inset 0 1px 0 var(--color-highlight-62),
+    0 0 0 3px var(--color-accent-ring-pending);
   transform: scale(0.992);
 }
 
@@ -742,10 +742,10 @@ button.library-read-only-hint:focus-visible {
 
 .book-shell.is-merge-target .book-cover {
   box-shadow:
-    0 18px 30px rgba(0, 122, 255, 0.2),
-    0 5px 12px rgba(38, 31, 24, 0.12),
-    0 0 0 4px rgba(0, 122, 255, 0.16),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.28);
+    0 18px 30px var(--color-accent-shadow-merge),
+    0 5px 12px var(--color-shadow-book-low),
+    0 0 0 4px var(--color-accent-ring-merge),
+    inset 0 0 0 1px var(--color-highlight-28);
   transform: scale(0.94);
 }
 
@@ -768,9 +768,9 @@ button.library-read-only-hint:focus-visible {
 .book-shell.is-save-failed .folder-cover,
 .folder-book-shell.is-save-failed .book-cover {
   box-shadow:
-    0 12px 22px rgba(190, 31, 24, 0.22),
-    0 0 0 3px rgba(255, 59, 48, 0.34),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.24);
+    0 12px 22px var(--color-shadow-danger-failure),
+    0 0 0 3px var(--color-danger-ring),
+    inset 0 0 0 1px var(--color-highlight-24);
   animation: shelf-save-failed 420ms ease-in-out 1;
 }
 
@@ -786,11 +786,11 @@ button.library-read-only-hint:focus-visible {
   height: var(--book-cover-height);
   overflow: hidden;
   border-radius: 4px 9px 9px 4px;
-  background: #e5e2dc;
+  background: var(--color-cover-placeholder);
   box-shadow:
     0 18px 30px var(--book-shadow),
-    0 3px 7px rgba(38, 31, 24, 0.14),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.2);
+    0 3px 7px var(--color-shadow-book-detail),
+    inset 0 0 0 1px var(--color-highlight-20);
   transform-origin: center bottom;
   transition:
     transform 150ms ease,
@@ -804,8 +804,8 @@ button.library-read-only-hint:focus-visible {
   width: 15%;
   background: linear-gradient(
     90deg,
-    rgba(18, 18, 20, 0.24),
-    rgba(255, 255, 255, 0.12),
+    var(--color-cover-spine),
+    var(--color-highlight-12),
     transparent
   );
   content: "";
@@ -817,8 +817,8 @@ button.library-read-only-hint:focus-visible {
   inset: 0;
   z-index: 1;
   background:
-    linear-gradient(115deg, rgba(255, 255, 255, 0.15), rgba(255, 255, 255, 0) 34%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.14), rgba(0, 0, 0, 0.05));
+    linear-gradient(115deg, var(--color-highlight-15), var(--color-highlight-clear) 34%),
+    linear-gradient(180deg, var(--color-highlight-14), var(--color-cover-shade));
   content: "";
   pointer-events: none;
 }
@@ -856,15 +856,15 @@ button.library-read-only-hint:focus-visible {
   left: 0;
   height: 5px;
   overflow: hidden;
-  background: rgba(0, 0, 0, 0.5);
-  box-shadow: 0 -1px 0 rgba(255, 255, 255, 0.28);
+  background: var(--color-cover-progress-track);
+  box-shadow: 0 -1px 0 var(--color-highlight-28);
 }
 
 .book-reading-position-track > span {
   display: block;
   height: 100%;
   background: #0a84ff;
-  box-shadow: 1px 0 5px rgba(10, 132, 255, 0.68);
+  box-shadow: 1px 0 5px var(--color-cover-progress-glow);
 }
 
 .book-reading-position-track.is-finished > span {
@@ -878,7 +878,7 @@ button.library-read-only-hint:focus-visible {
   min-height: 34px;
   margin-top: 9px;
   overflow: hidden;
-  color: rgba(29, 29, 31, 0.86);
+  color: var(--color-text-label);
   font-size: 12px;
   font-weight: 550;
   line-height: 1.35;
@@ -924,8 +924,8 @@ button.library-read-only-hint:focus-visible {
   min-height: calc(var(--shelf-label-block) - 9px);
   border-radius: 7px;
   background:
-    linear-gradient(90deg, rgba(255, 255, 255, 0), rgba(255, 255, 255, 0.48), rgba(255, 255, 255, 0)),
-    rgba(224, 217, 207, 0.76);
+    linear-gradient(90deg, var(--color-highlight-clear), var(--color-highlight-48), var(--color-highlight-clear)),
+    var(--color-skeleton-label);
   background-size: 200% 100%, 100% 100%;
   animation: shelf-loading 1.1s ease-in-out infinite;
 }
@@ -939,13 +939,13 @@ button.library-read-only-hint:focus-visible {
   overflow: hidden;
   border-radius: 8px;
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.76), rgba(255, 255, 255, 0.34)),
-    #dedfe4;
+    linear-gradient(180deg, var(--color-highlight-76), var(--color-highlight-34)),
+    var(--color-folder-placeholder);
   box-shadow:
-    0 18px 30px rgba(47, 47, 51, 0.16),
-    0 3px 7px rgba(47, 47, 51, 0.1),
-    inset 0 0 0 1px rgba(29, 29, 31, 0.08),
-    inset 0 1px 0 rgba(255, 255, 255, 0.62);
+    0 18px 30px var(--color-shadow-folder),
+    0 3px 7px var(--color-shadow-folder-small),
+    inset 0 0 0 1px var(--color-separator-soft),
+    inset 0 1px 0 var(--color-highlight-62);
   transform-origin: center bottom;
   transition:
     transform 150ms ease,
@@ -980,10 +980,10 @@ button.library-read-only-hint:focus-visible {
   aspect-ratio: 2 / 3;
   overflow: hidden;
   border-radius: 2px 4px 4px 2px;
-  background: #ebe8e2;
+  background: var(--color-cover-preview-placeholder);
   box-shadow:
-    0 2px 4px rgba(29, 29, 31, 0.2),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.3);
+    0 2px 4px var(--color-shadow-preview),
+    inset 0 0 0 1px var(--color-highlight-30);
 }
 
 .folder-preview-image {
@@ -1006,8 +1006,8 @@ button.library-read-only-hint:focus-visible {
 
 .folder-preview-image-empty {
   background:
-    linear-gradient(135deg, rgba(255, 255, 255, 0.34), rgba(255, 255, 255, 0) 44%),
-    linear-gradient(160deg, #f0b35e 0, #bf6b43 48%, #5b5f78 100%);
+    linear-gradient(135deg, var(--color-highlight-34), var(--color-highlight-clear) 44%),
+    linear-gradient(160deg, var(--color-placeholder-start) 0, var(--color-placeholder-middle) 48%, var(--color-placeholder-end) 100%);
 }
 
 .book-cover-placeholder {
@@ -1016,15 +1016,15 @@ button.library-read-only-hint:focus-visible {
   width: 100%;
   height: 100%;
   background:
-    linear-gradient(135deg, rgba(255, 255, 255, 0.34), rgba(255, 255, 255, 0) 44%),
-    linear-gradient(160deg, #f0b35e 0, #bf6b43 48%, #5b5f78 100%);
+    linear-gradient(135deg, var(--color-highlight-34), var(--color-highlight-clear) 44%),
+    linear-gradient(160deg, var(--color-placeholder-start) 0, var(--color-placeholder-middle) 48%, var(--color-placeholder-end) 100%);
 }
 
 .placeholder-spine {
   position: absolute;
   inset: 0 auto 0 0;
   width: 18%;
-  background: rgba(25, 20, 22, 0.18);
+  background: var(--color-placeholder-spine);
 }
 
 .placeholder-mark {
@@ -1034,16 +1034,16 @@ button.library-read-only-hint:focus-visible {
   width: 26px;
   height: 26px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.38);
+  background: var(--color-highlight-38);
   box-shadow:
-    0 34px 0 rgba(255, 255, 255, 0.2),
-    -24px 54px 0 rgba(255, 255, 255, 0.16);
+    0 34px 0 var(--color-highlight-20),
+    -24px 54px 0 var(--color-highlight-16);
 }
 
 .skeleton-cover {
   background:
-    linear-gradient(90deg, rgba(255, 255, 255, 0), rgba(255, 255, 255, 0.48), rgba(255, 255, 255, 0)),
-    #e4d9cb;
+    linear-gradient(90deg, var(--color-highlight-clear), var(--color-highlight-48), var(--color-highlight-clear)),
+    var(--color-skeleton-cover);
   background-size: 200% 100%, 100% 100%;
   animation: shelf-loading 1.1s ease-in-out infinite;
 }
@@ -1073,14 +1073,14 @@ button.library-read-only-hint:focus-visible {
 .empty-cover {
   width: min(42vw, 156px);
   aspect-ratio: 0.68;
-  border: 1px solid rgba(29, 29, 31, 0.1);
+  border: 1px solid var(--color-separator);
   border-radius: 6px 10px 10px 6px;
   background:
-    linear-gradient(90deg, rgba(29, 29, 31, 0.18), transparent 16%),
-    linear-gradient(145deg, #f8d98f, #cf6e4a 52%, #45506a);
+    linear-gradient(90deg, var(--color-empty-cover-spine), transparent 16%),
+    linear-gradient(145deg, var(--color-empty-cover-start), var(--color-empty-cover-middle) 52%, var(--color-empty-cover-end));
   box-shadow:
-    0 20px 40px rgba(47, 47, 51, 0.16),
-    inset 8px 0 14px rgba(255, 255, 255, 0.18);
+    0 20px 40px var(--color-shadow-folder),
+    inset 8px 0 14px var(--color-highlight-18);
 }
 
 @media (max-width: 374px) {
@@ -1107,18 +1107,18 @@ button.library-read-only-hint:focus-visible {
   .book-shell:hover .book-cover,
   .book-shell:hover .folder-cover {
     box-shadow:
-      0 22px 34px rgba(38, 31, 24, 0.22),
-      0 5px 10px rgba(38, 31, 24, 0.14),
-      inset 0 0 0 1px rgba(255, 255, 255, 0.22);
+      0 22px 34px var(--color-shadow-book-hover),
+      0 5px 10px var(--color-shadow-book-detail),
+      inset 0 0 0 1px var(--color-highlight-22);
     transform: translateY(-2px);
   }
 
   .book-shell.is-dragging:hover .book-cover,
   .book-shell.is-dragging:hover .folder-cover {
     box-shadow:
-      0 24px 38px rgba(38, 31, 24, 0.26),
-      0 8px 14px rgba(38, 31, 24, 0.16),
-      inset 0 0 0 1px rgba(255, 255, 255, 0.24);
+      0 24px 38px var(--color-shadow-book-drag),
+      0 8px 14px var(--color-shadow-book-small),
+      inset 0 0 0 1px var(--color-highlight-24);
     transform: scale(1.04);
   }
 }

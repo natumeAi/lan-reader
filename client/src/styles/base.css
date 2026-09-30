@@ -17,18 +17,175 @@
   --shelf-board-top: calc(var(--book-cover-height) - 1px);
   --shelf-board-end: calc(var(--book-cover-height) + 10px);
   --shelf-board-shadow-end: calc(var(--book-cover-height) + 34px);
-  --page-bg: #f5f5f7;
-  --surface: #ffffff;
-  --surface-soft: #fbfaf7;
-  --text-primary: #1d1d1f;
-  --text-secondary: #6e6e73;
-  --accent: #007aff;
-  --danger: #c0392b;
-  --book-shadow: rgba(38, 31, 24, 0.2);
-  --shelf-wood-background:
+  /* App colour tokens: start */
+  /* Surfaces retain each original tint and opacity. */
+  --color-bg: #f5f5f7;
+  --color-bg-home: #f2f2f4;
+  --color-surface: #ffffff;
+  --color-surface-soft: #fbfaf7;
+  --color-surface-raised: rgba(250, 250, 252, 0.96);
+  --color-surface-goal: rgba(250, 250, 252, 0.97);
+  --color-surface-glass: rgba(255, 255, 255, 0.92);
+  --color-surface-notice: rgba(255, 255, 255, 0.94);
+  --color-surface-navigation: rgba(255, 255, 255, 0.86);
+  --color-surface-folder-start: rgba(255, 255, 255, 0.98);
+  --color-surface-folder-end: rgba(247, 247, 250, 0.95);
+  --color-sheet-handle: #d8d8dc;
+  --color-sheet-close: #f1f1f3;
+  --color-shelf-sticky-surface: rgba(248, 242, 231, 0.84);
+  --color-shelf-sticky-shadow-clear: rgba(112, 82, 48, 0);
+  --color-shelf-sticky-shadow: rgba(112, 82, 48, 0.16);
+
+  /* Text variants are independent; nearby alpha values are not interchangeable. */
+  --color-text: #1d1d1f;
+  --color-text-secondary: #6e6e73;
+  --color-text-tertiary: rgba(29, 29, 31, 0.52);
+  --color-text-muted: rgba(29, 29, 31, 0.42);
+  --color-text-icon: rgba(29, 29, 31, 0.5);
+  --color-text-hint: rgba(29, 29, 31, 0.56);
+  --color-text-description: rgba(29, 29, 31, 0.58);
+  --color-text-control: rgba(29, 29, 31, 0.68);
+  --color-text-drop-zone: rgba(29, 29, 31, 0.72);
+  --color-text-subtle: rgba(29, 29, 31, 0.78);
+  --color-text-label: rgba(29, 29, 31, 0.86);
+  --color-text-input: rgba(29, 29, 31, 0.92);
+  --color-text-heading: rgba(29, 29, 31, 0.94);
+  --color-text-placeholder: rgba(110, 110, 115, 0.82);
+  --color-text-inverse: #ffffff;
+
+  --color-fill: rgba(118, 118, 128, 0.12);
+  --color-fill-strong: rgba(118, 118, 128, 0.2);
+  --color-fill-subtle: rgba(118, 118, 128, 0.1);
+  --color-fill-input: rgba(118, 118, 128, 0.13);
+  --color-fill-control: rgba(118, 118, 128, 0.14);
+  --color-fill-navigation: rgba(118, 118, 128, 0.16);
+  --color-fill-ranking: rgba(29, 29, 31, 0.07);
+  --color-separator: rgba(29, 29, 31, 0.1);
+  --color-separator-faint: rgba(29, 29, 31, 0.035);
+  --color-separator-selected: rgba(29, 29, 31, 0.06);
+  --color-separator-navigation: rgba(29, 29, 31, 0.07);
+  --color-separator-folder: rgba(29, 29, 31, 0.075);
+  --color-separator-soft: rgba(29, 29, 31, 0.08);
+  --color-separator-strong: rgba(29, 29, 31, 0.12);
+  --color-separator-chart: rgba(29, 29, 31, 0.14);
+  --color-separator-input: rgba(29, 29, 31, 0.18);
+  --color-separator-chart-base: rgba(29, 29, 31, 0.2);
+  --color-separator-solid: #ededee;
+
+  --color-accent: #007aff;
+  --color-accent-ring: rgba(0, 122, 255, 0.24);
+  --color-accent-ring-cover: rgba(0, 122, 255, 0.3);
+  --color-accent-ring-home: rgba(0, 122, 255, 0.32);
+  --color-accent-ring-strong: rgba(0, 122, 255, 0.4);
+  --color-accent-ring-pending: rgba(0, 122, 255, 0.12);
+  --color-accent-ring-merge: rgba(0, 122, 255, 0.16);
+  --color-accent-ring-input: rgba(0, 122, 255, 0.2);
+  --color-accent-shadow-merge: rgba(0, 122, 255, 0.2);
+  --color-accent-spinner: rgba(0, 122, 255, 0.68);
+  --color-danger: #c0392b;
+  --color-danger-fill: rgba(255, 59, 48, 0.96);
+  --color-danger-text: rgb(215, 0, 21);
+  --color-danger-ring: rgba(255, 59, 48, 0.34);
+  --color-success-text: rgb(31, 134, 61);
+  --color-success-fill: rgba(52, 199, 89, 0.16);
+  --color-warning-fill: rgba(255, 149, 0, 0.1);
+  --color-backdrop: rgba(20, 20, 24, 0.26);
+  --color-backdrop-sheet: rgba(20, 20, 24, 0.32);
+  --color-backdrop-folder: rgba(18, 18, 22, 0.25);
+
+  /* Shadow RGB base and exact existing alpha variants. */
+  --shadow-color: 38 31 24;
+  --color-shadow-book: rgba(38, 31, 24, 0.2);
+  --color-shadow-book-low: rgba(38, 31, 24, 0.12);
+  --color-shadow-book-detail: rgba(38, 31, 24, 0.14);
+  --color-shadow-book-small: rgba(38, 31, 24, 0.16);
+  --color-shadow-book-hover: rgba(38, 31, 24, 0.22);
+  --color-shadow-book-drag: rgba(38, 31, 24, 0.26);
+  --color-shadow-folder-small: rgba(47, 47, 51, 0.1);
+  --color-shadow-folder-control: rgba(47, 47, 51, 0.12);
+  --color-shadow-folder: rgba(47, 47, 51, 0.16);
+  --color-shadow-folder-drag: rgba(47, 47, 51, 0.2);
+  --color-shadow-card: rgba(29, 29, 31, 0.04);
+  --color-shadow-soft: rgba(29, 29, 31, 0.08);
+  --color-shadow-control: rgba(29, 29, 31, 0.1);
+  --color-shadow-navigation: rgba(29, 29, 31, 0.12);
+  --color-shadow-panel-detail: rgba(29, 29, 31, 0.14);
+  --color-shadow-notice: rgba(29, 29, 31, 0.16);
+  --color-shadow-drop-zone: rgba(29, 29, 31, 0.18);
+  --color-shadow-preview: rgba(29, 29, 31, 0.2);
+  --color-shadow-panel: rgba(29, 29, 31, 0.26);
+  --color-shadow-folder-deep: rgba(21, 21, 25, 0.3);
+  --color-shadow-sheet: rgba(0, 0, 0, 0.2);
+  --color-shadow-danger-failure: rgba(190, 31, 24, 0.22);
+  --color-shadow-danger-hover: rgba(190, 31, 24, 0.28);
+  --color-shadow-danger-armed: rgba(190, 31, 24, 0.32);
+
+  /* Alpha suffixes are percentages. Clear white stays white at zero alpha:
+     replacing it with transparent would change computed gradient colours. */
+  --color-highlight-clear: rgba(255, 255, 255, 0);
+  --color-highlight-12: rgba(255, 255, 255, 0.12);
+  --color-highlight-14: rgba(255, 255, 255, 0.14);
+  --color-highlight-15: rgba(255, 255, 255, 0.15);
+  --color-highlight-16: rgba(255, 255, 255, 0.16);
+  --color-highlight-18: rgba(255, 255, 255, 0.18);
+  --color-highlight-20: rgba(255, 255, 255, 0.2);
+  --color-highlight-22: rgba(255, 255, 255, 0.22);
+  --color-highlight-24: rgba(255, 255, 255, 0.24);
+  --color-highlight-28: rgba(255, 255, 255, 0.28);
+  --color-highlight-30: rgba(255, 255, 255, 0.3);
+  --color-highlight-34: rgba(255, 255, 255, 0.34);
+  --color-highlight-38: rgba(255, 255, 255, 0.38);
+  --color-highlight-48: rgba(255, 255, 255, 0.48);
+  --color-highlight-56: rgba(255, 255, 255, 0.56);
+  --color-highlight-60: rgba(255, 255, 255, 0.6);
+  --color-highlight-62: rgba(255, 255, 255, 0.62);
+  --color-highlight-76: rgba(255, 255, 255, 0.76);
+  --color-highlight-88: rgba(255, 255, 255, 0.88);
+
+  --color-cover-placeholder: #e5e2dc;
+  --color-folder-placeholder: #dedfe4;
+  --color-cover-preview-placeholder: #ebe8e2;
+  --color-cover-spine: rgba(18, 18, 20, 0.24);
+  --color-cover-shade: rgba(0, 0, 0, 0.05);
+  --color-cover-progress-track: rgba(0, 0, 0, 0.5);
+  --color-cover-progress-glow: rgba(10, 132, 255, 0.68);
+  --color-placeholder-start: #f0b35e;
+  --color-placeholder-middle: #bf6b43;
+  --color-placeholder-end: #5b5f78;
+  --color-placeholder-spine: rgba(25, 20, 22, 0.18);
+  --color-skeleton-label: rgba(224, 217, 207, 0.76);
+  --color-skeleton-cover: #e4d9cb;
+  --color-empty-cover-start: #f8d98f;
+  --color-empty-cover-middle: #cf6e4a;
+  --color-empty-cover-end: #45506a;
+  --color-empty-cover-spine: rgba(29, 29, 31, 0.18);
+  --color-chart-bar: var(--color-text);
+  --color-chart-track: #e8e8ea;
+  --color-chart-progress: #3a3a3c;
+  --color-goal-button: #6b6c72;
+  --color-goal-decoration: rgba(29, 29, 31, 0.36);
+  --color-ranking-first: #ac7914;
+  --color-calendar-text-shadow: #000;
+  --color-calendar-overlay-start: rgba(0, 0, 0, 0.76);
+  --color-calendar-overlay-end: rgba(0, 0, 0, 0.9);
+  --color-calendar-overlay-clear: rgba(0, 0, 0, 0);
+  --color-spinner-track: rgba(0, 0, 0, 0.1);
+  --wood-background:
     linear-gradient(90deg, rgba(112, 82, 48, 0.1), rgba(255, 255, 255, 0) 18px, rgba(255, 255, 255, 0) calc(100% - 18px), rgba(112, 82, 48, 0.08)),
     repeating-linear-gradient(96deg, rgba(120, 88, 52, 0.035) 0 1px, rgba(255, 255, 255, 0) 1px 22px),
     linear-gradient(180deg, rgba(255, 252, 246, 0.9), rgba(241, 231, 216, 0.82));
+  /* App colour tokens: end */
+
+  /* Existing public variables remain aliases for all current consumers. */
+  --page-bg: var(--color-bg);
+  --surface: var(--color-surface);
+  --surface-soft: var(--color-surface-soft);
+  --text-primary: var(--color-text);
+  --text-secondary: var(--color-text-secondary);
+  --accent: var(--color-accent);
+  --danger: var(--color-danger);
+  --book-shadow: var(--color-shadow-book);
+  --shelf-wood-background: var(--wood-background);
 
   color: var(--text-primary);
   background: var(--page-bg);
