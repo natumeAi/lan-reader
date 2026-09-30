@@ -2,15 +2,22 @@ import type { ShelfItem } from '../../types/library.js';
 import type { LibraryView } from '../../utils/libraryView.js';
 import type { DragIntent, ShelfMutationFeedback } from '../../hooks/useLibraryDrag.js';
 import type { ShelfItemActions } from './ReadOnlyShelfItem.js';
+import type { ShelfSelection } from '../../hooks/useShelfSelection.js';
+import type { UploadEntry } from '../../hooks/useUploadBooks.js';
+import type { UploadPlaceholderActions } from './UploadPlaceholderCard.js';
+import { UploadPlaceholderCard } from './UploadPlaceholderCard.js';
 import { memo } from 'react';
 import { rectSortingStrategy, SortableContext } from '@dnd-kit/sortable';
 import { LIBRARY_VIEW } from '../../utils/libraryView.js';
 import { ReadOnlyShelfItem } from './ReadOnlyShelfItem.js';
 import { SortableShelfItem } from './SortableShelfItem.js';
 
-interface LibraryGridProps extends ShelfItemActions {
+interface LibraryGridProps extends ShelfItemActions, UploadPlaceholderActions {
+  uploadEntries?: readonly UploadEntry[];
+  landingKeys?: readonly string[];
   dragIntent: DragIntent;
   editable: boolean;
+  selection?: ShelfSelection;
   /** Key of the card that just arrived from a Folder, while it settles into place. */
   landingKey: string | null;
   mutationFeedback: ShelfMutationFeedback;
@@ -21,6 +28,7 @@ interface LibraryGridProps extends ShelfItemActions {
   onClearSearch: () => void;
   onImport: () => void;
   query: string;
+  searchMode?: boolean;
   view: LibraryView;
 }
 
@@ -29,6 +37,11 @@ interface LibraryGridProps extends ShelfItemActions {
 export const LibraryGrid = memo(function LibraryGrid({
   dragIntent,
   editable,
+  selection,
+  uploadEntries = [],
+  onRetryUpload,
+  onRemoveUpload,
+  landingKeys,
   hasLoadedShelf,
   isLoading,
   isSavingOrder,
@@ -39,9 +52,15 @@ export const LibraryGrid = memo(function LibraryGrid({
   onImport,
   onOpenBook,
   onOpenFolder,
+  onRequestItemMenu,
   query,
+  searchMode = false,
   view,
 }: LibraryGridProps) {
+  const placeholders = view === LIBRARY_VIEW.ALL && !query && !searchMode && !selection?.active
+    ? uploadEntries.map(entry => <UploadPlaceholderCard key={entry.id} entry={entry}
+      onRetryUpload={onRetryUpload} onRemoveUpload={onRemoveUpload} />) : [];
+
   if (isLoading && !hasLoadedShelf) {
     return (
       <div className="shelf-grid" aria-label="书架加载中">
@@ -51,6 +70,7 @@ export const LibraryGrid = memo(function LibraryGrid({
             <div className="shelf-item-label skeleton-label" />
           </div>
         ))}
+        {placeholders}
       </div>
     );
   }
@@ -61,37 +81,47 @@ export const LibraryGrid = memo(function LibraryGrid({
   const isSaveFailed = (key: string) =>
     mutationFeedback.status === 'failed' && Boolean(feedbackKeys?.includes(key));
 
-  if (items.length) {
-    return editable ? (
-      <SortableContext items={items.map((item) => item.key)} strategy={rectSortingStrategy}>
-        <div className="shelf-grid" aria-label="可编辑书架列表">
+  if (items.length || placeholders.length) {
+    return editable && !selection?.active ? (
+      <div className="shelf-grid" aria-label="可编辑书架列表">
+        <SortableContext items={items.map((item) => item.key)} strategy={rectSortingStrategy}>
           {items.map((item, index) => (
             <SortableShelfItem
               disabled={isSavingOrder}
               dragIntent={dragIntent}
-              isLanding={landingKey === item.key}
+              isLanding={landingKeys?.includes(item.key) || landingKey === item.key}
               isPendingSave={isPendingSave(item.key)}
               isSaveFailed={isSaveFailed(item.key)}
               item={item}
               key={item.key}
               onOpenBook={onOpenBook}
               onOpenFolder={onOpenFolder}
+              onRequestItemMenu={onRequestItemMenu}
               priority={index < 8}
             />
           ))}
-        </div>
-      </SortableContext>
+        </SortableContext>
+        {placeholders}
+      </div>
     ) : (
       <div className="shelf-grid read-only-grid" aria-label="只读书架列表">
         {items.map((item, index) => (
           <ReadOnlyShelfItem
+            isLanding={!selection?.active && (landingKeys?.includes(item.key) || landingKey === item.key)}
+            isPendingSave={isPendingSave(item.key) || item.type === 'book' && isPendingSave(`folder-book:${item.id}`)}
+            isSaveFailed={isSaveFailed(item.key) || item.type === 'book' && isSaveFailed(`folder-book:${item.id}`)}
+            selection={selection?.active ? {
+              selected: selection.keys.has(item.key), disabled: isSavingOrder, onToggle: selection.toggle,
+            } : undefined}
             item={item}
             key={item.key}
             onOpenBook={onOpenBook}
             onOpenFolder={onOpenFolder}
+            onRequestItemMenu={onRequestItemMenu}
             priority={index < 8}
           />
         ))}
+        {placeholders}
       </div>
     );
   }

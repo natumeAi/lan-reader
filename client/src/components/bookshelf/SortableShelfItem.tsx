@@ -1,12 +1,15 @@
-import type { KeyboardEvent, MouseEvent } from 'react';
+import type { CSSProperties, KeyboardEvent, MouseEvent } from 'react';
 import type { ShelfItem } from '../../types/library.js';
 import type { DragIntent } from '../../hooks/useLibraryDrag.js';
 import type { ShelfItemActions } from './ReadOnlyShelfItem.js';
+import { useItemMenuTrigger } from '../../hooks/useItemMenuTrigger.js';
 import { memo } from 'react';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { ShelfItemCover } from './ShelfItemCover.js';
-import { SHELF_SORT_TRANSITION } from '../../utils/dragMotion.js';
+import { ShelfItemLabel } from './ShelfItemLabel.js';
+import { formatShelfBookMeta } from '../../utils/shelfCardMeta.js';
+import { INTENT_DWELL_MS, SHELF_SORT_TRANSITION } from '../../utils/dragMotion.js';
 import { formatBookCardAriaLabel } from '../../utils/readingProgress.js';
 
 interface SortableShelfItemProps extends ShelfItemActions {
@@ -39,7 +42,9 @@ const ShelfItemContent = memo(function ShelfItemContent({ item, name, priority }
         priority={priority}
         showReadingPosition
       />
-      <span className="shelf-item-label">{name}</span>
+      <ShelfItemLabel name={name} meta={item.type === 'folder'
+        ? `${item.folder.bookCount} 本`
+        : formatShelfBookMeta(item.book.author, item.book.readingProgress)} />
     </>
   );
 });
@@ -53,8 +58,10 @@ export function SortableShelfItem({
   item,
   onOpenBook,
   onOpenFolder,
+  onRequestItemMenu,
   priority = false,
 }: SortableShelfItemProps) {
+  const menuTrigger = useItemMenuTrigger(item.key, onRequestItemMenu, item);
   const {
     attributes,
     isDragging,
@@ -72,21 +79,18 @@ export function SortableShelfItem({
     transition: SHELF_SORT_TRANSITION,
   });
   const style = {
+    '--intent-dwell-ms': `${INTENT_DWELL_MS}ms`,
     transform: CSS.Transform.toString(transform),
     transition,
-  };
+  } as CSSProperties;
   const isIntentTarget = dragIntent?.targetKey === item.key;
-  // Sorting inserts before its target, so it reads as an opening gap rather than as the
-  // merge ring, which means "this card will be consumed".
-  const isSortTarget = dragIntent?.type === 'sort' && dragIntent.sortTargetKey === item.key;
   const className = [
     'book-shell',
     'shelf-item',
     item.type === 'folder' ? 'is-folder-item' : '',
     isDragging ? 'is-dragging' : '',
-    isIntentTarget && dragIntent?.type === 'absorb' ? 'is-absorb-target' : '',
-    isIntentTarget && dragIntent?.type === 'merge' ? 'is-merge-target' : '',
-    isSortTarget ? 'is-sort-target' : '',
+    isIntentTarget && dragIntent?.type === 'absorb' ? (dragIntent.armed ? 'is-absorb-target' : 'is-absorb-pending') : '',
+    isIntentTarget && dragIntent?.type === 'merge' ? (dragIntent.armed ? 'is-merge-target' : 'is-merge-pending') : '',
     isPendingSave ? 'is-pending-save' : '',
     isSaveFailed ? 'is-save-failed' : '',
     isLanding ? 'is-landing' : '',
@@ -98,8 +102,8 @@ export function SortableShelfItem({
       ? item.folder?.name || '文件夹'
       : item.book?.title || '未命名书籍';
   const label = item.type === 'book'
-    ? formatBookCardAriaLabel(name, item.book?.readingProgress)
-    : name;
+    ? formatBookCardAriaLabel(name, item.book.readingProgress, item.book.author)
+    : `文件夹 ${name}，${item.folder.bookCount} 本`;
   const handleClick = (event: MouseEvent<HTMLButtonElement> | KeyboardEvent<HTMLButtonElement>) => {
     if (item.type === 'folder') {
       const rect = event.currentTarget.querySelector('.folder-cover')?.getBoundingClientRect();
@@ -110,6 +114,7 @@ export function SortableShelfItem({
     }
   };
   const handleKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
+    if (menuTrigger.onKeyDown(event)) return;
     if (event.key === 'Enter') {
       event.preventDefault();
       handleClick(event);
@@ -132,6 +137,8 @@ export function SortableShelfItem({
       onClick={handleClick}
       {...attributes}
       {...listeners}
+      onPointerDown={menuTrigger.onPointerDown}
+      onContextMenu={menuTrigger.onContextMenu}
       onKeyDown={handleKeyDown}
     >
       <ShelfItemContent item={item} name={name} priority={priority} />

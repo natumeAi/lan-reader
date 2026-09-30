@@ -37,8 +37,7 @@ export type DragTarget =
   | { kind: 'delete' }
   | { kind: 'merge'; targetKey: string }
   | { kind: 'absorb'; targetKey: string }
-  /** `dwell` marks a target that may only be adopted after the hover delay matures. */
-  | { kind: 'sort'; targetKey: string | null; dwell: boolean }
+  | { kind: 'sort'; targetKey: string | null }
   /** The pointer is outside every sortable area, so no target may be adopted. */
   | { kind: 'none' };
 
@@ -56,7 +55,7 @@ function isDeleteHit(rect: Rect, deletePoint: Point, activeCenter: Point) {
   );
 }
 
-function sortTarget(input: DragTargetInput, dwell: boolean): DragTarget {
+function sortTarget(input: DragTargetInput): DragTarget {
   const targetKey = sortTargetKeyFromPoint({
     activeKey: input.activeId,
     point: input.activeCenter,
@@ -65,16 +64,16 @@ function sortTarget(input: DragTargetInput, dwell: boolean): DragTarget {
   });
 
   if (!targetKey || targetKey === input.activeId) {
-    return { kind: 'sort', targetKey: null, dwell: false };
+    return { kind: 'sort', targetKey: null };
   }
 
-  return { kind: 'sort', targetKey, dwell };
+  return { kind: 'sort', targetKey };
 }
 
 /**
  * Shelf resolution: delete zone first, then the nearest container whose rect contains the
  * active centre (merge/absorb inside its centre zone, sorting otherwise), then free shelf
- * whitespace, which sorts immediately because no card is being hovered.
+ * whitespace. Every sort target waits for the same hover delay.
  */
 export function resolveShelfDragTarget(input: DragTargetInput): DragTarget {
   const { activeCenter, activeId, activeType, deletePoint, droppableEntries, droppableRects } = input;
@@ -126,14 +125,14 @@ export function resolveShelfDragTarget(input: DragTargetInput): DragTarget {
       return { kind: 'absorb', targetKey: lockedTarget.key };
     }
 
-    return sortTarget(input, true);
+    return sortTarget(input);
   }
 
   if (input.shelfSortArea && !pointInRect(activeCenter, input.shelfSortArea)) {
     return { kind: 'none' };
   }
 
-  return sortTarget(input, false);
+  return sortTarget(input);
 }
 
 /** Folder resolution: only deleting a folder book and sorting within the open folder. */
@@ -153,5 +152,5 @@ export function resolveFolderDragTarget(input: DragTargetInput): DragTarget {
     }
   }
 
-  return sortTarget(input, true);
+  return sortTarget(input);
 }

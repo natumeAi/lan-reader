@@ -59,6 +59,9 @@ export function useShelfData({ restoreReaderBook }: ShelfDataOptions = {}) {
   const publishShelfProjection = useCallback((hydrated: HydratedLibrarySnapshot) => {
     setShelfItems(hydrated.shelfData.items);
     setFolderBooksByFolderId(hydrated.folderBooksByFolderId);
+    // Batch rollback also restores catalog membership. Releasing a newer snapshot
+    // must restore that catalog with its shelf, even if reconciliation goes offline.
+    setCatalogBooks(hydrated.catalogData.books);
   }, []);
 
   const applySnapshot = useCallback((snapshot: LibrarySnapshot) => {
@@ -75,9 +78,9 @@ export function useShelfData({ restoreReaderBook }: ShelfDataOptions = {}) {
     } else {
       // A drag or its mutation owns the visible arrangement; retain this result instead.
       deferredSnapshotRef.current = { epoch: snapshotEpochRef.current, hydrated };
+      setCatalogBooks(hydrated.catalogData.books);
     }
 
-    setCatalogBooks(hydrated.catalogData.books);
     setRecentReadingItems(hydrated.recentData.items);
     setHasLoadedShelf(true);
     setHasLoadedCatalog(true);
@@ -236,10 +239,15 @@ export function useShelfData({ restoreReaderBook }: ShelfDataOptions = {}) {
   }, [applySnapshot]);
 
   const {
+    enqueue,
+    uploadEntries,
+    retryUpload,
+    removeUpload,
+    acknowledgeUploads,
     handleFileChange,
     isUploading,
     uploadProgress,
-  } = useUploadBooks({ loadShelf, setError: setOperationError });
+  } = useUploadBooks({ loadShelf });
 
   useEffect(() => {
     void loadShelf({ allowCached: true });
@@ -287,6 +295,11 @@ export function useShelfData({ restoreReaderBook }: ShelfDataOptions = {}) {
   }, []);
 
   return {
+    enqueue,
+    uploadEntries,
+    retryUpload,
+    removeUpload,
+    acknowledgeUploads,
     beginShelfProjection,
     catalogBooks,
     catalogError,
@@ -308,6 +321,8 @@ export function useShelfData({ restoreReaderBook }: ShelfDataOptions = {}) {
     setIsSavingOrder,
     setOperationError,
     setShelfItems,
+    setCatalogBooks,
+    setFolderBooksByFolderId,
     shelfError,
     shelfItems,
     uploadProgress,

@@ -1,5 +1,6 @@
+import type { BatchDeleteRequest } from '@lan-reader/shared';
 import { request, jsonBody } from './transport.js';
-import { decodeBooks, decodeCatalog, decodeBookResponse } from './decoders.js';
+import { decodeBatchDelete, decodeBooks, decodeCatalog, decodeBookResponse } from './decoders.js';
 export const listBooks = () => request('/api/books', decodeBooks, { errorMessage: '无法加载书架' });
 export const listBookCatalog = () => request('/api/books/catalog', decodeCatalog, { errorMessage: '搜索目录加载失败' });
 export const getBook = (bookId: number) => request(`/api/books/${bookId}`, decodeBookResponse, { errorMessage: status => status === 404 ? '书籍不存在' : '无法加载书籍' });
@@ -10,3 +11,9 @@ export function uploadBook(file: File) {
 }
 export const deleteBook = (bookId: number) => request(`/api/books/${bookId}`, decodeBookResponse, { method: 'DELETE', errorMessage: status => status === 404 ? '书籍不存在' : '无法删除书籍' });
 export const updateBookOrder = (bookIds: number[]) => request('/api/books/order', decodeBooks, { method: 'PATCH', ...jsonBody({ bookIds }), errorMessage: status => status === 409 ? '书架已变化，请刷新后重试' : '无法保存书架顺序' });
+
+export const batchDeleteBooks = (bookIds: number[]) => request('/api/books/batch-delete', decodeBatchDelete, {
+  method: 'POST',
+  ...jsonBody({ bookIds } satisfies BatchDeleteRequest),
+  errorMessage: '无法批量删除书籍',
+});

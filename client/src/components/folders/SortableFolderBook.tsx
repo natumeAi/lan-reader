@@ -1,12 +1,17 @@
+import { useItemMenuTrigger } from '../../hooks/useItemMenuTrigger.js';
+import type { ItemMenuRequest } from '../../hooks/useShelfItemMenu.js';
 import type { Book, FolderBook } from '../../types/library.js';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { BookCover } from '../bookshelf/BookCover.js';
+import { BookCover, SHELF_COVER_SIZES } from '../bookshelf/BookCover.js';
 import { BookReadingPositionIndicator } from '../bookshelf/BookReadingPositionIndicator.js';
+import { ShelfItemLabel } from '../bookshelf/ShelfItemLabel.js';
+import { formatShelfBookMeta } from '../../utils/shelfCardMeta.js';
 import { SHELF_SORT_TRANSITION } from '../../utils/dragMotion.js';
 import { formatBookCardAriaLabel } from '../../utils/readingProgress.js';
 
 interface SortableFolderBookProps {
+  onRequestItemMenu?: (request: ItemMenuRequest) => void;
   book: FolderBook;
   disabled?: boolean;
   isPendingSave?: boolean;
@@ -21,8 +26,10 @@ export function SortableFolderBook({
   isPendingSave = false,
   isSaveFailed = false,
   onOpenBook,
+  onRequestItemMenu,
   priority = false,
 }: SortableFolderBookProps) {
+  const menuTrigger = useItemMenuTrigger(book.key, onRequestItemMenu);
   const {
     attributes,
     isDragging,
@@ -53,7 +60,7 @@ export function SortableFolderBook({
     .filter(Boolean)
     .join(' ');
   const label = book.title || '未命名书籍';
-  const ariaLabel = formatBookCardAriaLabel(label, book.readingProgress);
+  const ariaLabel = formatBookCardAriaLabel(label, book.readingProgress, book.author);
 
   return (
     <div
@@ -74,12 +81,25 @@ export function SortableFolderBook({
         }}
         {...attributes}
         {...listeners}
+        onPointerDown={menuTrigger.onPointerDown}
+        onContextMenu={menuTrigger.onContextMenu}
+        onKeyDown={event => {
+          if (menuTrigger.onKeyDown(event)) return;
+          // Enter keeps the button's native click (open); during a keyboard drag the sensor
+          // cancels that default when Enter drops, so it must not be opened here directly.
+          listeners?.onKeyDown?.(event);
+        }}
       >
         <span className="book-cover">
-          <BookCover book={book} disableNativeImageActions priority={priority} />
+          <BookCover
+            book={book}
+            disableNativeImageActions
+            priority={priority}
+            sizes={SHELF_COVER_SIZES}
+          />
           <BookReadingPositionIndicator progress={book.readingProgress} />
         </span>
-        <span className="shelf-item-label">{label}</span>
+        <ShelfItemLabel name={label} meta={formatShelfBookMeta(book.author, book.readingProgress)} />
       </button>
     </div>
   );

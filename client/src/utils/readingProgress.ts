@@ -175,9 +175,10 @@ export function formatReadingPosition(progress: unknown) {
   };
 }
 
-export function formatBookCardAriaLabel(label: string, progress: unknown) {
+export function formatBookCardAriaLabel(label: string, progress: unknown, author?: string | null) {
   const presentation = formatReadingPosition(progress);
+  const description = author?.trim() ? `${label}，${author.trim()}` : label;
   return presentation.accessibleDescription
-    ? `${label}，${presentation.accessibleDescription}`
-    : label;
+    ? `${description}，${presentation.accessibleDescription}`
+    : description;
 }

@@ -1,9 +1,9 @@
+import type { ItemMenuRequest } from './useShelfItemMenu.js';
 import type { Dispatch, SetStateAction } from 'react';
 import type { Active, CollisionDetection, DragCancelEvent, DragEndEvent, DragMoveEvent, DragStartEvent, Modifier, UniqueIdentifier } from '@dnd-kit/core';
-import type { Book, Folder, FolderBook, ShelfItem } from '../types/library.js';
+import type { Book, CatalogBook, Folder, FolderBook, ShelfItem } from '../types/library.js';
 import type { DragTarget } from '../utils/dragCollision.js';
-import type { Point } from '../utils/dragGeometry.js';
-import type { MutationOutcome } from './useLibraryMutations.js';
+import type { Point, Rect } from '../utils/dragGeometry.js';
 import type { SortDwell } from './useSortDwell.js';
 import type { LoadShelfOptions, ShelfProjection } from './useShelfData.js';
 
@@ -18,32 +18,20 @@ import type { LoadShelfOptions, ShelfProjection } from './useShelfData.js';
 export type DragIntent =
   | { type: 'idle' | 'delete'; targetKey: null; sortTargetKey: null }
   | { type: 'sort'; targetKey: null; sortTargetKey: string | null }
-  | { type: 'merge' | 'absorb'; targetKey: string; sortTargetKey: null };
-/** Which bookshelf operation a card is currently carrying persistence feedback for. */
-export type ShelfMutationIntent = 'sort' | 'merge' | 'absorb' | 'move-out';
-/**
- * Honest persistence feedback for the cards taking part in the newest drag mutation.
- *
- * A card stays `pending` until the server confirms; nothing shows a settled result early.
- * `failed` is transient and the hook clears it itself.
- */
-export type ShelfMutationFeedback =
-  | { status: 'idle' }
-  | { status: 'pending' | 'failed'; intent: ShelfMutationIntent; keys: readonly string[] };
+  | { type: 'merge' | 'absorb'; targetKey: string; sortTargetKey: null; armed: boolean };
+export type { ShelfMutationIntent, ShelfMutationFeedback } from './useShelfOperations.js';
 export type DragPreviewItem = ShelfItem | { type: 'folder-book'; book: FolderBook };
 type DragData =
   | { type: 'book'; item: Extract<ShelfItem, { type: 'book' }> }
   | { type: 'folder'; item: Extract<ShelfItem, { type: 'folder' }> }
   | { type: 'folder-book'; book: FolderBook };
-interface FolderBookShelfDrag {
-  book: FolderBook;
-  folder: Folder;
-  previousFolderBooks: FolderBook[];
-  previousShelfItems: ShelfItem[];
-}
 interface LibraryDragOptions {
+  catalogBooks?: CatalogBook[];
+  setCatalogBooks?: Dispatch<SetStateAction<CatalogBook[]>>;
+  setFolderBooksByFolderId?: Dispatch<SetStateAction<Map<number, FolderBook[]>>>;
   /** Takes ownership of the visible shelf while a drag and its mutation are in flight. */
   beginShelfProjection?: () => ShelfProjection;
+  folderBooksByFolderId?: Map<number, FolderBook[]>;
   folderBooks: FolderBook[];
   folderCloseVersion: number;
   getFolderSession?: () => number;
@@ -51,7 +39,10 @@ interface LibraryDragOptions {
   isSavingFolderOrder: boolean;
   isSavingOrder: boolean;
   loadShelf: (options?: LoadShelfOptions) => unknown;
+  onRequestItemMenu?: (request: ItemMenuRequest) => void;
   onDropOnDelete?: (book: Book) => void;
+  openFolderForDrag?: (folder: Folder, books: FolderBook[], originRect: DOMRect | null) => boolean;
+  closeFolderForDrag?: () => void;
   openFolder: Folder | null;
   setError: (message: string) => void;
   setFolderBooks: Dispatch<SetStateAction<FolderBook[]>>;
@@ -65,8 +56,9 @@ interface LibraryDragOptions {
   shelfItems: ShelfItem[];
 }
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
+  KeyboardCode,
   KeyboardSensor,
   MouseSensor,
   TouchSensor,
@@ -83,31 +75,24 @@ import {
   activeCollision,
   collisionForKey,
   pointFromInputEvent,
-  pointerCenterFromDragEvent,
-  pointInRect,
 } from '../utils/dragGeometry.js';
-import { LANDING_SETTLE_MS, SAVE_FAILURE_FEEDBACK_MS } from '../utils/dragMotion.js';
-import {
-  normalizeShelfBookFromFolderBook,
-  normalizeShelfItem,
-  toShelfOrderItem,
-} from '../utils/libraryItems.js';
+import { FOLDER_EXIT_DWELL_MS, INTENT_DWELL_MS, SPRING_OPEN_DWELL_MS, SORT_DWELL_MS, TOUCH_ACTIVATION_DELAY_MS, STILL_RELEASE_TOLERANCE_PX } from '../utils/dragMotion.js';
+import { createDragAnnouncements, DRAG_SCREEN_READER_INSTRUCTIONS, dragIntentAnnouncement } from '../utils/dragAnnouncements.js';
 import { useDragSession } from './useDragSession.js';
-import { useLibraryMutations } from './useLibraryMutations.js';
+import { useFolderHandoff } from './useFolderHandoff.js';
+import { useShelfOperations } from './useShelfOperations.js';
 import { useSortDwell } from './useSortDwell.js';
 
-const sortIntentDelayMs = 450;
 const idleIntent: DragIntent = { type: 'idle', targetKey: null, sortTargetKey: null };
-const idleMutationFeedback: ShelfMutationFeedback = { status: 'idle' };
 
 /** The shelf shows one intent per resolved target; the Folder panel shows none. */
-function shelfIntentForTarget(target: DragTarget, adoptedSortKey: string | null): DragIntent {
+function shelfIntentForTarget(target: DragTarget, adoptedSortKey: string | null, armed: boolean): DragIntent {
   if (target.kind === 'delete') {
     return { type: 'delete', targetKey: null, sortTargetKey: null };
   }
 
   if (target.kind === 'merge' || target.kind === 'absorb') {
-    return { type: target.kind, targetKey: target.targetKey, sortTargetKey: null };
+    return { type: target.kind, targetKey: target.targetKey, sortTargetKey: null, armed };
   }
 
   return { type: 'sort', targetKey: null, sortTargetKey: adoptedSortKey };
@@ -117,6 +102,8 @@ interface ResolvedCollisions {
   collisions: ReturnType<CollisionDetection>;
   /** The sort target actually adopted this evaluation, or null while its dwell is pending. */
   sortTargetKey: string | null;
+  /** Merge/absorb only: whether the centre-zone dwell has matured for this target. */
+  armed?: boolean;
 }
 
 /** Maps a resolved target onto dnd-kit collisions, letting the dwell own sort adoption. */
@@ -124,15 +111,27 @@ function collisionsForTarget<T extends { id: UniqueIdentifier }>({
   activeId,
   droppableContainers,
   dwell,
+  intentDwell,
   generation,
   target,
 }: {
   activeId: UniqueIdentifier;
   droppableContainers: T[];
   dwell: SortDwell;
+  intentDwell?: SortDwell;
   generation: number;
   target: DragTarget;
 }): ResolvedCollisions {
+  // The two dwells are mutually exclusive: a centre zone cancels any pending sort, and every
+  // other target cancels a pending merge/absorb. Neither pending nor armed intent displaces a
+  // card, so an unarmed release resolves through `over` (the active item) and stays in its gap.
+  if (target.kind === 'merge' || target.kind === 'absorb') {
+    dwell.evaluate(null);
+    const armed = intentDwell?.evaluate({ generation, targetKey: `${target.kind}:${target.targetKey}` }) ?? false;
+    return { collisions: activeCollision(activeId, droppableContainers), sortTargetKey: null, armed };
+  }
+
+  intentDwell?.evaluate(null);
   if (target.kind === 'delete') {
     dwell.evaluate(null);
     return {
@@ -146,15 +145,6 @@ function collisionsForTarget<T extends { id: UniqueIdentifier }>({
     return { collisions: activeCollision(activeId, droppableContainers), sortTargetKey: null };
   }
 
-  if (!target.dwell) {
-    // Free shelf whitespace has no hovered card, so there is nothing to wait for.
-    dwell.evaluate(null);
-    return {
-      collisions: collisionForKey(target.targetKey, droppableContainers),
-      sortTargetKey: target.targetKey,
-    };
-  }
-
   if (!dwell.evaluate({ generation, targetKey: target.targetKey })) {
     return { collisions: activeCollision(activeId, droppableContainers), sortTargetKey: null };
   }
@@ -165,22 +155,80 @@ function collisionsForTarget<T extends { id: UniqueIdentifier }>({
   };
 }
 
+/** The element each draggable registers with dnd-kit: a shelf card or a Folder-panel card. */
+const draggableItemSelector = '.book-shell, .folder-book-shell';
+
+type DragStartRect = Pick<Rect, 'left' | 'top' | 'width' | 'height'>;
+
 /**
- * Pointer offset from the dragged item's centre at pickup. Keyboard dragging and fixtures
- * whose activator event carries no coordinates fall back to no offset.
+ * Box of the picked-up item at drag start, measured once for the grab offset and the size of
+ * the fixed preview.
+ *
+ * dnd-kit calls `onDragStart` before it has measured the active node: it fills
+ * `active.rect.current.initial` in a layout effect after the drag-start render, so in a browser
+ * that field is still null here. A populated rect is used as is; otherwise the item is measured
+ * from the activator event's target, which is the pressed element for the pointer sensors and
+ * the focused card button for the keyboard sensor.
  */
-function grabOffsetFromDragStart(event: DragStartEvent): Point {
-  const pointerPoint = pointFromInputEvent(event.activatorEvent);
+function measureDragStartRect(event: DragStartEvent): DragStartRect | null {
   const initialRect = event.active.rect.current.initial;
 
-  if (!pointerPoint || !initialRect) {
+  if (initialRect) {
+    return initialRect;
+  }
+
+  const target = event.activatorEvent?.target;
+  const item = typeof Element !== 'undefined' && target instanceof Element
+    ? target.closest(draggableItemSelector)
+    : null;
+
+  if (!item) {
+    return null;
+  }
+
+  const rect = item.getBoundingClientRect();
+
+  return rect.width > 0 && rect.height > 0 ? rect : null;
+}
+
+/**
+ * Pointer offset from the dragged item's centre at pickup. Keyboard dragging, an activator
+ * event without coordinates, or an item that could not be measured fall back to no offset.
+ */
+function grabOffsetFromDragStart(event: DragStartEvent, startRect: DragStartRect | null): Point {
+  const pointerPoint = pointFromInputEvent(event.activatorEvent);
+
+  if (!pointerPoint || !startRect) {
     return { x: 0, y: 0 };
   }
 
   return {
-    x: pointerPoint.x - (initialRect.left + initialRect.width / 2),
-    y: pointerPoint.y - (initialRect.top + initialRect.height / 2),
+    x: pointerPoint.x - (startRect.left + startRect.width / 2),
+    y: pointerPoint.y - (startRect.top + startRect.height / 2),
   };
+}
+
+function isTouchActivator(event: Event | null | undefined) {
+  if (!event) return false;
+  return (typeof window.TouchEvent !== 'undefined' && event instanceof window.TouchEvent)
+    || ('pointerType' in event && event.pointerType === 'touch');
+}
+
+/**
+ * A touch pickup that never travelled `STILL_RELEASE_TOLERANCE_PX` and ends without an adopted
+ * target. A Folder-panel sort target is adopted through `over` while its visible intent stays
+ * idle, and a folder-to-shelf handoff has already changed the shelf, so both keep the drag path.
+ */
+function isStillTouchRelease(event: DragEndEvent, travel: number, intent: DragIntent, isShelfHandoff: boolean) {
+  if (!isTouchActivator(event.activatorEvent) || travel >= STILL_RELEASE_TOLERANCE_PX || isShelfHandoff) {
+    return false;
+  }
+
+  if (intent.type !== 'idle' && !(intent.type === 'sort' && !intent.sortTargetKey)) {
+    return false;
+  }
+
+  return !(event.active.data.current?.type === 'folder-book' && event.over && event.over.id !== event.active.id);
 }
 
 function bookFromDragData(data: DragData | null) {
@@ -197,6 +245,10 @@ function bookFromDragData(data: DragData | null) {
 
 export function useLibraryDrag({
   beginShelfProjection,
+  catalogBooks,
+  setCatalogBooks,
+  setFolderBooksByFolderId,
+  folderBooksByFolderId,
   folderBooks,
   folderCloseVersion,
   getFolderSession,
@@ -205,6 +257,9 @@ export function useLibraryDrag({
   isSavingOrder,
   loadShelf,
   onDropOnDelete,
+  openFolderForDrag,
+  closeFolderForDrag,
+  onRequestItemMenu,
   openFolder,
   setError,
   setFolderBooks,
@@ -219,23 +274,40 @@ export function useLibraryDrag({
 }: LibraryDragOptions) {
   const dragIntentFrameRef = useRef<number | null>(null);
   const dragIntentRef = useRef<DragIntent>(idleIntent);
-  const feedbackTokenRef = useRef(0);
-  const failureTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const landingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const folderBookShelfDragRef = useRef<FolderBookShelfDrag | null>(null);
+  /** Largest pointer displacement of the current drag, so leaving and returning is not "still". */
+  const dragTravelRef = useRef(0);
   const ignoreFolderClickUntilRef = useRef(0);
-  const shelfProjectionRef = useRef<ShelfProjection | null>(null);
   const dragSession = useDragSession();
+  const [nearDeleteZone, setNearDeleteZone] = useState(false);
+  const folderSession = getFolderSession?.() ?? folderCloseVersion;
+
+  useLayoutEffect(() => {
+    dragSession.onNearDeleteZoneChange(setNearDeleteZone);
+    return () => dragSession.onNearDeleteZoneChange(null);
+  }, [dragSession]);
   const [activeDragPreview, setActiveDragPreview] = useState<DragPreviewItem | null>(null);
-  /** Only the start and end of a folder-to-shelf handoff re-render; coordinates never do. */
-  const [isFixedDragPreviewActive, setIsFixedDragPreviewActive] = useState(false);
+  /**
+   * Size of the picked-up card, for the fixed preview that replaces DragOverlay when a Folder
+   * book leaves its panel. The box is measured once at drag start; like the
+   * preview item it changes only when a drag begins or ends, never while the pointer moves.
+   */
+  const [activeDragSize, setActiveDragSize] = useState<Pick<Rect, 'width' | 'height'> | null>(null);
   const [dragIntent, setDragIntent] = useState<DragIntent>(idleIntent);
-  const [mutationFeedback, setMutationFeedback] = useState<ShelfMutationFeedback>(idleMutationFeedback);
-  /** Key of a card that has just arrived from a Folder and is settling into the shelf. */
-  const [landingKey, setLandingKey] = useState<string | null>(null);
-  const shelfSortDwell = useSortDwell(sortIntentDelayMs);
-  const folderSortDwell = useSortDwell(sortIntentDelayMs);
-  const mutations = useLibraryMutations({
+  const shelfSortDwell = useSortDwell(SORT_DWELL_MS);
+  const shelfIntentDwell = useSortDwell(INTENT_DWELL_MS);
+  const folderSortDwell = useSortDwell(SORT_DWELL_MS);
+  const folderExitDwell = useSortDwell(FOLDER_EXIT_DWELL_MS);
+  const springDwell = useSortDwell(SPRING_OPEN_DWELL_MS);
+  const sensorPointerRef = useRef<Point | null>(null);
+  const operations = useShelfOperations({
+    catalogBooks,
+    setCatalogBooks,
+    setFolderBooksByFolderId,
+    folderBooksByFolderId,
+    shelfItems,
+    folderBooks,
+    openFolder,
+    beginShelfProjection,
     getFolderSession,
     isFolderSessionCurrent,
     loadShelf,
@@ -249,6 +321,15 @@ export function useLibraryDrag({
     setOpenFolder,
     setShelfItems,
   });
+  const {
+    mutations,
+    mutationFeedback,
+    landingKey,
+    beginMutationFeedback,
+    acquireShelfProjection,
+    takeShelfProjection,
+    releaseShelfProjection,
+  } = operations;
   const sensors = useSensors(
     useSensor(MouseSensor, {
       activationConstraint: {
@@ -257,124 +338,34 @@ export function useLibraryDrag({
     }),
     useSensor(TouchSensor, {
       activationConstraint: {
-        delay: 500,
+        delay: TOUCH_ACTIVATION_DELAY_MS,
         tolerance: 8,
       },
     }),
     useSensor(KeyboardSensor, {
       coordinateGetter: sortableKeyboardCoordinates,
+      // Space picks up; Enter stays the button's own action (open), as the spoken
+      // instructions say. Shelf cards already intercept Enter; this keeps Folder-panel
+      // cards from starting a drag on Enter instead of opening the book.
+      keyboardCodes: {
+        start: [KeyboardCode.Space],
+        cancel: [KeyboardCode.Esc],
+        end: [KeyboardCode.Space, KeyboardCode.Enter, KeyboardCode.Tab],
+      },
     }),
   );
-
-  const readDragData = useCallback((active: Active): DragData | null => {
-    const key = String(active.id);
-    const type: unknown = active.data.current?.type;
-    if (type === 'folder-book') {
-      const book = folderBookShelfDragRef.current?.book.key === key
-        ? folderBookShelfDragRef.current.book
-        : folderBooks.find((candidate) => candidate.key === key);
-      return book ? { type, book } : null;
-    }
-    const item = shelfItems.find((candidate) => candidate.key === key);
-    if (type === 'book' && item?.type === 'book') return { type, item };
-    if (type === 'folder' && item?.type === 'folder') return { type, item };
-    return null;
-  }, [folderBooks, shelfItems]);
 
   const clearDragIntent = useCallback(() => {
     dragIntentRef.current = idleIntent;
     shelfSortDwell.reset();
+    shelfIntentDwell.reset();
+    springDwell.reset();
     setDragIntent(dragIntentRef.current);
-  }, [shelfSortDwell]);
+  }, [shelfSortDwell, shelfIntentDwell, springDwell]);
 
   const clearFolderDragIntent = useCallback(() => {
     folderSortDwell.reset();
   }, [folderSortDwell]);
-
-  const resetSortDwell = useCallback(() => {
-    shelfSortDwell.reset();
-    folderSortDwell.reset();
-  }, [folderSortDwell, shelfSortDwell]);
-
-  const clearFailureTimer = useCallback(() => {
-    if (failureTimerRef.current !== null) {
-      clearTimeout(failureTimerRef.current);
-      failureTimerRef.current = null;
-    }
-  }, []);
-
-  /**
-   * Marks the cards of a new mutation as pending and takes ownership of their feedback.
-   * The returned reporter only publishes while it is still the newest mutation, so a stale
-   * completion can neither clear a newer pending state nor surface an obsolete failure.
-   */
-  const beginMutationFeedback = useCallback(
-    (intent: ShelfMutationIntent, keys: readonly string[]) => {
-      clearFailureTimer();
-      feedbackTokenRef.current += 1;
-      const token = feedbackTokenRef.current;
-
-      setMutationFeedback({ status: 'pending', intent, keys });
-
-      return (outcome: MutationOutcome) => {
-        if (feedbackTokenRef.current !== token) {
-          return;
-        }
-
-        if (outcome !== 'failed') {
-          setMutationFeedback(idleMutationFeedback);
-          return;
-        }
-
-        setMutationFeedback({ status: 'failed', intent, keys });
-        failureTimerRef.current = setTimeout(() => {
-          failureTimerRef.current = null;
-
-          if (feedbackTokenRef.current !== token) {
-            return;
-          }
-
-          setMutationFeedback(idleMutationFeedback);
-        }, SAVE_FAILURE_FEEDBACK_MS);
-      };
-    },
-    [clearFailureTimer],
-  );
-
-  /** A card that replaced the temporary Folder item settles in place instead of appearing abruptly. */
-  const markLanding = useCallback((key: string) => {
-    if (landingTimerRef.current !== null) {
-      clearTimeout(landingTimerRef.current);
-    }
-
-    setLandingKey(key);
-    landingTimerRef.current = setTimeout(() => {
-      landingTimerRef.current = null;
-      setLandingKey(null);
-    }, LANDING_SETTLE_MS);
-  }, []);
-
-  const releaseShelfProjection = useCallback(() => {
-    shelfProjectionRef.current?.release();
-    shelfProjectionRef.current = null;
-  }, []);
-
-  const acquireShelfProjection = useCallback(() => {
-    releaseShelfProjection();
-    shelfProjectionRef.current = beginShelfProjection?.() ?? null;
-  }, [beginShelfProjection, releaseShelfProjection]);
-
-  /** Hands the projection to the drag-end path that must decide when to publish or release it. */
-  const takeShelfProjection = useCallback(() => {
-    const projection = shelfProjectionRef.current;
-    shelfProjectionRef.current = null;
-    return projection;
-  }, []);
-
-  const deactivateFixedDragPreview = useCallback(() => {
-    dragSession.setPreviewActive(false);
-    setIsFixedDragPreviewActive(false);
-  }, [dragSession]);
 
   const publishDragIntent = useCallback((intent: DragIntent | null) => {
     const nextIntent: DragIntent = intent || idleIntent;
@@ -383,7 +374,8 @@ export function useLibraryDrag({
     if (
       currentIntent.type === nextIntent.type &&
       currentIntent.targetKey === nextIntent.targetKey &&
-      currentIntent.sortTargetKey === nextIntent.sortTargetKey
+      currentIntent.sortTargetKey === nextIntent.sortTargetKey &&
+      ('armed' in currentIntent ? currentIntent.armed : false) === ('armed' in nextIntent ? nextIntent.armed : false)
     ) {
       return;
     }
@@ -399,6 +391,101 @@ export function useLibraryDrag({
       setDragIntent(dragIntentRef.current);
     });
   }, []);
+
+  const {
+    clearFolderExitHandoff,
+    getFolderExitPending,
+    hasFolderExitHandoff,
+    deactivateFixedDragPreview,
+    evaluateSpringTarget,
+    shelfBookFolderDragRef,
+    handleShelfBookFolderDragEnd,
+    moveShelfBookFolderPreview,
+    restoreShelfBookFolderDrag,
+    folderBookShelfDragRef,
+    handleFolderBookDragMove,
+    handleFolderBookShelfDragEnd,
+    isFixedDragPreviewActive,
+    isFolderExitPending,
+    resetSortDwell,
+    restoreFolderBookShelfDrag,
+  } = useFolderHandoff({
+    activeDragPreview,
+    folderBooksByFolderId,
+    openFolderForDrag,
+    closeFolderForDrag,
+    springDwell,
+    clearDragIntent,
+    clearFolderDragIntent,
+    dragSession,
+    folderBooks,
+    folderCloseVersion,
+    folderExitDwell,
+    folderSession,
+    folderSortDwell,
+    openFolder,
+    operations,
+    publishDragIntent,
+    setActiveDragPreview,
+    setError,
+    setFolderBooks,
+    setFolderError,
+    setIsFolderLoading,
+    setIsRenamingFolder,
+    setIsSavingOrder,
+    setOpenFolder,
+    setShelfItems,
+    shelfIntentDwell,
+    shelfItems,
+    shelfSortDwell,
+  });
+
+  useEffect(() => {
+    if (hasFolderExitHandoff && (dragIntent.type === 'merge' || dragIntent.type === 'absorb')) {
+      clearFolderExitHandoff();
+    }
+  }, [clearFolderExitHandoff, dragIntent.type, hasFolderExitHandoff]);
+
+  const announcementItemsRef = useRef({ shelfItems, folderBooks });
+  announcementItemsRef.current = { shelfItems, folderBooks };
+  /** Spoken names use the same untitled fallbacks as the visible cards. */
+  const lookupDragName = useCallback((key: string): string | null => {
+    const latest = announcementItemsRef.current;
+    const item = latest.shelfItems.find((candidate) => candidate.key === key);
+    if (item?.type === 'book') return `《${item.book.title || '未命名书籍'}》`;
+    if (item?.type === 'folder') return `「${item.folder.name || '文件夹'}」`;
+    const book = latest.folderBooks.find((candidate) => candidate.key === key)
+      ?? (folderBookShelfDragRef.current?.book.key === key ? folderBookShelfDragRef.current.book : null);
+    return book ? `《${book.title || '未命名书籍'}》` : null;
+  }, []);
+  // dnd-kit can announce over before the pending state render; read the synchronous exit ref.
+  const readAnnouncementContext = useCallback(() => ({
+    isFolderExitPending: getFolderExitPending(),
+    hasFolderExitHandoff: folderBookShelfDragRef.current !== null,
+  }), [folderBookShelfDragRef, getFolderExitPending]);
+  const accessibility = useMemo(() => ({
+    announcements: createDragAnnouncements(lookupDragName, readAnnouncementContext),
+    screenReaderInstructions: DRAG_SCREEN_READER_INSTRUCTIONS,
+  }), [lookupDragName, readAnnouncementContext]);
+  const readDragData = useCallback((active: Active): DragData | null => {
+    const key = String(active.id);
+    const spring = shelfBookFolderDragRef.current;
+    if (spring?.item.key === key) {
+      const book = folderBooks.find(candidate => candidate.key === key);
+      return book ? { type: 'folder-book', book } : null;
+    }
+    const type: unknown = active.data.current?.type;
+    if (type === 'folder-book') {
+      const book = folderBookShelfDragRef.current?.book.key === key
+        ? folderBookShelfDragRef.current.book
+        : folderBooks.find((candidate) => candidate.key === key);
+      return book ? { type, book } : null;
+    }
+    const item = shelfItems.find((candidate) => candidate.key === key);
+    if (type === 'book' && item?.type === 'book') return { type, item };
+    if (type === 'folder' && item?.type === 'folder') return { type, item };
+    return null;
+  }, [folderBooks, shelfItems]);
 
   const shelfCollisionDetection = useCallback<CollisionDetection>(
     (args) => {
@@ -422,17 +509,19 @@ export function useLibraryDrag({
         activeId: active.id,
         droppableContainers,
         dwell: shelfSortDwell,
+        intentDwell: shelfIntentDwell,
         generation: dragSession.generation(),
         target,
       });
 
       // Published after resolution so the sort affordance only appears on a target the
       // dwell has actually adopted, never on one that is still maturing.
-      publishDragIntent(shelfIntentForTarget(target, resolved.sortTargetKey));
+      publishDragIntent(shelfIntentForTarget(target, resolved.sortTargetKey, resolved.armed ?? false));
+      evaluateSpringTarget(String(active.id), target, resolved.armed ?? false, activeCenter);
 
       return resolved.collisions;
     },
-    [dragSession, publishDragIntent, shelfItems, shelfSortDwell],
+    [dragSession, evaluateSpringTarget, publishDragIntent, shelfItems, shelfSortDwell, shelfIntentDwell],
   );
 
   const folderCollisionDetection = useCallback<CollisionDetection>(
@@ -442,11 +531,15 @@ export function useLibraryDrag({
         x: collisionRect.left + collisionRect.width / 2,
         y: collisionRect.top + collisionRect.height / 2,
       };
+      moveShelfBookFolderPreview(args.pointerCoordinates, activeCenter);
+      // Spring reparenting can leave dnd-kit's active rect at the old geometry.
+      // The fixed preview already owns the pointer's grab-offset-aware centre.
+      const folderCenter = shelfBookFolderDragRef.current?.center ?? activeCenter;
       const target = resolveFolderDragTarget({
-        activeCenter,
+        activeCenter: folderCenter,
         activeId: String(active.id),
-        activeType: active.data.current?.type,
-        deletePoint: dragSession.pointerPoint() || activeCenter,
+        activeType: shelfBookFolderDragRef.current ? 'folder-book' : active.data.current?.type,
+        deletePoint: (shelfBookFolderDragRef.current ? args.pointerCoordinates : dragSession.pointerPoint()) || activeCenter,
         droppableEntries: droppableContainers,
         droppableRects,
         items: folderBooks,
@@ -470,16 +563,18 @@ export function useLibraryDrag({
         target,
       }).collisions;
     },
-    [dragSession, folderBooks, folderSortDwell, publishDragIntent],
+    [dragSession, folderBooks, folderSortDwell, moveShelfBookFolderPreview, publishDragIntent],
   );
 
   const activeDragModifier = useCallback<Modifier>((args) => args.transform, []);
 
   const appCollisionDetection = useCallback<CollisionDetection>(
     (args) => {
+      // Ref only during collision rendering; handleDragMove publishes proximity afterwards.
+      sensorPointerRef.current = args.pointerCoordinates;
       const activeType = args.active.data.current?.type;
 
-      if (activeType === 'folder-book' && !folderBookShelfDragRef.current) {
+      if (shelfBookFolderDragRef.current || (activeType === 'folder-book' && !folderBookShelfDragRef.current)) {
         return folderCollisionDetection(args);
       }
 
@@ -488,125 +583,15 @@ export function useLibraryDrag({
     [folderCollisionDetection, shelfCollisionDetection],
   );
 
-  const clearFolderBookShelfDrag = useCallback(() => {
-    folderBookShelfDragRef.current = null;
-  }, []);
-
-  const restoreFolderBookShelfDrag = useCallback(() => {
-    const dragState = folderBookShelfDragRef.current;
-
-    if (!dragState) {
-      return;
-    }
-
-    clearFolderBookShelfDrag();
-    setShelfItems(dragState.previousShelfItems);
-    setOpenFolder(dragState.folder);
-    setFolderBooks(dragState.previousFolderBooks);
-    setFolderError('');
-    setIsFolderLoading(false);
-    setIsRenamingFolder(false);
-    clearFolderDragIntent();
-    clearDragIntent();
-    deactivateFixedDragPreview();
-  }, [
-    clearDragIntent,
-    clearFolderBookShelfDrag,
-    clearFolderDragIntent,
-    deactivateFixedDragPreview,
-    setFolderBooks,
-    setFolderError,
-    setIsFolderLoading,
-    setIsRenamingFolder,
-    setOpenFolder,
-    setShelfItems,
-  ]);
-
-  const beginFolderBookShelfDrag = useCallback(
-    (book: FolderBook) => {
-      if (!openFolder || !book || folderBookShelfDragRef.current) {
-        return;
-      }
-
-      const previousShelfItems = shelfItems;
-      const previousFolderBooks = folderBooks;
-      const remainingFolderBooks = folderBooks.filter((folderBook) => folderBook.id !== book.id);
-      const folderIndex = shelfItems.findIndex(
-        (item) => item.type === 'folder' && item.id === openFolder.id,
-      );
-      const tempShelfBook = normalizeShelfBookFromFolderBook(book);
-      const baseShelfItems =
-        remainingFolderBooks.length === 0
-          ? shelfItems.filter((item) => item.type !== 'folder' || item.id !== openFolder.id)
-          : shelfItems.map((item) => {
-              if (item.type !== 'folder' || item.id !== openFolder.id) {
-                return item;
-              }
-
-              return normalizeShelfItem({
-                ...item,
-                folder: {
-                  ...item.folder,
-                  bookCount: Math.max(0, (item.folder?.bookCount ?? previousFolderBooks.length) - 1),
-                  previewBooks: (item.folder?.previewBooks || []).filter(
-                    (previewBook) => previewBook.id !== book.id,
-                  ),
-                },
-              });
-            });
-      const insertIndex =
-        folderIndex < 0
-          ? baseShelfItems.length
-          : remainingFolderBooks.length === 0
-            ? folderIndex
-            : folderIndex + 1;
-      const nextShelfItems = [
-        ...baseShelfItems.slice(0, insertIndex),
-        tempShelfBook,
-        ...baseShelfItems.slice(insertIndex),
-      ];
-
-      folderBookShelfDragRef.current = {
-        book,
-        folder: openFolder,
-        previousFolderBooks,
-        previousShelfItems,
-      };
-      setActiveDragPreview({
-        type: 'folder-book',
-        book,
-      });
-      setShelfItems(nextShelfItems);
-      setOpenFolder(null);
-      setFolderBooks([]);
-      setFolderError('');
-      setIsFolderLoading(false);
-      setIsRenamingFolder(false);
-      // The active collision detector changes here, so no dwell candidate survives the handoff.
-      resetSortDwell();
-      publishDragIntent({ type: 'sort', targetKey: null, sortTargetKey: null });
-    },
-    [
-      folderBooks,
-      openFolder,
-      publishDragIntent,
-      resetSortDwell,
-      setFolderBooks,
-      setFolderError,
-      setIsFolderLoading,
-      setIsRenamingFolder,
-      setOpenFolder,
-      setShelfItems,
-      shelfItems,
-    ],
-  );
-
   const handleDropOnDelete = useCallback(
     (event: DragEndEvent) => {
       const activeData = readDragData(event.active);
       let book: Book | null;
 
-      if (folderBookShelfDragRef.current) {
+      if (shelfBookFolderDragRef.current) {
+        book = shelfBookFolderDragRef.current.item.book;
+        restoreShelfBookFolderDrag(false);
+      } else if (folderBookShelfDragRef.current) {
         book = folderBookShelfDragRef.current.book;
         restoreFolderBookShelfDrag();
       } else {
@@ -626,11 +611,13 @@ export function useLibraryDrag({
       onDropOnDelete?.(book);
       return true;
     },
-    [clearDragIntent, clearFolderDragIntent, onDropOnDelete, readDragData, restoreFolderBookShelfDrag],
+    [clearDragIntent, clearFolderDragIntent, onDropOnDelete, readDragData, restoreFolderBookShelfDrag, restoreShelfBookFolderDrag],
   );
 
   const handleDragStart = useCallback(
     (event: DragStartEvent) => {
+      sensorPointerRef.current = null;
+      clearFolderExitHandoff();
       const activeData = readDragData(event.active);
 
       resetSortDwell();
@@ -638,10 +625,20 @@ export function useLibraryDrag({
       // can never arm an affordance at the start of this one.
       clearDragIntent();
       deactivateFixedDragPreview();
-      // The preview must sit where DragOverlay had the item, not centred under the pointer,
-      // so the folder-to-shelf handoff does not make the cover jump.
-      dragSession.start(grabOffsetFromDragStart(event));
+      // One measurement of the picked-up item: the preview must sit where DragOverlay had the
+      // item, not centred under the pointer, so the folder-to-shelf handoff does not make the
+      // cover jump; and it must use the same box as the fluid card it came from.
+      const startRect = measureDragStartRect(event);
+      dragTravelRef.current = 0;
+      dragSession.start(grabOffsetFromDragStart(event, startRect), {
+        canDelete: activeData?.type === 'book' || activeData?.type === 'folder-book',
+        pointerPoint: pointFromInputEvent(event.activatorEvent),
+      });
+      if (isTouchActivator(event.activatorEvent) && typeof navigator.vibrate === 'function') {
+        navigator.vibrate(10);
+      }
       acquireShelfProjection();
+      setActiveDragSize(startRect ? { width: startRect.width, height: startRect.height } : null);
 
       if (activeData?.type === 'folder-book') {
         setActiveDragPreview({
@@ -655,6 +652,7 @@ export function useLibraryDrag({
     },
     [
       acquireShelfProjection,
+      clearFolderExitHandoff,
       clearDragIntent,
       deactivateFixedDragPreview,
       dragSession,
@@ -665,51 +663,35 @@ export function useLibraryDrag({
 
   const handleDragMove = useCallback(
     (event: DragMoveEvent) => {
+      // Detached touch events no longer bubble to window after either handoff. Reuse
+      // the sensor's raw point in the same session, including after returning to the shelf.
+      if (sensorPointerRef.current) dragSession.movePointer(sensorPointerRef.current);
+      // Ref only: coordinate updates must never render the host.
+      dragTravelRef.current = Math.max(dragTravelRef.current, Math.hypot(event.delta.x, event.delta.y));
       const activeData = readDragData(event.active);
 
       if (activeData?.type !== 'folder-book') {
         return;
       }
 
-      const activeCenter = pointerCenterFromDragEvent(event);
-
-      if (!activeCenter) {
-        return;
-      }
-
-      if (folderBookShelfDragRef.current) {
-        dragSession.movePreview(dragSession.pointerPoint(), activeCenter);
-        return;
-      }
-
-      if (!openFolder) {
-        return;
-      }
-
-      const folderPanel = document.querySelector('.folder-panel');
-
-      if (!folderPanel) {
-        return;
-      }
-
-      if (!pointInRect(activeCenter, folderPanel.getBoundingClientRect())) {
-        dragSession.setPreviewActive(true);
-        dragSession.movePreview(dragSession.pointerPoint(), activeCenter);
-        setIsFixedDragPreviewActive(true);
-        beginFolderBookShelfDrag(activeData.book);
-      }
+      handleFolderBookDragMove(event, activeData.book);
     },
-    [beginFolderBookShelfDrag, dragSession, openFolder, readDragData],
+    [dragSession, handleFolderBookDragMove, readDragData],
   );
 
   const handleDragCancel = useCallback(
     (event: DragCancelEvent) => {
+      sensorPointerRef.current = null;
+      clearFolderExitHandoff();
       setActiveDragPreview(null);
+      setActiveDragSize(null);
       deactivateFixedDragPreview();
       dragSession.end();
       resetSortDwell();
 
-      if (folderBookShelfDragRef.current) {
+      if (shelfBookFolderDragRef.current) {
+        restoreShelfBookFolderDrag(false);
+      } else if (folderBookShelfDragRef.current) {
         restoreFolderBookShelfDrag();
       } else if (event.active.data.current?.type === 'folder-book') {
         clearFolderDragIntent();
@@ -723,74 +705,13 @@ export function useLibraryDrag({
     [
       clearDragIntent,
       clearFolderDragIntent,
+      clearFolderExitHandoff,
       deactivateFixedDragPreview,
       dragSession,
       releaseShelfProjection,
       resetSortDwell,
       restoreFolderBookShelfDrag,
-    ],
-  );
-
-  const handleFolderBookShelfDragEnd = useCallback(
-    async (event: DragEndEvent, projection: ShelfProjection | null) => {
-      const dragState = folderBookShelfDragRef.current;
-
-      if (!dragState) {
-        projection?.release();
-        return;
-      }
-
-      const { active, over } = event;
-      const oldIndex = shelfItems.findIndex((item) => item.key === String(active.id));
-      const newIndex = over
-        ? shelfItems.findIndex((item) => item.key === String(over.id))
-        : oldIndex;
-      const orderedShelfItems =
-        oldIndex >= 0 && newIndex >= 0 && oldIndex !== newIndex
-          ? arrayMove(shelfItems, oldIndex, newIndex)
-          : shelfItems;
-      const orderItems = orderedShelfItems.map((item) =>
-        item.key === dragState.book.key
-          ? { type: 'book' as const, id: dragState.book.id }
-          : toShelfOrderItem(item),
-      );
-
-      const reportOutcome = beginMutationFeedback('move-out', [dragState.book.key]);
-
-      setShelfItems(orderedShelfItems);
-      setIsSavingOrder(true);
-      setError('');
-      clearDragIntent();
-
-      await mutations.moveFolderBookToShelf({
-        book: dragState.book,
-        folder: dragState.folder,
-        onOutcome(outcome) {
-          reportOutcome(outcome);
-
-          if (outcome === 'published') {
-            // The temporary `folder-book:<id>` card becomes `book:<id>` in the same commit;
-            // the settle marks the arrival rather than letting the swap read as a flash.
-            markLanding(`book:${dragState.book.id}`);
-          }
-        },
-        onSettled: clearFolderBookShelfDrag,
-        orderItems,
-        previousFolderBooks: dragState.previousFolderBooks,
-        previousShelfItems: dragState.previousShelfItems,
-        projection,
-      });
-    },
-    [
-      beginMutationFeedback,
-      clearDragIntent,
-      clearFolderBookShelfDrag,
-      markLanding,
-      mutations,
-      setError,
-      setIsSavingOrder,
-      setShelfItems,
-      shelfItems,
+      restoreShelfBookFolderDrag,
     ],
   );
 
@@ -812,6 +733,7 @@ export function useLibraryDrag({
 
       if (
         finalDragIntent.type === 'merge' &&
+        finalDragIntent.armed &&
         activeItem?.type === 'book' &&
         targetItem?.type === 'book' &&
         activeItem.key !== targetItem.key
@@ -833,6 +755,7 @@ export function useLibraryDrag({
 
       if (
         finalDragIntent.type === 'absorb' &&
+        finalDragIntent.armed &&
         activeItem?.type === 'book' &&
         targetItem?.type === 'folder'
       ) {
@@ -938,15 +861,45 @@ export function useLibraryDrag({
 
   const handleDragEnd = useCallback(
     async (event: DragEndEvent) => {
+      const activatorPoint = pointFromInputEvent(event.activatorEvent);
+      const releasePoint = dragSession.releasePoint();
+      const releaseTravel = activatorPoint && releasePoint
+        ? Math.hypot(releasePoint.x - activatorPoint.x, releasePoint.y - activatorPoint.y) : 0;
+      sensorPointerRef.current = null;
+      clearFolderExitHandoff();
       setActiveDragPreview(null);
+      setActiveDragSize(null);
       deactivateFixedDragPreview();
       dragSession.end();
       resetSortDwell();
 
       const projection = takeShelfProjection();
+      const travel = Math.max(dragTravelRef.current, Math.hypot(event.delta.x, event.delta.y), releaseTravel);
+      dragTravelRef.current = 0;
+
+      // A touch pickup held still and released without an adopted target is a long press:
+      // it opens the item menu instead of ending as an empty drag, and mutates nothing.
+      if (onRequestItemMenu && isStillTouchRelease(event, travel, dragIntentRef.current, folderBookShelfDragRef.current !== null || shelfBookFolderDragRef.current !== null)) {
+        const target = event.activatorEvent?.target;
+        const card = target instanceof Element ? target.closest(draggableItemSelector) : null;
+        const cover = card?.querySelector('.book-cover, .folder-cover');
+        const opener = card instanceof window.HTMLButtonElement ? card : card?.querySelector('button');
+        opener?.focus({ preventScroll: true });
+        clearDragIntent();
+        clearFolderDragIntent();
+        projection?.release();
+        onRequestItemMenu({ key: String(event.active.id), anchorRect: cover?.getBoundingClientRect() ?? null });
+        return;
+      }
 
       if (event.over?.id === DELETE_DROPZONE_ID && handleDropOnDelete(event)) {
         projection?.release();
+        return;
+      }
+
+      if (shelfBookFolderDragRef.current) {
+        ignoreFolderClickUntilRef.current = performance.now() + 300;
+        await handleShelfBookFolderDragEnd(event, projection);
         return;
       }
 
@@ -963,12 +916,17 @@ export function useLibraryDrag({
       await handleShelfDragEnd(event, projection);
     },
     [
+      clearFolderExitHandoff,
       deactivateFixedDragPreview,
       dragSession,
       handleDropOnDelete,
       handleFolderBookShelfDragEnd,
+      handleShelfBookFolderDragEnd,
       handleFolderDragEnd,
       handleShelfDragEnd,
+      clearDragIntent,
+      clearFolderDragIntent,
+      onRequestItemMenu,
       resetSortDwell,
       takeShelfProjection,
     ],
@@ -976,37 +934,23 @@ export function useLibraryDrag({
 
   const getFolderOpenIgnoreUntil = useCallback(() => ignoreFolderClickUntilRef.current, []);
 
-  useEffect(() => {
-    clearFolderDragIntent();
-    resetSortDwell();
-  }, [clearFolderDragIntent, folderCloseVersion, resetSortDwell]);
-
   useEffect(
     () => () => {
       if (dragIntentFrameRef.current) {
         cancelAnimationFrame(dragIntentFrameRef.current);
       }
-
-      // Feedback deadlines never outlive the host; a stale failure cannot reappear.
-      clearFailureTimer();
-
-      if (landingTimerRef.current !== null) {
-        clearTimeout(landingTimerRef.current);
-        landingTimerRef.current = null;
-      }
-
-      // The session owns its own listener/frame cleanup; this only drops the projection.
-      // Never leave a projection held after unmount; a background refresh must not stay suppressed.
-      releaseShelfProjection();
     },
-    [clearFailureTimer, releaseShelfProjection],
+    [],
   );
 
   return {
+    accessibility,
     activeDragModifier,
     activeDragPreview,
+    activeDragSize,
     appCollisionDetection,
     dragIntent,
+    dragIntentAnnouncement: dragIntentAnnouncement(dragIntent, lookupDragName, hasFolderExitHandoff),
     dragPreviewMotion: dragSession.previewMotion,
     getFolderOpenIgnoreUntil,
     handleDragCancel,
@@ -1014,8 +958,11 @@ export function useLibraryDrag({
     handleDragMove,
     handleDragStart,
     isFixedDragPreviewActive,
+    isFolderExitPending,
+    nearDeleteZone,
     landingKey,
     mutationFeedback,
+    operations,
     sensors,
   };
 }

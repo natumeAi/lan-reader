@@ -5,6 +5,7 @@ import './styles/base.css';
 import './styles/bookshelf.css';
 import './styles/folders.css';
 import './styles/home.css';
+import './styles/sheets.css';
 import './styles/statistics.css';
 import './styles/pwa.css';
 

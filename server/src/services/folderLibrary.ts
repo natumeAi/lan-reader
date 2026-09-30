@@ -6,6 +6,8 @@
  * builder sorts by the same rule. Emptying a Folder deletes it.
  */
 import type {
+  BatchFolderImportResponse,
+  BatchMoveToShelfResponse,
   BookDto,
   FolderDto,
   FolderMutationResponse,
@@ -241,6 +243,7 @@ export function moveShelfBookToFolder(
   db: DatabaseHandle,
   folderId: number,
   bookId: number,
+  options: { bookIds?: number[] } = {},
 ): FolderMutationResponse {
   return db.transaction((): FolderMutationResponse => {
     const folder = getFolder(db, folderId);
@@ -277,11 +280,119 @@ export function moveShelfBookToFolder(
          AND folder_id IS NULL`,
     ).run(folderId, nextSortOrder, bookId);
 
+    // The nested order transaction is a savepoint: membership and ordering roll back together.
+    if (options.bookIds !== undefined) updateFolderBookOrder(db, folderId, options.bookIds);
+
     return {
       folder: requireQueryResult(getFolder(db, folderId), 'folder'),
       books: listBooks(db, { folderId }),
       shelfItems: listShelfItems(db),
     };
+  })();
+}
+
+/** Deletes only emptied source folders; their shelf entries are the folder rows. */
+function removeEmptySourceFolders(db: DatabaseHandle, folderIds: Iterable<number>): number[] {
+  const removeFolder = db.prepare<[number]>(
+    `DELETE FROM folders
+     WHERE id = ?
+       AND NOT EXISTS (SELECT 1 FROM books WHERE folder_id = folders.id)`,
+  );
+  const removedFolderIds: number[] = [];
+  for (const folderId of folderIds) {
+    if (removeFolder.run(folderId).changes) removedFolderIds.push(folderId);
+  }
+  return removedFolderIds;
+}
+
+export function batchImportBooksToFolder(
+  db: DatabaseHandle,
+  folderId: number,
+  bookIds: number[],
+): BatchFolderImportResponse {
+  return db.transaction((): BatchFolderImportResponse => {
+    if (!getFolder(db, folderId)) throw notFound('Folder not found');
+
+    const nextOrder = db.prepare<[number], CountRow>(
+      `SELECT COALESCE(MAX(sort_order), 0) + 1000 AS value FROM books WHERE folder_id = ?`,
+    ).get(folderId);
+    let sortOrder = requireQueryResult(nextOrder, 'next folder sort order').value;
+    const getBook = db.prepare<[number], BookRow>('SELECT * FROM books WHERE id = ?');
+    const moveBook = db.prepare<[number, number, number]>(
+      `UPDATE books SET folder_id = ?, sort_order = ?, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+    );
+    const sourceFolderIds = new Set<number>();
+
+    for (const bookId of bookIds) {
+      const book = getBook.get(bookId);
+      if (!book) throw notFound('Book not found');
+      if (book.folder_id === folderId) continue;
+      if (book.folder_id !== null) sourceFolderIds.add(book.folder_id);
+      moveBook.run(folderId, sortOrder, bookId);
+      sortOrder += 1000;
+    }
+
+    const removedFolderIds = removeEmptySourceFolders(db, sourceFolderIds);
+    return {
+      folder: requireQueryResult(getFolder(db, folderId), 'target folder'),
+      books: listBooks(db, { folderId }),
+      shelfItems: listShelfItems(db),
+      removedFolderIds,
+    };
+  })();
+}
+
+/** Root shelf books reject the entire batch with 409; missing ids take precedence. */
+export function batchMoveBooksToShelf(
+  db: DatabaseHandle,
+  bookIds: number[],
+): BatchMoveToShelfResponse {
+  return db.transaction((): BatchMoveToShelfResponse => {
+    const getBook = db.prepare<[number], BookRow>('SELECT * FROM books WHERE id = ?');
+    const books = bookIds.map((bookId) => {
+      const book = getBook.get(bookId);
+      if (!book) throw notFound('Book not found');
+      return book;
+    });
+    const booksByFolder = new Map<number, BookRow[]>();
+    for (const book of books) {
+      if (book.folder_id === null) throw conflict('Only folder books can move to the shelf');
+      const group = booksByFolder.get(book.folder_id) || [];
+      group.push(book);
+      booksByFolder.set(book.folder_id, group);
+    }
+    for (const group of booksByFolder.values()) {
+      group.sort((a, b) => a.sort_order - b.sort_order || a.id - b.id);
+    }
+
+    const currentShelf = listShelfItems(db);
+    const shelfFolderIds = new Set(currentShelf.filter(item => item.type === 'folder').map(item => item.id));
+    if ([...booksByFolder.keys()].some(folderId => !shelfFolderIds.has(folderId))) {
+      throw conflict('Folder is not on the shelf');
+    }
+
+    const moveBook = db.prepare<[number]>(
+      `UPDATE books SET folder_id = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+    );
+    for (const book of books) moveBook.run(book.id);
+    const removedFolderIds = removeEmptySourceFolders(db, booksByFolder.keys());
+    const removedFolders = new Set(removedFolderIds);
+    const items: ShelfOrderItem[] = [];
+    for (const item of currentShelf) {
+      if (item.type === 'book' || !removedFolders.has(item.id)) {
+        items.push({ type: item.type, id: item.id });
+      }
+      if (item.type === 'folder') {
+        for (const book of booksByFolder.get(item.id) || []) {
+          items.push({ type: 'book', id: book.id });
+        }
+      }
+    }
+
+    // The existing order service participates in this outer transaction, so an
+    // order failure also rolls back membership changes and folder deletions.
+    return { shelfItems: updateShelfItemOrder(db, items), removedFolderIds };
   })();
 }
 
@@ -308,6 +419,7 @@ export function updateFolderBookOrder(
 
   const requestedBookIds = new Set(bookIds);
   const hasCurrentFolderBooks =
+    bookIds.length === currentBookIds.length &&
     currentBookIds.length === requestedBookIds.size &&
     currentBookIds.every((bookId) => requestedBookIds.has(bookId));
 

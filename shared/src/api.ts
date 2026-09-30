@@ -70,6 +70,41 @@ export interface MoveFolderBookToShelfResponse {
   readonly removedFolderId: number | null;
 }
 
+/** Maximum number of book ids accepted by each batch mutation. */
+export const MAX_BATCH_BOOK_IDS = 1000;
+
+/** `PATCH /api/folders/:id/books/batch-import`. */
+export interface BatchFolderImportRequest {
+  readonly bookIds: number[];
+}
+
+export interface BatchFolderImportResponse {
+  readonly folder: FolderDto;
+  readonly books: BookDto[];
+  readonly shelfItems: ShelfItemDto[];
+  readonly removedFolderIds: number[];
+}
+
+/** `PATCH /api/folders/shelf/batch-move-out`; root shelf books cause a 409. */
+export interface BatchMoveToShelfRequest {
+  readonly bookIds: number[];
+}
+
+export interface BatchMoveToShelfResponse {
+  readonly shelfItems: ShelfItemDto[];
+  readonly removedFolderIds: number[];
+}
+
+/** `POST /api/books/batch-delete`; failures do not undo earlier deletions. */
+export interface BatchDeleteRequest {
+  readonly bookIds: number[];
+}
+
+export interface BatchDeleteResponse {
+  readonly deleted: BookDto[];
+  readonly failed: { readonly id: number; readonly message: string }[];
+}
+
 /** `GET /api/folders/:id/books`, `PATCH /api/folders/:id/books/order`. */
 export interface FolderBooksResponse {
   readonly books: BookDto[];

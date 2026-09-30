@@ -1,9 +1,11 @@
-import type { FormEventHandler } from 'react';
+import type { ItemMenuRequest } from '../../hooks/useShelfItemMenu.js';
+import type { FormEventHandler, ReactNode } from 'react';
 import { MAX_FOLDER_NAME_LENGTH } from '@lan-reader/shared';
 import type { Book, Folder, FolderBook } from '../../types/library.js';
 import type { ShelfMutationFeedback } from '../../hooks/useLibraryDrag.js';
 import type { snapshotRect } from '../../utils/folderMotion.js';
 import { useLayoutEffect, useRef } from 'react';
+import { useDndContext } from '@dnd-kit/core';
 import { rectSortingStrategy, SortableContext } from '@dnd-kit/sortable';
 import { useModalDialog } from '../../hooks/useModalDialog.js';
 import { usePageScrollLock } from '../../hooks/usePageScrollLock.js';
@@ -11,10 +13,14 @@ import { folderPanelMotion } from '../../utils/folderMotion.js';
 import { SortableFolderBook } from './SortableFolderBook.js';
 
 interface FolderOverlayProps {
+  toast?: ReactNode;
+  menuOpen?: boolean;
+  onRequestItemMenu?: (request: ItemMenuRequest) => void;
   books: FolderBook[];
   error: string;
   folder: Folder | null;
   isClosing: boolean;
+  isExitPending?: boolean;
   isLoading: boolean;
   isRenaming: boolean;
   isRenameSaving: boolean;
@@ -32,10 +38,14 @@ interface FolderOverlayProps {
 
 
 export function FolderOverlay({
+  toast,
+  menuOpen = false,
+  onRequestItemMenu,
   books,
   error,
   folder,
   isClosing,
+  isExitPending = false,
   isLoading,
   isRenaming,
   isRenameSaving,
@@ -88,6 +98,7 @@ export function FolderOverlay({
 
   return (
     <div
+      inert={menuOpen}
       ref={dialogRef}
       className={overlayClassName}
       role="dialog"
@@ -100,8 +111,12 @@ export function FolderOverlay({
       <section
         ref={panelRef}
         className="folder-panel"
+        data-exit-pending={isExitPending ? 'true' : undefined}
         data-origin-motion={originRect ? 'true' : undefined}
       >
+        {isExitPending ? (
+          <div className="folder-exit-hint" role="status">拖出到书架</div>
+        ) : null}
         <header className="folder-panel-header">
           {isRenaming ? (
             <div className="folder-title-editor">
@@ -169,7 +184,7 @@ export function FolderOverlay({
           </button>
         </header>
 
-        <div className="folder-panel-content">
+        <FolderPanelContent books={books} isClosing={isClosing}>
           {error ? (
             <p className="folder-status error-message" role="alert">
               {error}
@@ -195,6 +210,7 @@ export function FolderOverlay({
                       mutationFeedback.status === 'failed' && Boolean(feedbackKeys?.includes(book.key))
                     }
                     key={book.key}
+                    onRequestItemMenu={onRequestItemMenu}
                     onOpenBook={onOpenBook}
                     priority={index < 8}
                   />
@@ -207,8 +223,21 @@ export function FolderOverlay({
               <p>这个文件夹是空的</p>
             </div>
           )}
-        </div>
+        </FolderPanelContent>
       </section>
+      {toast}
     </div>
   );
+}
+
+// Keep the broad dnd context subscription out of the overlay and its card tree.
+function FolderPanelContent({ books, children, isClosing }: {
+  books: FolderBook[]; children: ReactNode; isClosing: boolean;
+}) {
+  const { measureDroppableContainers } = useDndContext();
+  return <div className="folder-panel-content" onAnimationEnd={event => {
+    if (event.target !== event.currentTarget || isClosing) return;
+    // Spring opening measures cards during scale-in; refresh once entry settles.
+    measureDroppableContainers(books.map(book => book.key));
+  }}>{children}</div>;
 }

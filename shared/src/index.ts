@@ -124,6 +124,12 @@ export {
 } from './librarySnapshot.js';
 export type {
   ApiErrorResponse,
+  BatchDeleteRequest,
+  BatchDeleteResponse,
+  BatchFolderImportRequest,
+  BatchFolderImportResponse,
+  BatchMoveToShelfRequest,
+  BatchMoveToShelfResponse,
   BookResponse,
   BooksResponse,
   CatalogBooksResponse,
@@ -137,6 +143,7 @@ export type {
   RecentReadingResponse,
   ShelfItemsResponse,
 } from './api.js';
+export { MAX_BATCH_BOOK_IDS } from './api.js';
 export {
   WireDecodeError,
   isRecord,

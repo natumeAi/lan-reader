@@ -9,6 +9,8 @@
 import type { Response } from 'express';
 import { Router } from 'express';
 import type {
+  BatchFolderImportResponse,
+  BatchMoveToShelfResponse,
   FolderBooksResponse,
   FolderMutationResponse,
   FolderResponse,
@@ -18,6 +20,7 @@ import type {
 } from '@lan-reader/shared';
 import { badRequest, notFound } from '../http/httpError.js';
 import {
+  parseBatchBookIds,
   parseBookIds,
   parsePositiveInteger,
   parseShelfItems,
@@ -26,6 +29,8 @@ import {
 } from '../http/requestInput.js';
 import { listBooks } from '../services/bookLibrary.js';
 import {
+  batchImportBooksToFolder,
+  batchMoveBooksToShelf,
   createFolderFromBooks,
   getFolder,
   listFolders,
@@ -55,6 +60,16 @@ router.patch('/shelf/order', (req, res: Response<ShelfItemsResponse>, next) => {
     const items = parseShelfItems(readRequestBody(req).items);
 
     res.json({ items: updateShelfItemOrder(db, items) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.patch('/shelf/batch-move-out', (req, res: Response<BatchMoveToShelfResponse>, next) => {
+  try {
+    const db = requireDatabase(req);
+    const bookIds = parseBatchBookIds(readRequestBody(req).bookIds);
+    res.json(batchMoveBooksToShelf(db, bookIds));
   } catch (err) {
     next(err);
   }
@@ -149,13 +164,27 @@ router.patch('/:id/books/order', (req, res: Response<FolderBooksResponse>, next)
   }
 });
 
+router.patch('/:id/books/batch-import', (req, res: Response<BatchFolderImportResponse>, next) => {
+  try {
+    const db = requireDatabase(req);
+    const folderId = parsePositiveInteger(req.params.id, 'folder id');
+    const bookIds = parseBatchBookIds(readRequestBody(req).bookIds);
+    res.json(batchImportBooksToFolder(db, folderId, bookIds));
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.patch('/:id/import-book/:bookId', (req, res: Response<FolderMutationResponse>, next) => {
   try {
     const db = requireDatabase(req);
     const folderId = parsePositiveInteger(req.params.id, 'folder id');
     const bookId = parsePositiveInteger(req.params.bookId, 'book id');
 
-    res.json(moveShelfBookToFolder(db, folderId, bookId));
+    const body = readRequestBody(req);
+    const bookIds = Object.hasOwn(body, 'bookIds') ? parseBookIds(body.bookIds) : undefined;
+
+    res.json(moveShelfBookToFolder(db, folderId, bookId, { bookIds }));
   } catch (err) {
     next(err);
   }

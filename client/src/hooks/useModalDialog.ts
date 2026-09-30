@@ -38,13 +38,14 @@ export function useModalDialog({
   onRequestClose,
   open,
   restoreFocus = true,
-}: { initialFocusRef?: RefObject<HTMLElement | null>; onRequestClose?: () => void; open: boolean; restoreFocus?: boolean | (() => boolean) }) {
+  returnFocusElement,
+}: { returnFocusElement?: HTMLElement | null; initialFocusRef?: RefObject<HTMLElement | null>; onRequestClose?: () => void; open: boolean; restoreFocus?: boolean | (() => boolean) }) {
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     if (!open) return undefined;
-    previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    previousFocusRef.current = returnFocusElement ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
     // Bounded: a visible page that delivers no frames must still move focus
     // into the dialog, or Escape/Tab containment never engage.
     const cancelInitialFocus = requestFrameOrTimeout(() => {
@@ -64,7 +65,7 @@ export function useModalDialog({
       if (shouldRestore && previousFocus?.isConnected) previousFocus.focus();
       previousFocusRef.current = null;
     };
-  }, [initialFocusRef, open, restoreFocus]);
+  }, [initialFocusRef, open, restoreFocus, returnFocusElement]);
 
   const onKeyDown = useCallback((event: KeyboardEvent<HTMLElement>) => {
     if (event.key === 'Escape') {
