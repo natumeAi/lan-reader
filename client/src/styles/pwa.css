@@ -4,7 +4,8 @@
   }
 }
 
-.reader-restore-fallback {
+/* Outrank the reader overlay defaults when its lazy stylesheet has loaded. */
+.reader-overlay.reader-restore-fallback {
   position: fixed;
   inset: 0;
   z-index: 30;

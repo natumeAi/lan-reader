@@ -549,7 +549,7 @@
   min-height: 44px;
   place-items: center;
   border-radius: 12px;
-  background: var(--accent);
+  background: var(--color-accent-fill);
   color: var(--color-text-inverse);
   font-size: 14px;
   font-weight: 700;

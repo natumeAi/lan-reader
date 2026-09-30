@@ -1,4 +1,5 @@
 :root {
+  color-scheme: light dark;
   --app-max-width: 760px;
   --app-pad-top: max(22px, env(safe-area-inset-top));
   --app-pad-bottom: max(28px, env(safe-area-inset-bottom));
@@ -13,10 +14,6 @@
   --shelf-row-unit: calc(var(--shelf-item-height) + var(--shelf-row-gap));
   --shelf-panel-pad-y: 10px;
   --shelf-panel-pad-x: 6px;
-  --shelf-board-start: calc(var(--book-cover-height) - 5px);
-  --shelf-board-top: calc(var(--book-cover-height) - 1px);
-  --shelf-board-end: calc(var(--book-cover-height) + 10px);
-  --shelf-board-shadow-end: calc(var(--book-cover-height) + 34px);
   /* App colour tokens: start */
   /* Surfaces retain each original tint and opacity. */
   --color-bg: #f5f5f7;
@@ -73,6 +70,10 @@
   --color-separator-solid: #ededee;
 
   --color-accent: #007aff;
+  --color-accent-fill: #007aff;
+  /* Reader chrome keeps the shared colours it used before shell theming. */
+  --color-reader-accent: #007aff;
+  --color-reader-danger: #c0392b;
   --color-accent-ring: rgba(0, 122, 255, 0.24);
   --color-accent-ring-cover: rgba(0, 122, 255, 0.3);
   --color-accent-ring-home: rgba(0, 122, 255, 0.32);
@@ -172,7 +173,7 @@
   --color-spinner-track: rgba(0, 0, 0, 0.1);
   --wood-background:
     linear-gradient(90deg, rgba(112, 82, 48, 0.1), rgba(255, 255, 255, 0) 18px, rgba(255, 255, 255, 0) calc(100% - 18px), rgba(112, 82, 48, 0.08)),
-    repeating-linear-gradient(96deg, rgba(120, 88, 52, 0.035) 0 1px, rgba(255, 255, 255, 0) 1px 22px),
+    repeating-linear-gradient(96deg, rgba(120, 88, 52, 0.02) 0 1px, rgba(255, 255, 255, 0) 1px 22px),
     linear-gradient(180deg, rgba(255, 252, 246, 0.9), rgba(241, 231, 216, 0.82));
   /* App colour tokens: end */
 
@@ -195,6 +196,166 @@
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    /* App colour tokens: start */
+    --color-bg: #151412;
+    --color-bg-home: #191816;
+    --color-surface: #1f1e1c;
+    --color-surface-soft: #23211e;
+    --color-surface-raised: rgba(38, 36, 34, 0.96);
+    --color-surface-goal: rgba(38, 36, 34, 0.97);
+    --color-surface-glass: rgba(30, 29, 27, 0.86);
+    --color-surface-notice: rgba(38, 36, 34, 0.94);
+    --color-surface-navigation: rgba(30, 29, 27, 0.86);
+    --color-surface-folder-start: rgba(38, 36, 34, 0.98);
+    --color-surface-folder-end: rgba(31, 30, 28, 0.95);
+    --color-sheet-handle: #59564f;
+    --color-sheet-close: #34312d;
+    --color-shelf-sticky-surface: rgba(28, 26, 23, 0.9);
+    --color-shelf-sticky-shadow-clear: rgba(0, 0, 0, 0);
+    --color-shelf-sticky-shadow: rgba(0, 0, 0, 0.4);
+
+    --color-text: #f2f0ec;
+    --color-text-secondary: #a8a49c;
+    --color-text-tertiary: rgba(242, 240, 236, 0.6);
+    --color-text-muted: rgba(242, 240, 236, 0.54);
+    --color-text-icon: rgba(242, 240, 236, 0.6);
+    --color-text-hint: rgba(242, 240, 236, 0.64);
+    --color-text-description: rgba(242, 240, 236, 0.66);
+    --color-text-control: rgba(242, 240, 236, 0.76);
+    --color-text-drop-zone: rgba(242, 240, 236, 0.8);
+    --color-text-subtle: rgba(242, 240, 236, 0.86);
+    --color-text-label: rgba(242, 240, 236, 0.92);
+    --color-text-input: rgba(242, 240, 236, 0.96);
+    --color-text-heading: rgba(242, 240, 236, 0.98);
+    --color-text-placeholder: rgba(168, 164, 156, 0.9);
+
+    --color-fill: rgba(118, 118, 128, 0.24);
+    --color-fill-strong: rgba(118, 118, 128, 0.32);
+    --color-fill-subtle: rgba(118, 118, 128, 0.2);
+    --color-fill-input: rgba(118, 118, 128, 0.26);
+    --color-fill-control: rgba(118, 118, 128, 0.28);
+    --color-fill-navigation: rgba(118, 118, 128, 0.3);
+    --color-fill-ranking: rgba(242, 240, 236, 0.1);
+    --color-separator: rgba(255, 255, 255, 0.1);
+    --color-separator-faint: rgba(255, 255, 255, 0.06);
+    --color-separator-selected: rgba(255, 255, 255, 0.08);
+    --color-separator-navigation: rgba(255, 255, 255, 0.1);
+    --color-separator-folder: rgba(255, 255, 255, 0.1);
+    --color-separator-soft: rgba(255, 255, 255, 0.12);
+    --color-separator-strong: rgba(255, 255, 255, 0.16);
+    --color-separator-chart: rgba(255, 255, 255, 0.18);
+    --color-separator-input: rgba(255, 255, 255, 0.24);
+    --color-separator-chart-base: rgba(255, 255, 255, 0.26);
+    --color-separator-solid: #353330;
+
+    /* Action text and white-labelled fills need different blue tones. */
+    --color-accent: #5eacff;
+    --color-accent-fill: #0066cc;
+    --color-accent-ring: rgba(10, 132, 255, 0.4);
+    --color-accent-ring-cover: rgba(10, 132, 255, 0.45);
+    --color-accent-ring-home: rgba(10, 132, 255, 0.48);
+    --color-accent-ring-strong: rgba(10, 132, 255, 0.6);
+    --color-accent-ring-pending: rgba(10, 132, 255, 0.24);
+    --color-accent-ring-merge: rgba(10, 132, 255, 0.3);
+    --color-accent-ring-input: rgba(10, 132, 255, 0.36);
+    --color-accent-shadow-merge: rgba(0, 0, 0, 0.4);
+    --color-accent-spinner: rgba(10, 132, 255, 0.9);
+    --color-danger: #ff6961;
+    /* White labels need a deeper red fill than the danger text colour. */
+    --color-danger-fill: rgba(180, 39, 42, 0.96);
+    --color-danger-text: #ff6961;
+    --color-danger-ring: rgba(255, 105, 97, 0.5);
+    --color-success-text: #66d982;
+    --color-success-fill: rgba(52, 199, 89, 0.2);
+    --color-warning-fill: rgba(255, 159, 10, 0.16);
+    --color-backdrop: rgba(0, 0, 0, 0.5);
+    --color-backdrop-sheet: rgba(0, 0, 0, 0.56);
+    --color-backdrop-folder: rgba(0, 0, 0, 0.5);
+
+    --shadow-color: 0 0 0;
+    --color-shadow-book: rgba(0, 0, 0, 0.4);
+    --color-shadow-book-low: rgba(0, 0, 0, 0.24);
+    --color-shadow-book-detail: rgba(0, 0, 0, 0.28);
+    --color-shadow-book-small: rgba(0, 0, 0, 0.32);
+    --color-shadow-book-hover: rgba(0, 0, 0, 0.44);
+    --color-shadow-book-drag: rgba(0, 0, 0, 0.52);
+    --color-shadow-folder-small: rgba(0, 0, 0, 0.2);
+    --color-shadow-folder-control: rgba(0, 0, 0, 0.24);
+    --color-shadow-folder: rgba(0, 0, 0, 0.32);
+    --color-shadow-folder-drag: rgba(0, 0, 0, 0.4);
+    --color-shadow-card: rgba(0, 0, 0, 0.16);
+    --color-shadow-soft: rgba(0, 0, 0, 0.24);
+    --color-shadow-control: rgba(0, 0, 0, 0.28);
+    --color-shadow-navigation: rgba(0, 0, 0, 0.32);
+    --color-shadow-panel-detail: rgba(0, 0, 0, 0.36);
+    --color-shadow-notice: rgba(0, 0, 0, 0.4);
+    --color-shadow-drop-zone: rgba(0, 0, 0, 0.4);
+    --color-shadow-preview: rgba(0, 0, 0, 0.4);
+    --color-shadow-panel: rgba(0, 0, 0, 0.56);
+    --color-shadow-folder-deep: rgba(0, 0, 0, 0.6);
+    --color-shadow-sheet: rgba(0, 0, 0, 0.48);
+    --color-shadow-danger-failure: rgba(0, 0, 0, 0.44);
+    --color-shadow-danger-hover: rgba(0, 0, 0, 0.5);
+    --color-shadow-danger-armed: rgba(0, 0, 0, 0.56);
+
+    /* Keep white highlights faint on covers, folder gradients and skeletons.
+       The token suffix names retain their original light-theme percentages. */
+    --color-highlight-12: rgba(255, 255, 255, 0.04);
+    --color-highlight-14: rgba(255, 255, 255, 0.04);
+    --color-highlight-15: rgba(255, 255, 255, 0.05);
+    --color-highlight-16: rgba(255, 255, 255, 0.05);
+    --color-highlight-18: rgba(255, 255, 255, 0.06);
+    --color-highlight-20: rgba(255, 255, 255, 0.06);
+    --color-highlight-22: rgba(255, 255, 255, 0.07);
+    --color-highlight-24: rgba(255, 255, 255, 0.08);
+    --color-highlight-28: rgba(255, 255, 255, 0.09);
+    --color-highlight-30: rgba(255, 255, 255, 0.1);
+    --color-highlight-34: rgba(255, 255, 255, 0.06);
+    --color-highlight-38: rgba(255, 255, 255, 0.12);
+    --color-highlight-48: rgba(255, 255, 255, 0.08);
+    --color-highlight-56: rgba(255, 255, 255, 0.1);
+    --color-highlight-60: rgba(255, 255, 255, 0.12);
+    --color-highlight-62: rgba(255, 255, 255, 0.12);
+    --color-highlight-76: rgba(255, 255, 255, 0.1);
+    --color-highlight-88: rgba(255, 255, 255, 0.14);
+
+    --color-cover-placeholder: #34312b;
+    --color-folder-placeholder: #292a2d;
+    --color-cover-preview-placeholder: #37332d;
+    --color-cover-spine: rgba(0, 0, 0, 0.14);
+    --color-cover-shade: rgba(0, 0, 0, 0.03);
+    --color-cover-progress-track: rgba(0, 0, 0, 0.85);
+    --color-placeholder-start: #51402f;
+    --color-placeholder-middle: #59372a;
+    --color-placeholder-end: #303649;
+    --color-placeholder-spine: rgba(0, 0, 0, 0.12);
+    --color-skeleton-label: rgba(66, 62, 56, 0.76);
+    --color-skeleton-cover: #39332c;
+    --color-empty-cover-start: #655132;
+    --color-empty-cover-middle: #6b392d;
+    --color-empty-cover-end: #303b50;
+    --color-empty-cover-spine: rgba(0, 0, 0, 0.12);
+    --color-chart-track: #3b3833;
+    --color-chart-progress: #d8d4cc;
+    --color-goal-button: #626369;
+    --color-goal-decoration: rgba(242, 240, 236, 0.42);
+    --color-ranking-first: #e2b65c;
+    --color-spinner-track: rgba(255, 255, 255, 0.16);
+    --wood-background: linear-gradient(180deg, #1c1a17, #141311);
+    /* App colour tokens: end */
+  }
+}
+
+/* The reader owns its appearance independently of the system-themed shell.
+   The restore placeholder is shell UI and must keep following the system. */
+.reader-overlay:not(.reader-restore-fallback) {
+  color-scheme: normal;
+  --accent: var(--color-reader-accent);
+  --danger: var(--color-reader-danger);
 }
 
 /* Fixed column counts: the shelf and the Folder panel share these, and the cover width is
