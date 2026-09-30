@@ -3,7 +3,6 @@ import type { Active, CollisionDetection, DragCancelEvent, DragEndEvent, DragMov
 import type { Book, Folder, FolderBook, ShelfItem } from '../types/library.js';
 import type { DragTarget } from '../utils/dragCollision.js';
 import type { Point, Rect } from '../utils/dragGeometry.js';
-import type { MutationOutcome } from './useLibraryMutations.js';
 import type { SortDwell } from './useSortDwell.js';
 import type { LoadShelfOptions, ShelfProjection } from './useShelfData.js';
 
@@ -19,17 +18,7 @@ export type DragIntent =
   | { type: 'idle' | 'delete'; targetKey: null; sortTargetKey: null }
   | { type: 'sort'; targetKey: null; sortTargetKey: string | null }
   | { type: 'merge' | 'absorb'; targetKey: string; sortTargetKey: null; armed: boolean };
-/** Which bookshelf operation a card is currently carrying persistence feedback for. */
-export type ShelfMutationIntent = 'sort' | 'merge' | 'absorb' | 'move-out';
-/**
- * Honest persistence feedback for the cards taking part in the newest drag mutation.
- *
- * A card stays `pending` until the server confirms; nothing shows a settled result early.
- * `failed` is transient and the hook clears it itself.
- */
-export type ShelfMutationFeedback =
-  | { status: 'idle' }
-  | { status: 'pending' | 'failed'; intent: ShelfMutationIntent; keys: readonly string[] };
+export type { ShelfMutationIntent, ShelfMutationFeedback } from './useShelfOperations.js';
 export type DragPreviewItem = ShelfItem | { type: 'folder-book'; book: FolderBook };
 type DragData =
   | { type: 'book'; item: Extract<ShelfItem, { type: 'book' }> }
@@ -87,7 +76,7 @@ import {
   pointerCenterFromDragEvent,
   pointInRect,
 } from '../utils/dragGeometry.js';
-import { INTENT_DWELL_MS, SORT_DWELL_MS, LANDING_SETTLE_MS, SAVE_FAILURE_FEEDBACK_MS } from '../utils/dragMotion.js';
+import { INTENT_DWELL_MS, SORT_DWELL_MS } from '../utils/dragMotion.js';
 import {
   normalizeShelfBookFromFolderBook,
   normalizeShelfItem,
@@ -95,11 +84,10 @@ import {
 } from '../utils/libraryItems.js';
 import { createDragAnnouncements, DRAG_SCREEN_READER_INSTRUCTIONS, dragIntentAnnouncement } from '../utils/dragAnnouncements.js';
 import { useDragSession } from './useDragSession.js';
-import { useLibraryMutations } from './useLibraryMutations.js';
+import { useShelfOperations } from './useShelfOperations.js';
 import { useSortDwell } from './useSortDwell.js';
 
 const idleIntent: DragIntent = { type: 'idle', targetKey: null, sortTargetKey: null };
-const idleMutationFeedback: ShelfMutationFeedback = { status: 'idle' };
 
 /** The shelf shows one intent per resolved target; the Folder panel shows none. */
 function shelfIntentForTarget(target: DragTarget, adoptedSortKey: string | null, armed: boolean): DragIntent {
@@ -269,12 +257,8 @@ export function useLibraryDrag({
 }: LibraryDragOptions) {
   const dragIntentFrameRef = useRef<number | null>(null);
   const dragIntentRef = useRef<DragIntent>(idleIntent);
-  const feedbackTokenRef = useRef(0);
-  const failureTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const landingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const folderBookShelfDragRef = useRef<FolderBookShelfDrag | null>(null);
   const ignoreFolderClickUntilRef = useRef(0);
-  const shelfProjectionRef = useRef<ShelfProjection | null>(null);
   const dragSession = useDragSession();
   const announcementItemsRef = useRef({ shelfItems, folderBooks });
   announcementItemsRef.current = { shelfItems, folderBooks };
@@ -302,13 +286,11 @@ export function useLibraryDrag({
   /** Only the start and end of a folder-to-shelf handoff re-render; coordinates never do. */
   const [isFixedDragPreviewActive, setIsFixedDragPreviewActive] = useState(false);
   const [dragIntent, setDragIntent] = useState<DragIntent>(idleIntent);
-  const [mutationFeedback, setMutationFeedback] = useState<ShelfMutationFeedback>(idleMutationFeedback);
-  /** Key of a card that has just arrived from a Folder and is settling into the shelf. */
-  const [landingKey, setLandingKey] = useState<string | null>(null);
   const shelfSortDwell = useSortDwell(SORT_DWELL_MS);
   const shelfIntentDwell = useSortDwell(INTENT_DWELL_MS);
   const folderSortDwell = useSortDwell(SORT_DWELL_MS);
-  const mutations = useLibraryMutations({
+  const operations = useShelfOperations({
+    beginShelfProjection,
     getFolderSession,
     isFolderSessionCurrent,
     loadShelf,
@@ -322,6 +304,16 @@ export function useLibraryDrag({
     setOpenFolder,
     setShelfItems,
   });
+  const {
+    mutations,
+    mutationFeedback,
+    landingKey,
+    beginMutationFeedback,
+    markLanding,
+    acquireShelfProjection,
+    takeShelfProjection,
+    releaseShelfProjection,
+  } = operations;
   const sensors = useSensors(
     useSensor(MouseSensor, {
       activationConstraint: {
@@ -378,81 +370,6 @@ export function useLibraryDrag({
     shelfIntentDwell.reset();
     folderSortDwell.reset();
   }, [folderSortDwell, shelfSortDwell, shelfIntentDwell]);
-
-  const clearFailureTimer = useCallback(() => {
-    if (failureTimerRef.current !== null) {
-      clearTimeout(failureTimerRef.current);
-      failureTimerRef.current = null;
-    }
-  }, []);
-
-  /**
-   * Marks the cards of a new mutation as pending and takes ownership of their feedback.
-   * The returned reporter only publishes while it is still the newest mutation, so a stale
-   * completion can neither clear a newer pending state nor surface an obsolete failure.
-   */
-  const beginMutationFeedback = useCallback(
-    (intent: ShelfMutationIntent, keys: readonly string[]) => {
-      clearFailureTimer();
-      feedbackTokenRef.current += 1;
-      const token = feedbackTokenRef.current;
-
-      setMutationFeedback({ status: 'pending', intent, keys });
-
-      return (outcome: MutationOutcome) => {
-        if (feedbackTokenRef.current !== token) {
-          return;
-        }
-
-        if (outcome !== 'failed') {
-          setMutationFeedback(idleMutationFeedback);
-          return;
-        }
-
-        setMutationFeedback({ status: 'failed', intent, keys });
-        failureTimerRef.current = setTimeout(() => {
-          failureTimerRef.current = null;
-
-          if (feedbackTokenRef.current !== token) {
-            return;
-          }
-
-          setMutationFeedback(idleMutationFeedback);
-        }, SAVE_FAILURE_FEEDBACK_MS);
-      };
-    },
-    [clearFailureTimer],
-  );
-
-  /** A card that replaced the temporary Folder item settles in place instead of appearing abruptly. */
-  const markLanding = useCallback((key: string) => {
-    if (landingTimerRef.current !== null) {
-      clearTimeout(landingTimerRef.current);
-    }
-
-    setLandingKey(key);
-    landingTimerRef.current = setTimeout(() => {
-      landingTimerRef.current = null;
-      setLandingKey(null);
-    }, LANDING_SETTLE_MS);
-  }, []);
-
-  const releaseShelfProjection = useCallback(() => {
-    shelfProjectionRef.current?.release();
-    shelfProjectionRef.current = null;
-  }, []);
-
-  const acquireShelfProjection = useCallback(() => {
-    releaseShelfProjection();
-    shelfProjectionRef.current = beginShelfProjection?.() ?? null;
-  }, [beginShelfProjection, releaseShelfProjection]);
-
-  /** Hands the projection to the drag-end path that must decide when to publish or release it. */
-  const takeShelfProjection = useCallback(() => {
-    const projection = shelfProjectionRef.current;
-    shelfProjectionRef.current = null;
-    return projection;
-  }, []);
 
   const deactivateFixedDragPreview = useCallback(() => {
     dragSession.setPreviewActive(false);
@@ -1078,20 +995,8 @@ export function useLibraryDrag({
       if (dragIntentFrameRef.current) {
         cancelAnimationFrame(dragIntentFrameRef.current);
       }
-
-      // Feedback deadlines never outlive the host; a stale failure cannot reappear.
-      clearFailureTimer();
-
-      if (landingTimerRef.current !== null) {
-        clearTimeout(landingTimerRef.current);
-        landingTimerRef.current = null;
-      }
-
-      // The session owns its own listener/frame cleanup; this only drops the projection.
-      // Never leave a projection held after unmount; a background refresh must not stay suppressed.
-      releaseShelfProjection();
     },
-    [clearFailureTimer, releaseShelfProjection],
+    [],
   );
 
   return {
@@ -1111,6 +1016,7 @@ export function useLibraryDrag({
     isFixedDragPreviewActive,
     landingKey,
     mutationFeedback,
+    operations,
     sensors,
   };
 }
