@@ -62,8 +62,8 @@
     transform: translateX(-50%);
   }
 
-  .shelf-grid .book-shell:active:not(.is-dragging):not(:disabled) .book-cover,
-  .shelf-grid .book-shell:active:not(.is-dragging):not(:disabled) .folder-cover,
+  .shelf-grid .book-shell:not(.is-dragging) .shelf-item-button:active:not(:disabled) .book-cover,
+  .shelf-grid .book-shell:not(.is-dragging) .shelf-item-button:active:not(:disabled) .folder-cover,
   .folder-book-shell:not(.is-dragging) .folder-book-cover-button:active:not(:disabled) .book-cover {
     transition: none !important;
   }
@@ -170,4 +170,5 @@
 
 @media (prefers-reduced-motion: reduce) {
   .action-sheet-panel { animation: none; transform: none; }
+  .action-sheet-backdrop { animation: none; }
 }

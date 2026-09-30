@@ -1,11 +1,9 @@
 import { formatReadingPosition } from './readingProgress.js';
 
-export function formatShelfBookMeta(author: string | null | undefined, progress: number | null | undefined): string {
+/** A shelf card shows the book's reading progress only; it has no author line. */
+export function formatShelfBookMeta(progress: number | null | undefined): string {
   const presentation = formatReadingPosition(progress);
-  const position = presentation.state === 'finished'
-    ? '已读完'
-    : presentation.state === 'reading'
-      ? presentation.percent === 0 ? '已开始' : presentation.label
-      : null;
-  return [author?.trim(), position].filter(Boolean).join(' · ');
+  if (presentation.state === 'finished') return '已读完';
+  if (presentation.state === 'unread') return '未读';
+  return presentation.percent === 0 ? '已开始' : presentation.label ?? '';
 }

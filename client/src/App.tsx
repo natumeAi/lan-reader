@@ -233,7 +233,6 @@ function App() {
     onDropOnDelete: requestDeleteBook,
     openFolderForDrag,
     closeFolderForDrag: finishCloseFolder,
-    onRequestItemMenu: itemMenu.request,
     openFolder,
     setError: setOperationError,
     setFolderBooks,
@@ -246,8 +245,7 @@ function App() {
     setShelfItems,
     shelfItems,
   });
-  // A card's right-click or menu key never opens a menu underneath an active drag. The drag's
-  // own still-release request is made after the drag ended and goes to `itemMenu.request`.
+  // A card's ⋯ button, right-click or menu key never opens a menu underneath an active drag.
   const dragActiveRef = useRef(false);
   dragActiveRef.current = Boolean(activeDragPreview);
   const { request: requestItemMenu } = itemMenu;

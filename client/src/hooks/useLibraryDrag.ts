@@ -1,4 +1,3 @@
-import type { ItemMenuRequest } from './useShelfItemMenu.js';
 import type { Dispatch, SetStateAction } from 'react';
 import type { Active, CollisionDetection, DragCancelEvent, DragEndEvent, DragMoveEvent, DragStartEvent, Modifier, UniqueIdentifier } from '@dnd-kit/core';
 import type { Book, CatalogBook, Folder, FolderBook, ShelfItem } from '../types/library.js';
@@ -39,7 +38,6 @@ interface LibraryDragOptions {
   isSavingFolderOrder: boolean;
   isSavingOrder: boolean;
   loadShelf: (options?: LoadShelfOptions) => unknown;
-  onRequestItemMenu?: (request: ItemMenuRequest) => void;
   onDropOnDelete?: (book: Book) => void;
   openFolderForDrag?: (folder: Folder, books: FolderBook[], originRect: DOMRect | null) => boolean;
   closeFolderForDrag?: () => void;
@@ -76,7 +74,7 @@ import {
   collisionForKey,
   pointFromInputEvent,
 } from '../utils/dragGeometry.js';
-import { FOLDER_EXIT_DWELL_MS, INTENT_DWELL_MS, SPRING_OPEN_DWELL_MS, SORT_DWELL_MS, TOUCH_ACTIVATION_DELAY_MS, STILL_RELEASE_TOLERANCE_PX } from '../utils/dragMotion.js';
+import { FOLDER_EXIT_DWELL_MS, INTENT_DWELL_MS, SPRING_OPEN_DWELL_MS, SORT_DWELL_MS, TOUCH_ACTIVATION_DELAY_MS } from '../utils/dragMotion.js';
 import { createDragAnnouncements, DRAG_SCREEN_READER_INSTRUCTIONS, dragIntentAnnouncement } from '../utils/dragAnnouncements.js';
 import { useDragSession } from './useDragSession.js';
 import { useFolderHandoff } from './useFolderHandoff.js';
@@ -214,23 +212,6 @@ function isTouchActivator(event: Event | null | undefined) {
     || ('pointerType' in event && event.pointerType === 'touch');
 }
 
-/**
- * A touch pickup that never travelled `STILL_RELEASE_TOLERANCE_PX` and ends without an adopted
- * target. A Folder-panel sort target is adopted through `over` while its visible intent stays
- * idle, and a folder-to-shelf handoff has already changed the shelf, so both keep the drag path.
- */
-function isStillTouchRelease(event: DragEndEvent, travel: number, intent: DragIntent, isShelfHandoff: boolean) {
-  if (!isTouchActivator(event.activatorEvent) || travel >= STILL_RELEASE_TOLERANCE_PX || isShelfHandoff) {
-    return false;
-  }
-
-  if (intent.type !== 'idle' && !(intent.type === 'sort' && !intent.sortTargetKey)) {
-    return false;
-  }
-
-  return !(event.active.data.current?.type === 'folder-book' && event.over && event.over.id !== event.active.id);
-}
-
 function bookFromDragData(data: DragData | null) {
   if (data?.type === 'book') {
     return data.item?.book || null;
@@ -259,7 +240,6 @@ export function useLibraryDrag({
   onDropOnDelete,
   openFolderForDrag,
   closeFolderForDrag,
-  onRequestItemMenu,
   openFolder,
   setError,
   setFolderBooks,
@@ -275,7 +255,6 @@ export function useLibraryDrag({
   const dragIntentFrameRef = useRef<number | null>(null);
   const dragIntentRef = useRef<DragIntent>(idleIntent);
   /** Largest pointer displacement of the current drag, so leaving and returning is not "still". */
-  const dragTravelRef = useRef(0);
   const ignoreFolderClickUntilRef = useRef(0);
   const dragSession = useDragSession();
   const [nearDeleteZone, setNearDeleteZone] = useState(false);
@@ -629,7 +608,6 @@ export function useLibraryDrag({
       // item, not centred under the pointer, so the folder-to-shelf handoff does not make the
       // cover jump; and it must use the same box as the fluid card it came from.
       const startRect = measureDragStartRect(event);
-      dragTravelRef.current = 0;
       dragSession.start(grabOffsetFromDragStart(event, startRect), {
         canDelete: activeData?.type === 'book' || activeData?.type === 'folder-book',
         pointerPoint: pointFromInputEvent(event.activatorEvent),
@@ -666,8 +644,6 @@ export function useLibraryDrag({
       // Detached touch events no longer bubble to window after either handoff. Reuse
       // the sensor's raw point in the same session, including after returning to the shelf.
       if (sensorPointerRef.current) dragSession.movePointer(sensorPointerRef.current);
-      // Ref only: coordinate updates must never render the host.
-      dragTravelRef.current = Math.max(dragTravelRef.current, Math.hypot(event.delta.x, event.delta.y));
       const activeData = readDragData(event.active);
 
       if (activeData?.type !== 'folder-book') {
@@ -861,10 +837,6 @@ export function useLibraryDrag({
 
   const handleDragEnd = useCallback(
     async (event: DragEndEvent) => {
-      const activatorPoint = pointFromInputEvent(event.activatorEvent);
-      const releasePoint = dragSession.releasePoint();
-      const releaseTravel = activatorPoint && releasePoint
-        ? Math.hypot(releasePoint.x - activatorPoint.x, releasePoint.y - activatorPoint.y) : 0;
       sensorPointerRef.current = null;
       clearFolderExitHandoff();
       setActiveDragPreview(null);
@@ -874,24 +846,6 @@ export function useLibraryDrag({
       resetSortDwell();
 
       const projection = takeShelfProjection();
-      const travel = Math.max(dragTravelRef.current, Math.hypot(event.delta.x, event.delta.y), releaseTravel);
-      dragTravelRef.current = 0;
-
-      // A touch pickup held still and released without an adopted target is a long press:
-      // it opens the item menu instead of ending as an empty drag, and mutates nothing.
-      if (onRequestItemMenu && isStillTouchRelease(event, travel, dragIntentRef.current, folderBookShelfDragRef.current !== null || shelfBookFolderDragRef.current !== null)) {
-        const target = event.activatorEvent?.target;
-        const card = target instanceof Element ? target.closest(draggableItemSelector) : null;
-        const cover = card?.querySelector('.book-cover, .folder-cover');
-        const opener = card instanceof window.HTMLButtonElement ? card : card?.querySelector('button');
-        opener?.focus({ preventScroll: true });
-        clearDragIntent();
-        clearFolderDragIntent();
-        projection?.release();
-        onRequestItemMenu({ key: String(event.active.id), anchorRect: cover?.getBoundingClientRect() ?? null });
-        return;
-      }
-
       if (event.over?.id === DELETE_DROPZONE_ID && handleDropOnDelete(event)) {
         projection?.release();
         return;
@@ -926,7 +880,6 @@ export function useLibraryDrag({
       handleShelfDragEnd,
       clearDragIntent,
       clearFolderDragIntent,
-      onRequestItemMenu,
       resetSortDwell,
       takeShelfProjection,
     ],

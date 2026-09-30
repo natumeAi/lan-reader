@@ -6,6 +6,7 @@ import { CSS } from '@dnd-kit/utilities';
 import { BookCover, SHELF_COVER_SIZES } from '../bookshelf/BookCover.js';
 import { BookReadingPositionIndicator } from '../bookshelf/BookReadingPositionIndicator.js';
 import { ShelfItemLabel } from '../bookshelf/ShelfItemLabel.js';
+import { ShelfItemMoreButton } from '../bookshelf/ShelfItemMoreButton.js';
 import { formatShelfBookMeta } from '../../utils/shelfCardMeta.js';
 import { SHELF_SORT_TRANSITION } from '../../utils/dragMotion.js';
 import { formatBookCardAriaLabel } from '../../utils/readingProgress.js';
@@ -60,7 +61,7 @@ export function SortableFolderBook({
     .filter(Boolean)
     .join(' ');
   const label = book.title || '未命名书籍';
-  const ariaLabel = formatBookCardAriaLabel(label, book.readingProgress, book.author);
+  const ariaLabel = formatBookCardAriaLabel(label, book.readingProgress);
 
   return (
     <div
@@ -99,8 +100,9 @@ export function SortableFolderBook({
           />
           <BookReadingPositionIndicator progress={book.readingProgress} />
         </span>
-        <ShelfItemLabel name={label} meta={formatShelfBookMeta(book.author, book.readingProgress)} />
+        <ShelfItemLabel name={label} meta={formatShelfBookMeta(book.readingProgress)} />
       </button>
+      {menuTrigger.enabled ? <ShelfItemMoreButton name={label} onClick={menuTrigger.onMoreClick} /> : null}
     </div>
   );
 }

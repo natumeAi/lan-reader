@@ -18,7 +18,6 @@ const allowedSortsByView = Object.freeze({
     LIBRARY_SORT.RECENT_READING,
     LIBRARY_SORT.RECENT_ADDED,
     LIBRARY_SORT.TITLE,
-    LIBRARY_SORT.AUTHOR,
   ]),
 });
 

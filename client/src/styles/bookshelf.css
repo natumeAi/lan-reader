@@ -572,32 +572,96 @@ button.library-read-only-hint:focus-visible {
   position: relative;
   display: grid;
   align-content: start;
-  justify-items: center;
   width: 100%;
   height: auto;
+  min-width: 0;
+}
+
+/* The card's own hit target: cover, title and progress. The ⋯ button is its sibling. */
+.shelf-item-button {
+  position: relative;
+  display: grid;
+  align-content: start;
+  justify-items: center;
+  width: 100%;
   min-width: 0;
   padding: 0;
   border: 0;
   background: transparent;
+  color: inherit;
+  font: inherit;
   cursor: grab;
   outline: 0;
   touch-action: manipulation;
   user-select: none;
   -webkit-tap-highlight-color: transparent;
+  /* Here rather than on .book-shell: its paint containment would clip the ⋯ hit area, which
+     reaches past the card edge. */
   content-visibility: auto;
   /* The width comes from the grid; only the height of an off-screen card needs an estimate
      (a mid-range 2:3 cover plus title and metadata), and `auto` prefers the last rendered height. */
   contain-intrinsic-block-size: auto calc(158px + var(--shelf-label-block));
 }
 
-.read-only-shelf-item {
+.read-only-shelf-item .shelf-item-button {
   cursor: pointer;
 }
 
 .book-shell.is-dragging {
   z-index: 2;
-  cursor: grabbing;
   opacity: 0.28;
+}
+
+.book-shell.is-dragging .shelf-item-button {
+  cursor: grabbing;
+}
+
+/* Three dots on the progress row, right-aligned with the cover. The 44px hit area is centred
+   on that row (18px tall, above the card's trailing lines) and reaches into the grid gaps. */
+.shelf-item-more {
+  --shelf-item-more-size: 44px;
+  position: absolute;
+  right: -10px;
+  bottom: calc(var(--shelf-item-trailing, 0px) + 9px - var(--shelf-item-more-size) / 2);
+  display: grid;
+  width: var(--shelf-item-more-size);
+  height: var(--shelf-item-more-size);
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.shelf-item-more > span {
+  width: 3.5px;
+  height: 3.5px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: -5.5px 0 currentColor, 5.5px 0 currentColor;
+}
+
+.shelf-item-more:active {
+  opacity: 0.5;
+}
+
+.shelf-item-more:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: -6px;
+}
+
+.book-shell.is-dragging .shelf-item-more,
+.folder-book-shell.is-dragging .shelf-item-more {
+  visibility: hidden;
+}
+
+/* The folder-context line sits below the progress row on read-only cards. */
+.read-only-shelf-item {
+  --shelf-item-trailing: 30px;
 }
 
 /* Fills the DragOverlay wrapper, which dnd-kit sizes to the picked-up card, so the preview
@@ -832,18 +896,18 @@ button.library-read-only-hint:focus-visible {
   font-weight: 760;
 }
 
-.book-shell:focus-visible .book-cover {
+.shelf-item-button:focus-visible .book-cover {
   outline: 3px solid var(--color-accent-ring-cover);
   outline-offset: 5px;
 }
 
-.book-shell:focus-visible .folder-cover {
+.shelf-item-button:focus-visible .folder-cover {
   outline: 3px solid var(--color-accent-ring-cover);
   outline-offset: 5px;
 }
 
-.book-shell:active .book-cover,
-.book-shell:active .folder-cover {
+.shelf-item-button:active .book-cover,
+.shelf-item-button:active .folder-cover {
   transform: translateY(2px) scale(0.985);
 }
 
@@ -1040,7 +1104,7 @@ button.library-read-only-hint:focus-visible {
   font-weight: 550;
   line-height: 1.35;
   overflow-wrap: anywhere;
-  text-align: center;
+  text-align: left;
   text-overflow: ellipsis;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
@@ -1055,8 +1119,10 @@ button.library-read-only-hint:focus-visible {
   color: var(--text-secondary);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
+  /* Room for the ⋯ button at the end of this row. */
+  padding-right: 24px;
   line-height: 18px;
-  text-align: center;
+  text-align: left;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1070,7 +1136,7 @@ button.library-read-only-hint:focus-visible {
   font-size: 11px;
   line-height: 15px;
   overflow-wrap: anywhere;
-  text-align: center;
+  text-align: left;
   text-overflow: ellipsis;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
@@ -1340,8 +1406,8 @@ button.library-read-only-hint:focus-visible {
 }
 
 @media (pointer: coarse) {
-  .shelf-grid .book-shell:active:not(.is-dragging):not(:disabled) .book-cover,
-  .shelf-grid .book-shell:active:not(.is-dragging):not(:disabled) .folder-cover,
+  .shelf-grid .book-shell:not(.is-dragging) .shelf-item-button:active:not(:disabled) .book-cover,
+  .shelf-grid .book-shell:not(.is-dragging) .shelf-item-button:active:not(:disabled) .folder-cover,
   .folder-book-shell:not(.is-dragging) .folder-book-cover-button:active:not(:disabled) .book-cover {
     transform: scale(0.96);
     transition: transform var(--touch-activation-ms) cubic-bezier(0.2, 0.8, 0.2, 1);
@@ -1361,11 +1427,11 @@ button.library-read-only-hint:focus-visible {
 /* Selection uses the same cover/label geometry, with no sortable or menu activation. */
 .library-selection-content { display: contents; }
 .library-selection-controls { display: flex; align-items: center; justify-content: flex-end; gap: 8px; min-height: 44px; }
-.library-selection-controls button { min-width: 44px; min-height: 44px; padding: 0 12px; border: 0; border-radius: 11px; background: transparent; color: var(--accent); cursor: pointer; font: inherit; font-size: 15px; font-weight: 650; -webkit-tap-highlight-color: transparent; }
-.library-selection-controls button:disabled { cursor: not-allowed; opacity: 0.52; }
-.library-selection-controls > span { color: var(--text-secondary); font-size: 15px; }
+.library-selection-controls button:not(.upload-button) { min-width: 44px; min-height: 44px; padding: 0 12px; border: 0; border-radius: 11px; background: transparent; color: var(--accent); cursor: pointer; font: inherit; font-size: 15px; font-weight: 650; -webkit-tap-highlight-color: transparent; }
+.library-selection-controls button:not(.upload-button):disabled { cursor: not-allowed; opacity: 0.52; }
+.library-selection-controls .is-done { font-weight: 760; }
 .selection-shelf-item { position: relative; touch-action: pan-y; user-select: none; -webkit-user-select: none; }
-.selection-shelf-item:disabled { cursor: default; }
+.selection-shelf-item .shelf-item-button:disabled { cursor: default; }
 .selection-shelf-item[data-folder-id] { opacity: .45; filter: grayscale(1); }
 .selection-shelf-item .book-cover { -webkit-touch-callout: none; }
 .selection-shelf-item.is-selected .book-cover { outline: 3px solid var(--accent); outline-offset: 3px; }
@@ -1375,4 +1441,4 @@ button.library-read-only-hint:focus-visible {
 .selection-action-bar button { min-width: 44px; min-height: 44px; padding: 6px; border: 0; border-radius: 14px; background: transparent; color: var(--text-primary); font: inherit; font-size: 14px; overflow-wrap: anywhere; cursor: pointer; }
 .selection-action-bar .is-danger { color: var(--danger); }
 .selection-action-bar button:disabled { color: var(--text-secondary); cursor: default; opacity: .6; }
-.library-selection-controls button:focus-visible, .selection-action-bar button:focus-visible { outline: 3px solid var(--accent); outline-offset: -3px; }
+.library-selection-controls button:not(.upload-button):focus-visible, .selection-action-bar button:focus-visible { outline: 3px solid var(--accent); outline-offset: -3px; }

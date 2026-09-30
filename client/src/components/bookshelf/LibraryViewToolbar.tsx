@@ -1,13 +1,11 @@
 import type { LibrarySort, LibraryView } from '../../utils/libraryView.js';
 import { LIBRARY_SORT, LIBRARY_VIEW } from '../../utils/libraryView.js';
-import type { ShelfSelection } from '../../hooks/useShelfSelection.js';
 import { SortMenuButton } from './SortMenuButton.js';
 
 interface LibraryViewToolbarProps {
   controlsDisabled: boolean;
-  selection?: ShelfSelection;
-  selectionDisabled?: boolean;
-  visibleBookCount?: number;
+  /** Selecting hides the read-only hint; the selection controls live in the shelf header. */
+  selecting?: boolean;
   editable: boolean;
   modeLabel: string;
   onSortChange: (sort: LibrarySort) => void;
@@ -28,9 +26,7 @@ const viewOptions = [
 
 export function LibraryViewToolbar({
   controlsDisabled,
-  selection,
-  selectionDisabled = false,
-  visibleBookCount = 0,
+  selecting = false,
   editable,
   modeLabel,
   onSortChange,
@@ -44,15 +40,6 @@ export function LibraryViewToolbar({
   const sortLabel = sortOptions.find(option => option.value === sort)?.label ?? '';
   return (
     <section className="library-view-toolbar" aria-label="书架视图">
-      {selection ? <div className="library-selection-controls" tabIndex={-1}>
-        {selection.active ? <>
-          <span role="status" aria-live="polite" aria-atomic="true">已选 {selection.keys.size} 本</span>
-          <span aria-hidden="true">·</span>
-          <button type="button" onClick={selection.selectAll} disabled={selectionDisabled || !visibleBookCount}>全选</button>
-          <span aria-hidden="true">·</span>
-          <button type="button" onClick={selection.exit} disabled={selectionDisabled}>完成</button>
-        </> : <button type="button" onClick={selection.enter} disabled={selectionDisabled}>选择</button>}
-      </div> : null}
       <div className="library-view-controls">
         <div className="library-view-options">
           {viewOptions.map((option) => (
@@ -72,7 +59,7 @@ export function LibraryViewToolbar({
             onChange={onSortChange} onOpenChange={onSortMenuOpenChange} />
         ) : null}
       </div>
-      {!editable && !selection?.active ? (
+      {!editable && !selecting ? (
         searchMode ? <p className="library-read-only-hint">搜索结果不能拖动整理</p>
           : view === LIBRARY_VIEW.ALL ? (
             <button type="button" className="library-read-only-hint" disabled={controlsDisabled}

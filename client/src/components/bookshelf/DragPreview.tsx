@@ -17,9 +17,9 @@ export function DragPreview({ item }: { item: DragPreviewItem | null }) {
       : item.book?.title || '未命名书籍';
   const isFolderBook = item.type === 'folder-book';
   const meta = item.type === 'folder' ? `${item.folder.bookCount} 本`
-    : formatShelfBookMeta(item.book.author, item.book.readingProgress);
+    : formatShelfBookMeta(item.book.readingProgress);
   const ariaLabel = item.type === 'folder' ? `文件夹 ${label}，${item.folder.bookCount} 本`
-    : formatBookCardAriaLabel(label, item.book.readingProgress, item.book.author);
+    : formatBookCardAriaLabel(label, item.book.readingProgress);
 
   return (
     <div className="drag-preview" role="img" aria-label={ariaLabel}>

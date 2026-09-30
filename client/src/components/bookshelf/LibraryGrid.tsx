@@ -131,7 +131,7 @@ export const LibraryGrid = memo(function LibraryGrid({
       <div className="empty-state" role="status">
         <div className="empty-cover" aria-hidden="true" />
         <p>没有找到“{query}”</p>
-        <p>尝试书名、作者或文件夹名称</p>
+        <p>尝试书名或文件夹名称</p>
         <button type="button" onClick={onClearSearch} aria-label="清空搜索结果">
           清空搜索
         </button>

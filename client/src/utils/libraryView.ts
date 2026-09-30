@@ -1,6 +1,6 @@
 import type { CatalogBook, ShelfItem } from '../types/library.js';
 export type LibraryView = 'all' | 'recent-added' | 'folders';
-export type LibrarySort = 'manual' | 'recent-reading' | 'recent-added' | 'title' | 'author';
+export type LibrarySort = 'manual' | 'recent-reading' | 'recent-added' | 'title';
 interface FolderStats { latestAdded: number | null; latestRead: number | null }
 interface LibraryDatasetOptions { shelfItems?: ShelfItem[]; catalogBooks?: CatalogBook[]; query?: string; view?: LibraryView }
 export const LIBRARY_VIEW = Object.freeze({
@@ -14,7 +14,6 @@ export const LIBRARY_SORT = Object.freeze({
   RECENT_READING: 'recent-reading',
   RECENT_ADDED: 'recent-added',
   TITLE: 'title',
-  AUTHOR: 'author',
 });
 
 const collator = new Intl.Collator('zh-CN', {
@@ -26,7 +25,6 @@ const automaticSortOptions = Object.freeze([
   { value: LIBRARY_SORT.RECENT_READING, label: '最近阅读' },
   { value: LIBRARY_SORT.RECENT_ADDED, label: '最近添加' },
   { value: LIBRARY_SORT.TITLE, label: '书名' },
-  { value: LIBRARY_SORT.AUTHOR, label: '作者' },
 ]);
 
 export function normalizeLibrarySearchText(value: unknown) {
@@ -56,9 +54,7 @@ export function buildLibraryDataset({
 
   if (normalizedQuery) {
     const matchingBooks = catalogBooks
-      .filter((book) => [book.title, book.author].some((value) =>
-        normalizeLibrarySearchText(value).includes(normalizedQuery),
-      ))
+      .filter((book) => normalizeLibrarySearchText(book.title).includes(normalizedQuery))
       .map(catalogBookToLibraryItem);
     const matchingFolders = shelfItems.filter((item) =>
       item.type === 'folder' &&
@@ -133,11 +129,6 @@ function itemTimestamp(item: ShelfItem, sort: LibrarySort, folderStats: Map<numb
     : book?.readingUpdatedAt);
 }
 
-function authorGroup(item: ShelfItem) {
-  if (item.type === 'folder') return 2;
-  return String(item.book?.author ?? '').trim() ? 0 : 1;
-}
-
 function titleGroup(item: ShelfItem) {
   return item.type === 'folder' ? 0 : 1;
 }
@@ -164,14 +155,6 @@ export function sortLibraryItems(
           itemTimestamp(first, sort, folderStats, catalogBooksById),
           itemTimestamp(second, sort, folderStats, catalogBooksById),
         );
-      } else if (sort === LIBRARY_SORT.AUTHOR) {
-        result = authorGroup(first) - authorGroup(second);
-        if (!result) {
-          result = collator.compare(
-            String(first.type === 'book' ? first.book.author ?? '' : ''),
-            String(second.type === 'book' ? second.book.author ?? '' : ''),
-          );
-        }
       }
 
       return result || compareNameAndId(first, second) || firstEntry.index - secondEntry.index;

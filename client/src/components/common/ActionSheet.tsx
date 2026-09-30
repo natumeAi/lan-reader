@@ -12,19 +12,52 @@ interface ActionSheetProps {
   initialFocusRef?: RefObject<HTMLElement | null>;
 }
 
+/** Fallback removal if the exit copy never reports `animationend` (hidden tab, no frames). */
+const EXIT_COPY_TIMEOUT_MS = 800;
+
+/**
+ * A closing sheet slides back down. Parents close it by unmounting it, often in the same step
+ * as the chosen action (opening a book, asking to delete), so focus return and inertness stay
+ * immediate: an inert copy of the sheet is left in the document to play the exit, then removes
+ * itself. Only a sheet that slid in slides out; the anchored popover on wide screens and
+ * reduced motion have no enter animation.
+ */
+function leaveExitCopy(overlay: HTMLElement) {
+  const panel = overlay.querySelector('.action-sheet-panel');
+  if (!panel || window.getComputedStyle(panel).animationName === 'none') return;
+  const copy = overlay.cloneNode(true) as HTMLElement;
+  for (const attribute of ['role', 'aria-modal', 'aria-labelledby', 'tabindex']) copy.removeAttribute(attribute);
+  copy.querySelectorAll('[id]').forEach(element => element.removeAttribute('id'));
+  copy.setAttribute('aria-hidden', 'true');
+  copy.inert = true;
+  copy.classList.add('is-leaving');
+  queueMicrotask(() => {
+    // StrictMode's rehearsal unmount keeps the node in place; only a real close removes it.
+    if (overlay.isConnected) return;
+    document.body.append(copy);
+    const remove = () => copy.remove();
+    copy.querySelector('.action-sheet-panel')?.addEventListener('animationend', remove, { once: true });
+    window.setTimeout(remove, EXIT_COPY_TIMEOUT_MS);
+  });
+}
+
 /** One modal lifetime, including when the action list changes into a picker. */
 export function ActionSheet({ title, anchorRect, onClose, children, returnFocusElement, initialFocusRef }: ActionSheetProps) {
   const titleId = useId();
   const panelRef = useRef<HTMLElement>(null);
   /**
-   * Set only by a pointer press that starts on the backdrop. The long press that opened the
-   * sheet began on a card before the backdrop existed, so a click (and compatibility mousedown)
-   * the browser synthesizes from its release lands on the backdrop without one and must not
+   * Set only by a pointer press that starts on the backdrop. The press that opened the sheet
+   * began on the page before the backdrop existed, so a click (and compatibility mousedown)
+   * the browser synthesizes from its release can land on the backdrop without one and must not
    * dismiss the sheet.
    */
   const backdropPressRef = useRef(false);
   const { dialogRef, onKeyDown } = useModalDialog({ open: true, onRequestClose: onClose, returnFocusElement, initialFocusRef });
   usePageScrollLock();
+  useLayoutEffect(() => {
+    const overlay = dialogRef.current;
+    return () => { if (overlay) leaveExitCopy(overlay); };
+  }, [dialogRef]);
   useLayoutEffect(() => {
     const panel = panelRef.current;
     if (!panel) return;

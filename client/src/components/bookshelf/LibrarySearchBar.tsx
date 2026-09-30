@@ -32,7 +32,7 @@ export function LibrarySearchBar({
           id="library-search-input"
           className="library-search-input"
           type="search"
-          aria-label="搜索书名、作者或文件夹"
+          aria-label="搜索书名或文件夹"
           autoComplete="off"
           disabled={isCatalogLoading || Boolean(catalogError)}
           placeholder={isCatalogLoading ? '正在加载搜索目录' : `搜索 ${bookCount} 本书`}

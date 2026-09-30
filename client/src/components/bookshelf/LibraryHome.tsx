@@ -138,6 +138,8 @@ export function LibraryHome({
   const subtitle = normalizeLibrarySearchText(libraryView.query)
     ? `${libraryView.resultCount} 个结果`
     : `${libraryView.resultCount} 项`;
+  const selectionDisabled = isSavingOrder || isUploading;
+  const visibleBookCount = libraryView.visibleItems.filter(item => item.type === 'book').length;
   const catalogControlsDisabled =
     isCatalogLoading || Boolean(catalogError) || !hasLoadedCatalog;
   const operationStatus = isUploading
@@ -181,18 +183,29 @@ export function LibraryHome({
       <div className="library-header">
         <div>
           <h1>我的书架</h1>
-          <p className="library-subtitle">{subtitle}</p>
+          <p className="library-subtitle">
+            {selection.active
+              ? <span role="status" aria-live="polite" aria-atomic="true">已选 {selection.keys.size} 本</span>
+              : subtitle}
+          </p>
         </div>
 
-        <button
-          className="upload-button"
-          type="button"
-          onClick={() => fileInputRef.current?.click()}
-          disabled={selection.active}
-          aria-label="上传 EPUB"
-        >
-          <span className="upload-button-icon" aria-hidden="true" />
-        </button>
+        <div className="library-selection-controls" tabIndex={-1}>
+          {selection.active ? <>
+            <button type="button" onClick={selection.selectAll} disabled={selectionDisabled || !visibleBookCount}>全选</button>
+            <button type="button" className="is-done" onClick={selection.exit} disabled={selectionDisabled}>完成</button>
+          </> : <>
+            <button type="button" onClick={selection.enter} disabled={selectionDisabled}>选择</button>
+            <button
+              className="upload-button"
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              aria-label="上传 EPUB"
+            >
+              <span className="upload-button-icon" aria-hidden="true" />
+            </button>
+          </>}
+        </div>
         <input
           ref={fileInputRef}
           className="file-input"
@@ -252,9 +265,7 @@ export function LibraryHome({
       </p>
 
       <LibraryViewToolbar
-        selection={selection}
-        selectionDisabled={isSavingOrder || isUploading}
-        visibleBookCount={libraryView.visibleItems.filter(item => item.type === 'book').length}
+        selecting={selection.active}
         controlsDisabled={catalogControlsDisabled}
         editable={libraryView.editable}
         modeLabel={libraryView.modeLabel}

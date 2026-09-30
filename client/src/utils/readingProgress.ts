@@ -175,10 +175,11 @@ export function formatReadingPosition(progress: unknown) {
   };
 }
 
-export function formatBookCardAriaLabel(label: string, progress: unknown, author?: string | null) {
+/** Spoken like the card's visible progress line, which has no author. */
+export function formatBookCardAriaLabel(label: string, progress: unknown) {
   const presentation = formatReadingPosition(progress);
-  const description = author?.trim() ? `${label}，${author.trim()}` : label;
-  return presentation.accessibleDescription
-    ? `${description}，${presentation.accessibleDescription}`
-    : description;
+  const description = presentation.state === 'unread'
+    ? '未读'
+    : presentation.percent === 0 ? '已开始' : presentation.accessibleDescription;
+  return `${label}，${description}`;
 }

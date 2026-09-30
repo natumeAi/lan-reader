@@ -8,6 +8,7 @@ import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { ShelfItemCover } from './ShelfItemCover.js';
 import { ShelfItemLabel } from './ShelfItemLabel.js';
+import { ShelfItemMoreButton } from './ShelfItemMoreButton.js';
 import { formatShelfBookMeta } from '../../utils/shelfCardMeta.js';
 import { INTENT_DWELL_MS, SHELF_SORT_TRANSITION } from '../../utils/dragMotion.js';
 import { formatBookCardAriaLabel } from '../../utils/readingProgress.js';
@@ -44,7 +45,7 @@ const ShelfItemContent = memo(function ShelfItemContent({ item, name, priority }
       />
       <ShelfItemLabel name={name} meta={item.type === 'folder'
         ? `${item.folder.bookCount} 本`
-        : formatShelfBookMeta(item.book.author, item.book.readingProgress)} />
+        : formatShelfBookMeta(item.book.readingProgress)} />
     </>
   );
 });
@@ -66,6 +67,7 @@ export function SortableShelfItem({
     attributes,
     isDragging,
     listeners,
+    setActivatorNodeRef,
     setNodeRef,
     transform,
     transition,
@@ -102,7 +104,7 @@ export function SortableShelfItem({
       ? item.folder?.name || '文件夹'
       : item.book?.title || '未命名书籍';
   const label = item.type === 'book'
-    ? formatBookCardAriaLabel(name, item.book.readingProgress, item.book.author)
+    ? formatBookCardAriaLabel(name, item.book.readingProgress)
     : `文件夹 ${name}，${item.folder.bookCount} 本`;
   const handleClick = (event: MouseEvent<HTMLButtonElement> | KeyboardEvent<HTMLButtonElement>) => {
     if (item.type === 'folder') {
@@ -124,24 +126,31 @@ export function SortableShelfItem({
     listeners?.onKeyDown?.(event);
   };
 
+  // The ⋯ button sits outside the drag activator, so pressing it never picks the card up.
   return (
-    <button
+    <div
       ref={setNodeRef}
       className={className}
       style={style}
-      type="button"
-      aria-busy={isPendingSave || undefined}
-      aria-label={label}
       data-book-id={item.type === 'book' ? item.book?.id : undefined}
       data-folder-id={item.type === 'folder' ? item.folder?.id : undefined}
-      onClick={handleClick}
-      {...attributes}
-      {...listeners}
-      onPointerDown={menuTrigger.onPointerDown}
-      onContextMenu={menuTrigger.onContextMenu}
-      onKeyDown={handleKeyDown}
     >
-      <ShelfItemContent item={item} name={name} priority={priority} />
-    </button>
+      <button
+        ref={setActivatorNodeRef}
+        className="shelf-item-button"
+        type="button"
+        aria-busy={isPendingSave || undefined}
+        aria-label={label}
+        onClick={handleClick}
+        {...attributes}
+        {...listeners}
+        onPointerDown={menuTrigger.onPointerDown}
+        onContextMenu={menuTrigger.onContextMenu}
+        onKeyDown={handleKeyDown}
+      >
+        <ShelfItemContent item={item} name={name} priority={priority} />
+      </button>
+      {menuTrigger.enabled ? <ShelfItemMoreButton name={name} onClick={menuTrigger.onMoreClick} /> : null}
+    </div>
   );
 }
