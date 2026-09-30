@@ -48,6 +48,16 @@
   animation: folder-panel-in 260ms cubic-bezier(0.22, 1, 0.36, 1) both;
   backface-visibility: hidden;
   contain: paint;
+  /* Same as the shelf: no selectable spot for an iOS long press to raise the text loupe on. */
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* The rename field; iOS will not edit a field that inherits `none`. */
+.folder-panel input,
+.folder-panel textarea {
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 .folder-panel[data-origin-motion="true"] {

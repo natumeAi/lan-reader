@@ -4,6 +4,17 @@
   min-height: calc(100svh - var(--app-pad-top) - var(--app-pad-bottom));
   flex-direction: column;
   gap: var(--library-home-gap);
+  /* Shelf text is UI, not content. A selectable spot under a long press makes iOS raise its
+     text loupe over the card being picked up. */
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* iOS will not edit a field that inherits `none`. */
+.library-home input,
+.library-home textarea {
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 .library-header {
@@ -625,9 +636,18 @@ button.library-read-only-hint:focus-visible {
   /* The card box at pick-up, supplied by FixedDragPreview to match DragOverlay. */
   width: var(--drag-preview-width, var(--book-cover-width));
   height: var(--drag-preview-height, auto);
-  pointer-events: none;
   transform: translate(-50%, -50%);
   will-change: transform;
+}
+
+/* The carried card sits under the finger once a touch drag activates, before the system long
+   press fires. It must not be hit or selectable, or iOS raises its text loupe over it. */
+.drag-overlay,
+.fixed-drag-preview {
+  pointer-events: none;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 .delete-drop-zone {

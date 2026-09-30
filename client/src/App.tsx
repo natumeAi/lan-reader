@@ -635,7 +635,7 @@ function App() {
       {/* The overlay settles onto the accepted destination (or back to the origin on a
           cancel) instead of vanishing. While the fixed preview owns the visual the overlay
           renders nothing, so the configuration has no node to animate there. */}
-      <DragOverlay dropAnimation={dropAnimationConfig(reducedMotion)} style={activeDragSize ?? undefined}>
+      <DragOverlay className="drag-overlay" dropAnimation={dropAnimationConfig(reducedMotion)} style={activeDragSize ?? undefined}>
         <DragPreview item={isFixedDragPreviewActive ? null : activeDragPreview} />
       </DragOverlay>
       <FixedDragPreview
