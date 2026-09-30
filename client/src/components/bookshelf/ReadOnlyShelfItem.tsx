@@ -73,7 +73,7 @@ export const ReadOnlyShelfItem = memo(function ReadOnlyShelfItem({ selection, it
       onKeyDown={selection ? undefined : menuTrigger.onKeyDown}
       onClick={handleClick}
     >
-      <ShelfItemCover item={item} priority={priority} showReadingPosition disableNativeImageActions={Boolean(selection)} />
+      <ShelfItemCover item={item} priority={priority} showReadingPosition disableNativeImageActions={Boolean(selection || onRequestItemMenu)} />
       {selection && item.type === 'book' ? <span className="shelf-selection-badge" aria-hidden="true">
         {selection.selected ? '✓' : ''}
       </span> : null}
