@@ -105,12 +105,15 @@ export function useFolderHandoff({
   }, [springDwell]);
   const folderBookShelfDragRef = useRef<FolderBookShelfDrag | null>(null);
   const [isFolderExitPending, setIsFolderExitPending] = useState(false);
+  const [hasFolderExitHandoff, setHasFolderExitHandoff] = useState(false);
+  const clearFolderExitHandoff = useCallback(() => setHasFolderExitHandoff(false), []);
   const folderExitRef = useRef<{
     book: FolderBook;
     center: Point;
     generation: number;
     folderSession: number;
   } | null>(null);
+  const getFolderExitPending = useCallback(() => folderExitRef.current !== null, []);
   /** Only the start and end of a Folder handoff re-render; coordinates never do. */
   const [isFixedDragPreviewActive, setIsFixedDragPreviewActive] = useState(false);
   const { mutations, beginMutationFeedback, markLanding } = operations;
@@ -222,6 +225,7 @@ export function useFolderHandoff({
         type: 'folder-book',
         book,
       });
+      setHasFolderExitHandoff(true);
       setShelfItems(nextShelfItems);
       setOpenFolder(null);
       setFolderBooks([]);
@@ -488,6 +492,9 @@ export function useFolderHandoff({
   }, [folderExitDwell, resetSpring]);
 
   return {
+    clearFolderExitHandoff,
+    getFolderExitPending,
+    hasFolderExitHandoff,
     deactivateFixedDragPreview,
     evaluateSpringTarget,
     shelfBookFolderDragRef,

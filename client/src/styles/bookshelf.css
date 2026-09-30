@@ -609,15 +609,22 @@ button.library-read-only-hint:focus-visible {
   animation: drag-lift 160ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
+/* Both handoffs occur after pickup has settled; remounting must not restart the lift. */
+.fixed-drag-preview .book-cover,
+.fixed-drag-preview .folder-cover {
+  animation: none;
+}
+
 .fixed-drag-preview {
   position: fixed;
   /* The drag position is supplied by a frame-coalesced translate3d written directly on
-     this element; the trailing translate keeps the cover centred on the pointer point. */
+     this element; the trailing translate centres the picked-up card box at its drag point. */
   left: 0;
   top: 0;
   z-index: 100;
-  /* The width of the card at pick-up, supplied by FixedDragPreview. */
+  /* The card box at pick-up, supplied by FixedDragPreview to match DragOverlay. */
   width: var(--drag-preview-width, var(--book-cover-width));
+  height: var(--drag-preview-height, auto);
   pointer-events: none;
   transform: translate(-50%, -50%);
   will-change: transform;

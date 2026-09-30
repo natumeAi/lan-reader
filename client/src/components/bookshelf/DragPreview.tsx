@@ -22,7 +22,7 @@ export function DragPreview({ item }: { item: DragPreviewItem | null }) {
     : formatBookCardAriaLabel(label, item.book.readingProgress, item.book.author);
 
   return (
-    <div className={isFolderBook ? 'drag-preview is-cover-only' : 'drag-preview'} role="img" aria-label={ariaLabel}>
+    <div className="drag-preview" role="img" aria-label={ariaLabel}>
       {isFolderBook ? (
         <span className="book-cover">
           <BookCover book={item.book} sizes={SHELF_COVER_SIZES} />

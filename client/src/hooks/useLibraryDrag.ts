@@ -145,15 +145,6 @@ function collisionsForTarget<T extends { id: UniqueIdentifier }>({
     return { collisions: activeCollision(activeId, droppableContainers), sortTargetKey: null };
   }
 
-  if (!target.dwell) {
-    // Free shelf whitespace has no hovered card, so there is nothing to wait for.
-    dwell.evaluate(null);
-    return {
-      collisions: collisionForKey(target.targetKey, droppableContainers),
-      sortTargetKey: target.targetKey,
-    };
-  }
-
   if (!dwell.evaluate({ generation, targetKey: target.targetKey })) {
     return { collisions: activeCollision(activeId, droppableContainers), sortTargetKey: null };
   }
@@ -170,7 +161,7 @@ const draggableItemSelector = '.book-shell, .folder-book-shell';
 type DragStartRect = Pick<Rect, 'left' | 'top' | 'width' | 'height'>;
 
 /**
- * Box of the picked-up item at drag start, measured once for the grab offset and the width of
+ * Box of the picked-up item at drag start, measured once for the grab offset and the size of
  * the fixed preview.
  *
  * dnd-kit calls `onDragStart` before it has measured the active node: it fills
@@ -296,11 +287,11 @@ export function useLibraryDrag({
   }, [dragSession]);
   const [activeDragPreview, setActiveDragPreview] = useState<DragPreviewItem | null>(null);
   /**
-   * Width of the picked-up card, for the fixed preview that replaces DragOverlay when a Folder
-   * book leaves its panel. Cover width is fluid, so it is measured once at drag start; like the
+   * Size of the picked-up card, for the fixed preview that replaces DragOverlay when a Folder
+   * book leaves its panel. The box is measured once at drag start; like the
    * preview item it changes only when a drag begins or ends, never while the pointer moves.
    */
-  const [activeDragWidth, setActiveDragWidth] = useState<number | null>(null);
+  const [activeDragSize, setActiveDragSize] = useState<Pick<Rect, 'width' | 'height'> | null>(null);
   const [dragIntent, setDragIntent] = useState<DragIntent>(idleIntent);
   const shelfSortDwell = useSortDwell(SORT_DWELL_MS);
   const shelfIntentDwell = useSortDwell(INTENT_DWELL_MS);
@@ -402,6 +393,9 @@ export function useLibraryDrag({
   }, []);
 
   const {
+    clearFolderExitHandoff,
+    getFolderExitPending,
+    hasFolderExitHandoff,
     deactivateFixedDragPreview,
     evaluateSpringTarget,
     shelfBookFolderDragRef,
@@ -446,6 +440,12 @@ export function useLibraryDrag({
     shelfSortDwell,
   });
 
+  useEffect(() => {
+    if (hasFolderExitHandoff && (dragIntent.type === 'merge' || dragIntent.type === 'absorb')) {
+      clearFolderExitHandoff();
+    }
+  }, [clearFolderExitHandoff, dragIntent.type, hasFolderExitHandoff]);
+
   const announcementItemsRef = useRef({ shelfItems, folderBooks });
   announcementItemsRef.current = { shelfItems, folderBooks };
   /** Spoken names use the same untitled fallbacks as the visible cards. */
@@ -458,10 +458,15 @@ export function useLibraryDrag({
       ?? (folderBookShelfDragRef.current?.book.key === key ? folderBookShelfDragRef.current.book : null);
     return book ? `《${book.title || '未命名书籍'}》` : null;
   }, []);
+  // dnd-kit can announce over before the pending state render; read the synchronous exit ref.
+  const readAnnouncementContext = useCallback(() => ({
+    isFolderExitPending: getFolderExitPending(),
+    hasFolderExitHandoff: folderBookShelfDragRef.current !== null,
+  }), [folderBookShelfDragRef, getFolderExitPending]);
   const accessibility = useMemo(() => ({
-    announcements: createDragAnnouncements(lookupDragName),
+    announcements: createDragAnnouncements(lookupDragName, readAnnouncementContext),
     screenReaderInstructions: DRAG_SCREEN_READER_INSTRUCTIONS,
-  }), [lookupDragName]);
+  }), [lookupDragName, readAnnouncementContext]);
   const readDragData = useCallback((active: Active): DragData | null => {
     const key = String(active.id);
     const spring = shelfBookFolderDragRef.current;
@@ -609,6 +614,7 @@ export function useLibraryDrag({
   const handleDragStart = useCallback(
     (event: DragStartEvent) => {
       sensorPointerRef.current = null;
+      clearFolderExitHandoff();
       const activeData = readDragData(event.active);
 
       resetSortDwell();
@@ -618,7 +624,7 @@ export function useLibraryDrag({
       deactivateFixedDragPreview();
       // One measurement of the picked-up item: the preview must sit where DragOverlay had the
       // item, not centred under the pointer, so the folder-to-shelf handoff does not make the
-      // cover jump; and it must be as wide as the fluid card it came from.
+      // cover jump; and it must use the same box as the fluid card it came from.
       const startRect = measureDragStartRect(event);
       dragTravelRef.current = 0;
       dragSession.start(grabOffsetFromDragStart(event, startRect), {
@@ -629,7 +635,7 @@ export function useLibraryDrag({
         navigator.vibrate(10);
       }
       acquireShelfProjection();
-      setActiveDragWidth(startRect?.width ?? null);
+      setActiveDragSize(startRect ? { width: startRect.width, height: startRect.height } : null);
 
       if (activeData?.type === 'folder-book') {
         setActiveDragPreview({
@@ -643,6 +649,7 @@ export function useLibraryDrag({
     },
     [
       acquireShelfProjection,
+      clearFolderExitHandoff,
       clearDragIntent,
       deactivateFixedDragPreview,
       dragSession,
@@ -672,8 +679,9 @@ export function useLibraryDrag({
   const handleDragCancel = useCallback(
     (event: DragCancelEvent) => {
       sensorPointerRef.current = null;
+      clearFolderExitHandoff();
       setActiveDragPreview(null);
-      setActiveDragWidth(null);
+      setActiveDragSize(null);
       deactivateFixedDragPreview();
       dragSession.end();
       resetSortDwell();
@@ -694,6 +702,7 @@ export function useLibraryDrag({
     [
       clearDragIntent,
       clearFolderDragIntent,
+      clearFolderExitHandoff,
       deactivateFixedDragPreview,
       dragSession,
       releaseShelfProjection,
@@ -850,8 +859,9 @@ export function useLibraryDrag({
   const handleDragEnd = useCallback(
     async (event: DragEndEvent) => {
       sensorPointerRef.current = null;
+      clearFolderExitHandoff();
       setActiveDragPreview(null);
-      setActiveDragWidth(null);
+      setActiveDragSize(null);
       deactivateFixedDragPreview();
       dragSession.end();
       resetSortDwell();
@@ -899,6 +909,7 @@ export function useLibraryDrag({
       await handleShelfDragEnd(event, projection);
     },
     [
+      clearFolderExitHandoff,
       deactivateFixedDragPreview,
       dragSession,
       handleDropOnDelete,
@@ -929,10 +940,10 @@ export function useLibraryDrag({
     accessibility,
     activeDragModifier,
     activeDragPreview,
-    activeDragWidth,
+    activeDragSize,
     appCollisionDetection,
     dragIntent,
-    dragIntentAnnouncement: dragIntentAnnouncement(dragIntent, lookupDragName),
+    dragIntentAnnouncement: dragIntentAnnouncement(dragIntent, lookupDragName, hasFolderExitHandoff),
     dragPreviewMotion: dragSession.previewMotion,
     getFolderOpenIgnoreUntil,
     handleDragCancel,

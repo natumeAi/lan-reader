@@ -10,14 +10,15 @@ interface FixedDragPreviewProps {
   item: DragPreviewItem | null;
   motion: DragPreviewMotion;
   /**
-   * Width in px of the card the drag started from. Cover width is fluid, so the preview takes
-   * it from the picked-up card and stays the size the cover had under the finger.
+   * Size in px of the card the drag started from. The fixed preview uses DragOverlay's box
+   * so its top-aligned content stays in place through the handoff.
    */
   width?: number | null;
+  height?: number | null;
 }
 
 
-export function FixedDragPreview({ active, item, motion, width = null }: FixedDragPreviewProps) {
+export function FixedDragPreview({ active, item, motion, width = null, height = null }: FixedDragPreviewProps) {
   const elementRef = useRef<HTMLDivElement>(null);
 
   // Position is written by the motion writer, not by React, so this element re-renders
@@ -32,10 +33,11 @@ export function FixedDragPreview({ active, item, motion, width = null }: FixedDr
     return null;
   }
 
-  // Only the width variable is React's; the transform is never part of this style object.
-  const style = width && width > 0
-    ? ({ '--drag-preview-width': `${width}px` } as CSSProperties)
-    : undefined;
+  // Only the size variables are React's; the transform is never part of this style object.
+  const style = {
+    '--drag-preview-width': width && width > 0 ? `${width}px` : undefined,
+    '--drag-preview-height': height && height > 0 ? `${height}px` : undefined,
+  } as CSSProperties;
 
   return (
     <div className="fixed-drag-preview" ref={elementRef} style={style}>
