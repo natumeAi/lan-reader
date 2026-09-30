@@ -1,7 +1,10 @@
 import type { Book, Folder } from '../types/library.js';
+import type { MutationOutcome } from './useLibraryMutations.js';
 import { errorMessage } from '../api/transport.js';
 
 interface BookDeletionOptions {
+  batchDelete?: (books: Book[], onDeleted: (id: number) => void, onPublished?: () => void) => Promise<MutationOutcome>;
+  onBatchDeleted?: () => void;
   clearReaderBookIfDeleted?: (id: number) => void;
   loadShelf?: () => unknown;
   /** Called once the server deleted the Book (its statistics are deleted with it). */
@@ -18,6 +21,8 @@ import { deleteBook } from '../api/booksApi.js';
 const noop = () => {};
 
 export function useBookDeletion({
+  batchDelete,
+  onBatchDeleted,
   clearReaderBookIfDeleted = noop,
   loadShelf = noop,
   onBookDeleted = noop,
@@ -27,6 +32,7 @@ export function useBookDeletion({
   setFolderError = noop,
 }: BookDeletionOptions = {}) {
   const [deleteCandidateBook, setDeleteCandidateBook] = useState<Book | null>(null);
+  const [deleteCandidateBooks, setDeleteCandidateBooks] = useState<Book[] | null>(null);
   const [isDeletingBook, setIsDeletingBook] = useState(false);
 
   const requestDeleteBook = useCallback(
@@ -44,6 +50,7 @@ export function useBookDeletion({
     }
 
     setDeleteCandidateBook(null);
+    setDeleteCandidateBooks(null);
   }, [isDeletingBook]);
 
   const handleConfirmDeleteBook = useCallback(async () => {
@@ -92,7 +99,26 @@ export function useBookDeletion({
     setFolderError,
   ]);
 
+  const requestDeleteBooks = useCallback((books: Book[]) => {
+    if (!books.length || isDeletingBook) return;
+    setError(''); setFolderError('');
+    setDeleteCandidateBooks(books);
+  }, [isDeletingBook, setError, setFolderError]);
+  const handleConfirmDeleteBooks = useCallback(async () => {
+    if (!deleteCandidateBooks || !batchDelete || isDeletingBook) return;
+    setIsDeletingBook(true);
+    try {
+      await batchDelete(deleteCandidateBooks, id => {
+        clearReaderBookIfDeleted(id); onBookDeleted(id);
+      }, () => {
+        setDeleteCandidateBooks(null);
+        onBatchDeleted?.();
+      });
+    } finally { setIsDeletingBook(false); }
+  }, [batchDelete, clearReaderBookIfDeleted, deleteCandidateBooks, isDeletingBook, onBatchDeleted, onBookDeleted]);
+
   return {
+    deleteCandidateBooks, requestDeleteBooks, handleConfirmDeleteBooks,
     deleteCandidateBook,
     handleCancelDeleteBook,
     handleConfirmDeleteBook,

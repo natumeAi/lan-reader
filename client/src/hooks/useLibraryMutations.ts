@@ -1,8 +1,11 @@
 import type { Dispatch, SetStateAction } from 'react';
 import type { ShelfOrderItem } from '@lan-reader/shared';
-import type { Folder, FolderBook, ShelfItem } from '../types/library.js';
+import type { Book, CatalogBook, Folder, FolderBook, ShelfItem } from '../types/library.js';
 import type { LoadShelfOptions, ShelfProjection } from './useShelfData.js';
 import { errorMessage } from '../api/transport.js';
+import { batchDeleteBooks } from '../api/booksApi.js';
+import { projectShelfBatch } from '../utils/shelfBatchProjection.js';
+import type { BatchShelfState } from '../utils/shelfBatchProjection.js';
 
 /**
  * Persistence and result ownership for the four bookshelf drag mutations.
@@ -39,6 +42,8 @@ export interface LibraryMutationOptions {
   setIsSavingOrder: (value: boolean) => void;
   setOpenFolder: Dispatch<SetStateAction<Folder | null>>;
   setShelfItems: Dispatch<SetStateAction<ShelfItem[]>>;
+  setCatalogBooks?: Dispatch<SetStateAction<CatalogBook[]>>;
+  setFolderBooksByFolderId?: Dispatch<SetStateAction<Map<number, FolderBook[]>>>;
 }
 export interface MoveFolderBookToShelfInput {
   onPublished?: (data: Awaited<ReturnType<typeof moveFolderBookToShelf>>) => void;
@@ -92,7 +97,26 @@ export interface SaveFolderBookOrderInput {
   projection: ShelfProjection | null;
   reorderedFolderBooks: FolderBook[];
 }
+export interface BatchMoveToFolderInput {
+  books: Book[];
+  folder: Folder;
+  previousState: BatchShelfState;
+  projection: ShelfProjection | null;
+  onOutcome?: (outcome: MutationOutcome) => void;
+  onPublished?: (data: Awaited<ReturnType<typeof batchImportBooksToFolder>>) => void;
+}
+export interface BatchMoveToShelfInput extends Omit<BatchMoveToFolderInput, 'folder' | 'onPublished'> {
+  /** A selection that also contained root books is a mixed source, even though only folder books move. */
+  allowUndo?: boolean;
+  onPublished?: (data: Awaited<ReturnType<typeof batchMoveBooksToShelf>>) => void;
+}
+export interface BatchDeleteInput extends Omit<BatchMoveToFolderInput, 'folder' | 'onPublished'> {
+  onPublished?: (data: Awaited<ReturnType<typeof batchDeleteBooks>>) => void;
+}
 export interface LibraryMutations {
+  batchMoveToFolder(input: BatchMoveToFolderInput): Promise<void>;
+  batchMoveToShelf(input: BatchMoveToShelfInput): Promise<void>;
+  batchDelete(input: BatchDeleteInput): Promise<void>;
   createFolder(input: CreateFolderInput): Promise<void>;
   moveFolderBookToShelf(input: MoveFolderBookToShelfInput): Promise<void>;
   moveShelfBookToFolder(input: MoveShelfBookToFolderInput): Promise<void>;
@@ -100,6 +124,7 @@ export interface LibraryMutations {
   saveShelfItemOrder(input: SaveShelfItemOrderInput): Promise<void>;
 }
 interface ShelfMutationRun<T> {
+  refreshOnFailure?: boolean;
   onOutcome?: (outcome: MutationOutcome) => void;
   onSettled?: () => void;
   projection: ShelfProjection | null;
@@ -111,8 +136,10 @@ interface FolderMutationRun<T> extends ShelfMutationRun<T> {
   session: number;
 }
 
-import { useCallback, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import {
+  batchImportBooksToFolder,
+  batchMoveBooksToShelf,
   createFolderFromBooks,
   moveFolderBookToShelf,
   moveShelfBookToFolder,
@@ -139,9 +166,21 @@ export function useLibraryMutations({
   setIsSavingOrder,
   setOpenFolder,
   setShelfItems,
+  setCatalogBooks,
+  setFolderBooksByFolderId,
 }: LibraryMutationOptions): LibraryMutations {
   const shelfMutationRef = useRef(0);
   const folderMutationRef = useRef(0);
+  const projectionsRef = useRef(new Set<ShelfProjection>());
+  const releaseProjection = useCallback((projection: ShelfProjection | null) => {
+    if (projection && projectionsRef.current.delete(projection)) projection.release();
+  }, []);
+  useEffect(() => () => {
+    shelfMutationRef.current += 1;
+    folderMutationRef.current += 1;
+    for (const projection of projectionsRef.current) projection.release();
+    projectionsRef.current.clear();
+  }, []);
 
   const readFolderSession = useCallback(() => getFolderSession?.() ?? 0, [getFolderSession]);
 
@@ -156,11 +195,12 @@ export function useLibraryMutations({
   );
 
   const runShelfMutation = useCallback(
-    async <T>({ onOutcome, onSettled, projection, publish, request, rollback }: ShelfMutationRun<T>) => {
+    async <T>({ onOutcome, onSettled, projection, publish, request, rollback, refreshOnFailure }: ShelfMutationRun<T>) => {
       const operationSession = getMutationSession?.();
       const token = shelfMutationRef.current + 1;
       const isCurrent = () => shelfMutationRef.current === token && getMutationSession?.() === operationSession;
       shelfMutationRef.current = token;
+      if (projection) projectionsRef.current.add(projection);
       projection?.discardPendingSnapshots();
 
       try {
@@ -168,7 +208,7 @@ export function useLibraryMutations({
         projection?.discardPendingSnapshots();
 
         if (!isCurrent()) {
-          projection?.release();
+          releaseProjection(projection);
           onOutcome?.('stale');
           // The write committed even though this result is stale; keep it discoverable.
           void refreshAuthoritatively();
@@ -177,7 +217,7 @@ export function useLibraryMutations({
 
         publish(data);
         onOutcome?.('published');
-        projection?.release();
+        releaseProjection(projection);
         await refreshAuthoritatively();
       } catch (error) {
         const isOwned = isCurrent();
@@ -189,8 +229,9 @@ export function useLibraryMutations({
         // Released after the rollback, so a still-valid queued snapshot replaces the
         // restored array rather than the reverse; the write failed, so the server state
         // that snapshot describes is the authoritative one.
-        projection?.release();
+        releaseProjection(projection);
         onOutcome?.(isOwned ? 'failed' : 'stale');
+        if (refreshOnFailure) void refreshAuthoritatively();
       } finally {
         onSettled?.();
 
@@ -199,7 +240,7 @@ export function useLibraryMutations({
         }
       }
     },
-    [getMutationSession, refreshAuthoritatively, setIsSavingOrder],
+    [getMutationSession, refreshAuthoritatively, releaseProjection, setIsSavingOrder],
   );
 
   const runFolderMutation = useCallback(
@@ -207,6 +248,7 @@ export function useLibraryMutations({
       const operationSession = getMutationSession?.();
       const token = folderMutationRef.current + 1;
       folderMutationRef.current = token;
+      if (projection) projectionsRef.current.add(projection);
       const isCurrent = () => folderMutationRef.current === token && getMutationSession?.() === operationSession && isFolderSessionStillCurrent(session);
       projection?.discardPendingSnapshots();
 
@@ -215,7 +257,7 @@ export function useLibraryMutations({
         projection?.discardPendingSnapshots();
 
         if (!isCurrent()) {
-          projection?.release();
+          releaseProjection(projection);
           onOutcome?.('stale');
           void refreshAuthoritatively();
           return;
@@ -223,7 +265,7 @@ export function useLibraryMutations({
 
         publish(data);
         onOutcome?.('published');
-        projection?.release();
+        releaseProjection(projection);
         await refreshAuthoritatively();
       } catch (error) {
         const isOwned = isCurrent();
@@ -233,7 +275,7 @@ export function useLibraryMutations({
         }
 
         // Released after the rollback for the same reason as the shelf path above.
-        projection?.release();
+        releaseProjection(projection);
         onOutcome?.(isOwned ? 'failed' : 'stale');
       } finally {
         onSettled?.();
@@ -243,7 +285,7 @@ export function useLibraryMutations({
         }
       }
     },
-    [getMutationSession, isFolderSessionStillCurrent, refreshAuthoritatively, setIsSavingFolderOrder],
+    [getMutationSession, isFolderSessionStillCurrent, refreshAuthoritatively, releaseProjection, setIsSavingFolderOrder],
   );
 
   const moveFolderBookToShelfMutation = useCallback(
@@ -386,8 +428,60 @@ export function useLibraryMutations({
     [readFolderSession, runFolderMutation, setFolderBooks, setFolderError],
   );
 
+  const applyBatchState = useCallback((state: BatchShelfState) => {
+    setShelfItems(state.shelfItems);
+    if (state.catalogBooks) setCatalogBooks?.(state.catalogBooks);
+    if (state.folderBooksByFolderId) setFolderBooksByFolderId?.(state.folderBooksByFolderId);
+  }, [setCatalogBooks, setFolderBooksByFolderId, setShelfItems]);
+
+  const batchMoveToFolder = useCallback(async (input: BatchMoveToFolderInput) => {
+    const projected = projectShelfBatch(input.previousState, input.books, input.folder);
+    applyBatchState(projected);
+    await runShelfMutation({ ...input, refreshOnFailure: true,
+      request: () => batchImportBooksToFolder(input.folder.id, input.books.map(book => book.id)),
+      publish(data) {
+        const map = projected.folderBooksByFolderId ? new Map(projected.folderBooksByFolderId) : undefined;
+        map?.set(data.folder.id, data.books.map(normalizeFolderBook));
+        for (const id of data.removedFolderIds) map?.delete(id);
+        applyBatchState({ ...projected, shelfItems: data.shelfItems.map(normalizeShelfItem), folderBooksByFolderId: map });
+        input.onPublished?.(data);
+      },
+      rollback(error) { applyBatchState(input.previousState); setError(errorMessage(error, '无法批量移入文件夹')); },
+    });
+  }, [applyBatchState, runShelfMutation, setError]);
+
+  const batchMoveToShelf = useCallback(async (input: BatchMoveToShelfInput) => {
+    const projected = projectShelfBatch(input.previousState, input.books, 'shelf');
+    applyBatchState(projected);
+    await runShelfMutation({ ...input, refreshOnFailure: true,
+      request: () => batchMoveBooksToShelf(input.books.map(book => book.id)),
+      publish(data) {
+        applyBatchState({ ...projected, shelfItems: data.shelfItems.map(normalizeShelfItem) });
+        input.onPublished?.(data);
+      },
+      rollback(error) { applyBatchState(input.previousState); setError(errorMessage(error, '无法批量移出书籍')); },
+    });
+  }, [applyBatchState, runShelfMutation, setError]);
+
+  const batchDelete = useCallback(async (input: BatchDeleteInput) => {
+    // Keep every candidate visible and pending until the per-book results are known.
+    await runShelfMutation({ ...input, refreshOnFailure: true,
+      request: () => batchDeleteBooks(input.books.map(book => book.id)),
+      publish(data) {
+        applyBatchState(projectShelfBatch(input.previousState, data.deleted, 'delete'));
+        if (data.failed.length) setError(`未能删除：${data.failed.map(failure => {
+          const title = input.books.find(book => book.id === failure.id)?.title || '未命名书籍';
+          return `《${title}》（${failure.message}）`;
+        }).join('、')}`);
+        input.onPublished?.(data);
+      },
+      rollback(error) { applyBatchState(input.previousState); setError(errorMessage(error, '无法批量删除书籍')); },
+    });
+  }, [applyBatchState, runShelfMutation, setError]);
+
   return useMemo(
     () => ({
+      batchMoveToFolder, batchMoveToShelf, batchDelete,
       createFolder,
       moveFolderBookToShelf: moveFolderBookToShelfMutation,
       moveShelfBookToFolder: moveShelfBookToFolderMutation,
@@ -395,6 +489,7 @@ export function useLibraryMutations({
       saveShelfItemOrder,
     }),
     [
+      batchMoveToFolder, batchMoveToShelf, batchDelete,
       createFolder,
       moveFolderBookToShelfMutation,
       moveShelfBookToFolderMutation,

@@ -2,6 +2,7 @@ import type { ShelfItem } from '../../types/library.js';
 import type { LibraryView } from '../../utils/libraryView.js';
 import type { DragIntent, ShelfMutationFeedback } from '../../hooks/useLibraryDrag.js';
 import type { ShelfItemActions } from './ReadOnlyShelfItem.js';
+import type { ShelfSelection } from '../../hooks/useShelfSelection.js';
 import { memo } from 'react';
 import { rectSortingStrategy, SortableContext } from '@dnd-kit/sortable';
 import { LIBRARY_VIEW } from '../../utils/libraryView.js';
@@ -11,6 +12,7 @@ import { SortableShelfItem } from './SortableShelfItem.js';
 interface LibraryGridProps extends ShelfItemActions {
   dragIntent: DragIntent;
   editable: boolean;
+  selection?: ShelfSelection;
   /** Key of the card that just arrived from a Folder, while it settles into place. */
   landingKey: string | null;
   mutationFeedback: ShelfMutationFeedback;
@@ -29,6 +31,7 @@ interface LibraryGridProps extends ShelfItemActions {
 export const LibraryGrid = memo(function LibraryGrid({
   dragIntent,
   editable,
+  selection,
   hasLoadedShelf,
   isLoading,
   isSavingOrder,
@@ -63,7 +66,7 @@ export const LibraryGrid = memo(function LibraryGrid({
     mutationFeedback.status === 'failed' && Boolean(feedbackKeys?.includes(key));
 
   if (items.length) {
-    return editable ? (
+    return editable && !selection?.active ? (
       <SortableContext items={items.map((item) => item.key)} strategy={rectSortingStrategy}>
         <div className="shelf-grid" aria-label="可编辑书架列表">
           {items.map((item, index) => (
@@ -87,8 +90,11 @@ export const LibraryGrid = memo(function LibraryGrid({
       <div className="shelf-grid read-only-grid" aria-label="只读书架列表">
         {items.map((item, index) => (
           <ReadOnlyShelfItem
-            isPendingSave={isPendingSave(item.type === 'book' && item.book.folderId != null ? `folder-book:${item.id}` : item.key)}
-            isSaveFailed={isSaveFailed(item.type === 'book' && item.book.folderId != null ? `folder-book:${item.id}` : item.key)}
+            isPendingSave={isPendingSave(item.key) || item.type === 'book' && isPendingSave(`folder-book:${item.id}`)}
+            isSaveFailed={isSaveFailed(item.key) || item.type === 'book' && isSaveFailed(`folder-book:${item.id}`)}
+            selection={selection?.active ? {
+              selected: selection.keys.has(item.key), disabled: isSavingOrder, onToggle: selection.toggle,
+            } : undefined}
             item={item}
             key={item.key}
             onOpenBook={onOpenBook}

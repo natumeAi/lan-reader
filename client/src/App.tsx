@@ -101,6 +101,8 @@ function App() {
     setIsSavingOrder,
     setOperationError,
     setShelfItems,
+    setCatalogBooks,
+    setFolderBooksByFolderId,
     shelfError,
     shelfItems,
     uploadProgress,
@@ -127,11 +129,13 @@ function App() {
     delivery: readingActivityDelivery,
   });
   const { invalidate: invalidateReadingStatistics } = readingStatistics;
-  const handleBookDeleted = useCallback(() => {
+  const handleBookDeleted = useCallback((bookId: number) => {
+    clearReaderBookIfDeleted(bookId);
     invalidateReadingDashboard();
     invalidateReadingStatistics();
-  }, [invalidateReadingDashboard, invalidateReadingStatistics]);
+  }, [clearReaderBookIfDeleted, invalidateReadingDashboard, invalidateReadingStatistics]);
   const [recentSheetOpen, setRecentSheetOpen] = useState(false);
+  const [selectionActive, setSelectionActive] = useState(false);
   const [sortMenuOpen, setSortMenuOpen] = useState(false);
   const handleRecentSheetClosed = useCallback(() => setRecentSheetOpen(false), []);
   const handleFolderRenamed = useCallback((renamedFolder: Folder) => {
@@ -175,7 +179,6 @@ function App() {
     requestDeleteBook,
     isDeletingBook,
   } = useBookDeletion({
-    clearReaderBookIfDeleted,
     loadShelf,
     onBookDeleted: handleBookDeleted,
     openFolder,
@@ -205,6 +208,7 @@ function App() {
     sensors,
     operations,
   } = useLibraryDrag({
+    catalogBooks, setCatalogBooks, setFolderBooksByFolderId,
     folderBooksByFolderId,
     beginShelfProjection,
     folderBooks,
@@ -234,11 +238,12 @@ function App() {
   dragActiveRef.current = Boolean(activeDragPreview);
   const { request: requestItemMenu } = itemMenu;
   const handleRequestCardMenu = useCallback((request: ItemMenuRequest) => {
-    if (!dragActiveRef.current) requestItemMenu(request);
-  }, [requestItemMenu]);
+    if (!dragActiveRef.current && !selectionActive) requestItemMenu(request);
+  }, [requestItemMenu, selectionActive]);
   // The reader, an open/closing Folder, the delete and goal dialogs and an active drag each
   // own interaction; the main views cannot be switched underneath them.
   const isMainNavigationBlocked = Boolean(
+    selectionActive ||
     readingBook ||
     openFolder ||
     isFolderClosing ||
@@ -302,9 +307,9 @@ function App() {
 
   // Stable so the memoized shelf cards survive a DndContext re-render.
   const handleOpenBook = useCallback((book: Book, originRect: DOMRect | null) => {
-    if (motionPhase !== 'idle') return;
+    if (motionPhase !== 'idle' || selectionActive) return;
     openBook(book, originRect, { disabled: isSavingOrder });
-  }, [isSavingOrder, motionPhase, openBook]);
+  }, [isSavingOrder, motionPhase, openBook, selectionActive]);
 
   const handleReaderProgressSettled = useCallback(() => {
     reapplyPendingReadingPositions();
@@ -317,7 +322,7 @@ function App() {
   }, [clearReaderBookIfDeleted, loadShelf]);
 
   const handleOpenFolder = useCallback((folder: Folder, originRect: DOMRect | null, options?: { startRename?: boolean }) => {
-    if (motionPhase !== 'idle') return;
+    if (motionPhase !== 'idle' || selectionActive) return;
     openFolderFromShelf(folder, {
       startRename: options?.startRename,
       books: folderBooksByFolderId.get(folder.id) || [],
@@ -333,6 +338,7 @@ function App() {
     loadShelf,
     motionPhase,
     openFolderFromShelf,
+    selectionActive,
   ]);
 
   function handleCloseFolder() {
@@ -375,12 +381,12 @@ function App() {
     shelfItems,
   ]);
 
-  // A shelf notice belongs to the shelf it describes: the reader or another main view ends it.
+  // A shelf notice ends when a reader, another view or a new selection takes interaction.
   const isShelfNoticeVisible = mainView === MAIN_VIEW.SHELF && !readingBook;
   const { dismissToast } = operations;
   useEffect(() => {
-    if (!isShelfNoticeVisible) dismissToast();
-  }, [dismissToast, isShelfNoticeVisible]);
+    if (!isShelfNoticeVisible || selectionActive) dismissToast();
+  }, [dismissToast, isShelfNoticeVisible, selectionActive]);
   const notice = operations.toast;
   const toastActionsBlocked = isSavingFolderName || isSavingFolderOrder || isFolderClosing;
   const renameAction: ShelfToastAction | null = notice?.createdFolder ? {
@@ -411,7 +417,7 @@ function App() {
     = renameAction && undoAction ? [renameAction, undoAction]
       : renameAction ? [renameAction] : undoAction ? [undoAction] : [];
   // Hidden while dragging; drag start has already dismissed the previous notice.
-  const shelfToast = operations.toast && isShelfNoticeVisible && !activeDragPreview && (
+  const shelfToast = operations.toast && isShelfNoticeVisible && !selectionActive && !activeDragPreview && (
     <ShelfToast key={operations.toast.token} message={operations.toast.message}
       light={operations.toast.light} duration={operations.toast.duration}
       onDismiss={dismissToast}
@@ -428,7 +434,7 @@ function App() {
       onDragCancel={handleDragCancel}
       onDragEnd={handleDragEnd}
       onDragMove={handleDragMove}
-      onDragStart={motionPhase === 'idle' ? handleDragStart : undefined}
+      onDragStart={motionPhase === 'idle' && !selectionActive ? handleDragStart : undefined}
     >
       <div className="visually-hidden" role="status" aria-atomic="true">{dragIntentAnnouncement}</div>
       <main className="app-shell has-main-navigation" aria-label="EPUB Reader"
@@ -488,6 +494,10 @@ function App() {
           onTransitionEnd={handleMainViewTransitionEnd}
         >
           <LibraryHome
+            operations={operations}
+            onSelectionActiveChange={setSelectionActive}
+            onBookDeleted={handleBookDeleted}
+            onOperationErrorChange={setOperationError}
             catalogBooks={catalogBooks}
             catalogError={catalogError}
             operationError={operationError}

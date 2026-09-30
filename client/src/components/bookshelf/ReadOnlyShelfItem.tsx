@@ -17,17 +17,18 @@ export interface ShelfItemActions {
 interface ReadOnlyShelfItemProps extends ShelfItemActions {
   isPendingSave?: boolean;
   isSaveFailed?: boolean;
+  selection?: { selected: boolean; disabled: boolean; onToggle: (key: string) => void };
   item: ShelfItem;
   priority?: boolean;
 }
 
 
 /** Read-only cards never subscribe to dnd-kit, so stable props keep them out of drag renders. */
-export const ReadOnlyShelfItem = memo(function ReadOnlyShelfItem({ item, isPendingSave = false, isSaveFailed = false, onOpenBook, onOpenFolder, onRequestItemMenu, priority = false }: ReadOnlyShelfItemProps) {
+export const ReadOnlyShelfItem = memo(function ReadOnlyShelfItem({ selection, item, isPendingSave = false, isSaveFailed = false, onOpenBook, onOpenFolder, onRequestItemMenu, priority = false }: ReadOnlyShelfItemProps) {
   const requestReadOnlyMenu = useCallback((request: ItemMenuRequest) => {
     onRequestItemMenu?.({ ...request, readOnly: true });
   }, [onRequestItemMenu]);
-  const menuTrigger = useItemMenuTrigger(item.key, onRequestItemMenu ? requestReadOnlyMenu : undefined, item);
+  const menuTrigger = useItemMenuTrigger(item.key, !selection && onRequestItemMenu ? requestReadOnlyMenu : undefined, item);
   const longPress = useLongPress(menuTrigger.open);
   const name = item.type === 'folder'
     ? item.folder?.name || '文件夹'
@@ -40,6 +41,10 @@ export const ReadOnlyShelfItem = memo(function ReadOnlyShelfItem({ item, isPendi
     : `文件夹 ${name}，${item.folder.bookCount} 本`;
 
   const handleClick = (event: MouseEvent<HTMLButtonElement>) => {
+    if (selection) {
+      if (item.type === 'book' && !selection.disabled) selection.onToggle(item.key);
+      return;
+    }
     if (item.type === 'folder') {
       const rect = event.currentTarget.querySelector('.folder-cover')?.getBoundingClientRect();
       onOpenFolder(item.folder, rect || null);
@@ -52,20 +57,25 @@ export const ReadOnlyShelfItem = memo(function ReadOnlyShelfItem({ item, isPendi
 
   return (
     <button
-      className={`book-shell shelf-item read-only-shelf-item${isPendingSave ? ' is-pending-save' : ''}${isSaveFailed ? ' is-save-failed' : ''}`}
+      className={`book-shell shelf-item read-only-shelf-item${isPendingSave ? ' is-pending-save' : ''}${isSaveFailed ? ' is-save-failed' : ''}${selection ? ' selection-shelf-item' : ''}${selection?.selected ? ' is-selected' : ''}`}
       aria-busy={isPendingSave || undefined}
+      aria-pressed={selection && item.type === 'book' ? selection.selected : undefined}
+      disabled={selection ? selection.disabled || item.type === 'folder' : undefined}
       type="button"
       aria-label={label}
       data-readonly="true"
       data-book-id={item.type === 'book' ? item.book?.id : undefined}
       data-folder-id={item.type === 'folder' ? item.folder?.id : undefined}
-      {...longPress}
-      onPointerDown={event => { menuTrigger.onPointerDown(event); longPress.onPointerDown(event); }}
-      onContextMenu={menuTrigger.onContextMenu}
-      onKeyDown={menuTrigger.onKeyDown}
+      {...(selection ? {} : longPress)}
+      onPointerDown={selection ? undefined : event => { menuTrigger.onPointerDown(event); longPress.onPointerDown(event); }}
+      onContextMenu={selection ? event => event.preventDefault() : menuTrigger.onContextMenu}
+      onKeyDown={selection ? undefined : menuTrigger.onKeyDown}
       onClick={handleClick}
     >
-      <ShelfItemCover item={item} priority={priority} showReadingPosition />
+      <ShelfItemCover item={item} priority={priority} showReadingPosition disableNativeImageActions={Boolean(selection)} />
+      {selection && item.type === 'book' ? <span className="shelf-selection-badge" aria-hidden="true">
+        {selection.selected ? '✓' : ''}
+      </span> : null}
       <ShelfItemLabel name={name} meta={item.type === 'folder'
         ? `${item.folder.bookCount} 本`
         : formatShelfBookMeta(item.book.author, item.book.readingProgress)} />

@@ -2,7 +2,14 @@ import type { ChangeEventHandler, RefObject } from 'react';
 import type { CatalogBook, ShelfItem } from '../../types/library.js';
 import type { DragIntent, ShelfMutationFeedback } from '../../hooks/useLibraryDrag.js';
 import type { ShelfItemActions } from './ReadOnlyShelfItem.js';
-import { useCallback, useRef } from 'react';
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import type { ShelfOperations } from '../../hooks/useShelfOperations.js';
+import { useShelfSelection } from '../../hooks/useShelfSelection.js';
+import { useBookDeletion } from '../../hooks/useBookDeletion.js';
+import { ActionSheet } from '../common/ActionSheet.js';
+import { FolderPicker } from './FolderPicker.js';
+import { SelectionActionBar } from './SelectionActionBar.js';
+import { DeleteConfirmDialog } from './DeleteConfirmDialog.js';
 import { useLibraryView } from '../../hooks/useLibraryView.js';
 import { useStuckState } from '../../hooks/useStuckState.js';
 import { normalizeLibrarySearchText } from '../../utils/libraryView.js';
@@ -11,6 +18,10 @@ import { LibrarySearchBar } from './LibrarySearchBar.js';
 import { LibraryViewToolbar } from './LibraryViewToolbar.js';
 
 interface LibraryHomeProps extends ShelfItemActions {
+  operations?: ShelfOperations;
+  onSelectionActiveChange?: (active: boolean) => void;
+  onBookDeleted?: (id: number) => void;
+  onOperationErrorChange?: (message: string) => void;
   catalogBooks: CatalogBook[];
   catalogError: string;
   dragIntent: DragIntent;
@@ -35,6 +46,10 @@ interface LibraryHomeProps extends ShelfItemActions {
 
 
 export function LibraryHome({
+  operations,
+  onSelectionActiveChange,
+  onBookDeleted,
+  onOperationErrorChange,
   catalogBooks,
   catalogError,
   dragIntent,
@@ -60,6 +75,43 @@ export function LibraryHome({
   uploadProgress,
 }: LibraryHomeProps) {
   const libraryView = useLibraryView({ shelfItems, catalogBooks });
+  const selection = useShelfSelection(libraryView.visibleItems, isSavingOrder);
+  const [picker, setPicker] = useState<{ opener: HTMLElement; anchorRect: DOMRect } | null>(null);
+  const deleteOpenerRef = useRef<HTMLElement | null>(null);
+  const sectionRef = useRef<HTMLElement>(null);
+  const folders = shelfItems.flatMap(item => item.type === 'folder' ? [item.folder] : []);
+  const selectedBooks = useMemo(() => libraryView.visibleItems.flatMap(item =>
+    item.type === 'book' && selection.keys.has(item.key) ? [item.book] : []), [libraryView.visibleItems, selection.keys]);
+  const deletion = useBookDeletion({ batchDelete: operations?.batchDelete, onBookDeleted,
+    onBatchDeleted: selection.exit, setError: onOperationErrorChange });
+  const closePicker = useCallback(() => setPicker(null), []);
+  const modalOpen = Boolean(picker || deletion.deleteCandidateBooks);
+  useLayoutEffect(() => {
+    onSelectionActiveChange?.(selection.active);
+  }, [onSelectionActiveChange, selection.active]);
+  // Modal owners stop propagation: Escape dismisses the top sheet/dialog before selection.
+  useLayoutEffect(() => {
+    if (!selection.active || modalOpen) return;
+    const onEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      event.preventDefault(); selection.exit();
+    };
+    window.addEventListener('keydown', onEscape);
+    return () => window.removeEventListener('keydown', onEscape);
+  }, [modalOpen, selection.active, selection.exit]);
+  const wasSelecting = useRef(false);
+  useLayoutEffect(() => {
+    if (!wasSelecting.current && selection.active) {
+      const firstBook = sectionRef.current?.querySelector<HTMLElement>('.shelf-grid button[aria-pressed]');
+      const done = sectionRef.current?.querySelector<HTMLElement>('.library-selection-controls button:last-child');
+      (firstBook ?? done)?.focus({ preventScroll: true });
+    } else if (wasSelecting.current && !selection.active) {
+      const controls = sectionRef.current?.querySelector<HTMLElement>('.library-selection-controls');
+      const button = controls?.querySelector<HTMLButtonElement>('button');
+      (button && !button.disabled ? button : controls)?.focus({ preventScroll: true });
+    }
+    wasSelecting.current = selection.active;
+  }, [selection.active]);
   const { clearSearch } = libraryView;
   const { isStuck, sentinelRef, stickyRef } = useStuckState();
   const savedScrollTopRef = useRef(0);
@@ -72,7 +124,11 @@ export function LibraryHome({
   const operationStatus = isUploading
     ? uploadProgress || '正在上传'
     : isSavingOrder
-      ? '正在保存顺序'
+      ? mutationFeedback.status === 'pending' && mutationFeedback.intent === 'delete'
+        ? '正在删除书籍'
+        : mutationFeedback.status === 'pending' && (mutationFeedback.intent === 'absorb' || mutationFeedback.intent === 'move-out')
+          ? '正在移动书籍'
+          : '正在保存顺序'
       : isCatalogLoading
         ? '正在加载搜索目录'
         : isLoading && hasLoadedShelf
@@ -101,7 +157,8 @@ export function LibraryHome({
   }, [fileInputRef]);
 
   return (
-    <section className="library-home">
+    <section className="library-home" ref={sectionRef}>
+      <div className="library-selection-content" inert={modalOpen}>
       <div className="library-header">
         <div>
           <h1>我的书架</h1>
@@ -112,7 +169,7 @@ export function LibraryHome({
           className="upload-button"
           type="button"
           onClick={() => fileInputRef.current?.click()}
-          disabled={isUploading}
+          disabled={isUploading || selection.active}
           aria-label="上传 EPUB"
         >
           <span className="upload-button-icon" aria-hidden="true" />
@@ -174,6 +231,9 @@ export function LibraryHome({
       </p>
 
       <LibraryViewToolbar
+        selection={selection}
+        selectionDisabled={isSavingOrder || isUploading}
+        visibleBookCount={libraryView.visibleItems.filter(item => item.type === 'book').length}
         controlsDisabled={catalogControlsDisabled}
         editable={libraryView.editable}
         modeLabel={libraryView.modeLabel}
@@ -187,6 +247,7 @@ export function LibraryHome({
       />
 
       <LibraryGrid
+        selection={selection}
         dragIntent={dragIntent}
         editable={libraryView.editable}
         hasLoadedShelf={hasLoadedShelf}
@@ -203,6 +264,27 @@ export function LibraryHome({
         query={libraryView.query}
         view={libraryView.view}
       />
+      {selection.active ? <SelectionActionBar books={selectedBooks} hasFolders={Boolean(folders.length)}
+        disabled={isSavingOrder || !operations} onMoveToFolder={event => {
+          const opener = event.currentTarget;
+          setPicker({ opener, anchorRect: opener.getBoundingClientRect() });
+        }} onMoveToShelf={() => {
+          if (operations) void operations.batchMoveToShelf(selectedBooks, selection.exit);
+        }} onDelete={event => {
+          deleteOpenerRef.current = event.currentTarget;
+          deletion.requestDeleteBooks(selectedBooks);
+        }} /> : null}
+      </div>
+      {picker ? <ActionSheet title="移到文件夹" anchorRect={picker.anchorRect} returnFocusElement={picker.opener} onClose={closePicker}>
+        <FolderPicker folders={folders} disabled={isSavingOrder} onSelect={folder => {
+          if (!operations || isSavingOrder) return;
+          closePicker();
+          void operations.batchMoveToFolder(selectedBooks, folder, selection.exit);
+        }} />
+      </ActionSheet> : null}
+      <DeleteConfirmDialog books={deletion.deleteCandidateBooks ?? undefined} isDeleting={deletion.isDeletingBook}
+        error={deletion.deleteCandidateBooks ? operationError : undefined} returnFocusElement={deleteOpenerRef.current}
+        onCancel={deletion.handleCancelDeleteBook} onConfirm={deletion.handleConfirmDeleteBooks} />
     </section>
   );
 }

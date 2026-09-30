@@ -75,6 +75,8 @@ export function useShelfUndo(
       return current ? sameKeys(current, expected) : false;
     };
     const projection = () => latest.current.beginShelfProjection?.() ?? null;
+    const currentState = () => ({ shelfItems: latest.current.shelfItems,
+      catalogBooks: latest.current.catalogBooks, folderBooksByFolderId: latest.current.folderBooksByFolderId });
     // Every step owns a fresh mutation token and projection; stop before another step if
     // a newer operation took over during either the request or its reconciling refresh.
     const step = async (run: (report: (outcome: MutationOutcome) => void) => Promise<void>) => {
@@ -86,6 +88,78 @@ export function useShelfUndo(
       return getToken() === token ? result.outcome : 'stale';
     };
     return {
+      async batchMoveToFolder(input) {
+        const token = getToken();
+        const fromRoot = input.books.every(book => book.folderId == null);
+        await raw.batchMoveToFolder({ ...input, onPublished(data) {
+          input.onPublished?.(data);
+          const expected = data.shelfItems.map(normalizeShelfItem);
+          const books = data.books.map(normalizeFolderBook);
+          const snapshot = latest.current.folderBooksByFolderId;
+          register({ token, message: `已将 ${input.books.length} 本书移入「${data.folder.name}」` }, !fromRoot ? null : {
+            token, intent: 'move-out', keys: [...input.books.map(book => `book:${book.id}`), `folder:${data.folder.id}`],
+            isApplicable: () => shelfMatches(expected) && folderMatches(data.folder.id, books, snapshot),
+            async run() {
+              const first = await step(onOutcome => raw.batchMoveToShelf({
+                books: input.books.map(book => ({ ...book, folderId: data.folder.id })),
+                previousState: currentState(), projection: projection(), onOutcome,
+              }));
+              if (first !== 'published') return first;
+              const second = await step(onOutcome => raw.saveShelfItemOrder({
+                orderedShelfItems: input.previousState.shelfItems, previousShelfItems: latest.current.shelfItems,
+                projection: projection(), onOutcome,
+              }));
+              if (second === 'failed') latest.current.setError('已移回，书架顺序未恢复');
+              return second;
+            },
+          });
+        } });
+      },
+      async batchMoveToShelf(input) {
+        const token = getToken();
+        const sourceId = input.books[0]?.folderId;
+        const previousBooks = sourceId == null ? undefined : input.previousState.folderBooksByFolderId?.get(sourceId);
+        const singleSource = input.allowUndo !== false && sourceId != null
+          && input.books.every(book => book.folderId === sourceId)
+          && previousBooks && input.books.every(book => previousBooks.some(previous => previous.id === book.id));
+        const source = input.previousState.shelfItems.find(item => item.type === 'folder' && item.id === sourceId);
+        await raw.batchMoveToShelf({ ...input, onPublished(data) {
+          input.onPublished?.(data);
+          const expected = data.shelfItems.map(normalizeShelfItem);
+          const remaining = previousBooks?.filter(book => !input.books.some(moved => moved.id === book.id)) ?? [];
+          const snapshot = latest.current.folderBooksByFolderId;
+          // The batch API deletes an emptied source; importing into that deleted id cannot undo it.
+          const folder = source?.type === 'folder' && !data.removedFolderIds.includes(source.id) ? source.folder : null;
+          register({ token, message: `已将 ${input.books.length} 本书移到书架` }, !singleSource || !folder || !previousBooks ? null : {
+            token, intent: 'absorb', keys: [...input.books.map(book => `book:${book.id}`), `folder:${folder.id}`],
+            isApplicable: () => shelfMatches(expected) && folderMatches(folder.id, remaining, snapshot),
+            async run() {
+              let restored = remaining;
+              const first = await step(onOutcome => raw.batchMoveToFolder({
+                books: input.books.map(book => ({ ...book, folderId: null })), folder,
+                previousState: currentState(), projection: projection(), onOutcome,
+                onPublished(result) { restored = result.books.map(normalizeFolderBook); },
+              }));
+              if (first !== 'published') return first;
+              const second = await step(onOutcome => raw.saveFolderBookOrder({
+                folderId: folder.id, reorderedFolderBooks: previousBooks, previousFolderBooks: restored,
+                publishToFolder: latest.current.openFolder?.id === folder.id,
+                projection: projection(), onOutcome,
+              }));
+              if (second === 'failed') latest.current.setError('已移回，文件夹顺序未恢复');
+              return second;
+            },
+          });
+        } });
+      },
+      async batchDelete(input) {
+        const token = getToken();
+        await raw.batchDelete({ ...input, onPublished(data) {
+          input.onPublished?.(data);
+          register({ token, message: data.failed.length
+            ? `已删除 ${data.deleted.length} 本书，${data.failed.length} 本未能删除` : `已删除 ${data.deleted.length} 本书` }, null);
+        } });
+      },
       async saveShelfItemOrder(input) {
         const token = getToken();
         await raw.saveShelfItemOrder({ ...input, onPublished(data) {

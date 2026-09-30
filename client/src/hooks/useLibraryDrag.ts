@@ -1,7 +1,7 @@
 import type { ItemMenuRequest } from './useShelfItemMenu.js';
 import type { Dispatch, SetStateAction } from 'react';
 import type { Active, CollisionDetection, DragCancelEvent, DragEndEvent, DragMoveEvent, DragStartEvent, Modifier, UniqueIdentifier } from '@dnd-kit/core';
-import type { Book, Folder, FolderBook, ShelfItem } from '../types/library.js';
+import type { Book, CatalogBook, Folder, FolderBook, ShelfItem } from '../types/library.js';
 import type { DragTarget } from '../utils/dragCollision.js';
 import type { Point, Rect } from '../utils/dragGeometry.js';
 import type { SortDwell } from './useSortDwell.js';
@@ -32,6 +32,9 @@ interface FolderBookShelfDrag {
   previousShelfItems: ShelfItem[];
 }
 interface LibraryDragOptions {
+  catalogBooks?: CatalogBook[];
+  setCatalogBooks?: Dispatch<SetStateAction<CatalogBook[]>>;
+  setFolderBooksByFolderId?: Dispatch<SetStateAction<Map<number, FolderBook[]>>>;
   /** Takes ownership of the visible shelf while a drag and its mutation are in flight. */
   beginShelfProjection?: () => ShelfProjection;
   folderBooksByFolderId?: Map<number, FolderBook[]>;
@@ -261,6 +264,9 @@ function bookFromDragData(data: DragData | null) {
 
 export function useLibraryDrag({
   beginShelfProjection,
+  catalogBooks,
+  setCatalogBooks,
+  setFolderBooksByFolderId,
   folderBooksByFolderId,
   folderBooks,
   folderCloseVersion,
@@ -335,6 +341,9 @@ export function useLibraryDrag({
   const folderSortDwell = useSortDwell(SORT_DWELL_MS);
   const folderExitDwell = useSortDwell(FOLDER_EXIT_DWELL_MS);
   const operations = useShelfOperations({
+    catalogBooks,
+    setCatalogBooks,
+    setFolderBooksByFolderId,
     folderBooksByFolderId,
     shelfItems,
     folderBooks,

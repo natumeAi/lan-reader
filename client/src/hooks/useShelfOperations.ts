@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { LibraryMutationOptions, LibraryMutations, MutationOutcome } from './useLibraryMutations.js';
-import type { Folder, FolderBook, ShelfItem } from '../types/library.js';
+import type { Book, CatalogBook, Folder, FolderBook, ShelfItem } from '../types/library.js';
 import { toShelfOrderItem } from '../utils/libraryItems.js';
 import { suggestFolderName } from '../utils/folderNaming.js';
 import type { ShelfProjection } from './useShelfData.js';
@@ -10,7 +10,7 @@ import type { ShelfToastNotice } from './useShelfUndo.js';
 import { useLibraryMutations } from './useLibraryMutations.js';
 
 /** Which bookshelf operation a card is currently carrying persistence feedback for. */
-export type ShelfMutationIntent = 'sort' | 'merge' | 'absorb' | 'move-out';
+export type ShelfMutationIntent = 'sort' | 'merge' | 'absorb' | 'move-out' | 'delete';
 /**
  * Honest persistence feedback for the cards taking part in the newest mutation.
  *
@@ -22,6 +22,7 @@ export type ShelfMutationFeedback =
   | { status: 'pending' | 'failed'; intent: ShelfMutationIntent; keys: readonly string[] };
 
 export interface ShelfOperationsOptions extends LibraryMutationOptions {
+  catalogBooks?: CatalogBook[];
   folderBooksByFolderId?: Map<number, FolderBook[]>;
   shelfItems: ShelfItem[];
   folderBooks: FolderBook[];
@@ -30,6 +31,9 @@ export interface ShelfOperationsOptions extends LibraryMutationOptions {
 }
 
 export interface ShelfOperations {
+  batchMoveToFolder(books: Book[], folder: Folder, onPublished?: () => void): Promise<MutationOutcome>;
+  batchMoveToShelf(books: Book[], onPublished?: () => void): Promise<MutationOutcome>;
+  batchDelete(books: Book[], onDeleted?: (id: number) => void, onPublished?: () => void): Promise<MutationOutcome>;
   toast: ShelfToastNotice | null;
   undoEntry: { token: number } | null;
   runUndo(): Promise<void>;
@@ -52,6 +56,7 @@ const idleMutationFeedback: ShelfMutationFeedback = { status: 'idle' };
 /** One mutation scope and visual lifetime shared by every operation on this shelf. */
 export function useShelfOperations({
   beginShelfProjection,
+  catalogBooks,
   folderBooksByFolderId,
   shelfItems,
   folderBooks,
@@ -137,7 +142,7 @@ export function useShelfOperations({
   }), [rawMutations]);
 
   const { mutations, undoEntry, toast, dismissToast, runUndo, getCreatedFolder } = useShelfUndo(namedMutations, {
-    ...mutationOptions, shelfItems, folderBooks, openFolder, folderBooksByFolderId, beginShelfProjection,
+    ...mutationOptions, shelfItems, catalogBooks, folderBooks, openFolder, folderBooksByFolderId, beginShelfProjection,
   }, getMutationSession, beginMutationFeedback);
   dismissUndoRef.current = dismissToast;
 
@@ -225,9 +230,70 @@ export function useShelfOperations({
   }, [beginShelfProjection, beginMutationFeedback, folderBooks, markLanding, mutations, openFolder?.id,
     setError, setFolderError, setIsSavingOrder, shelfItems]);
 
+  const batchState = useMemo(() => ({ shelfItems, catalogBooks, folderBooksByFolderId }),
+    [shelfItems, catalogBooks, folderBooksByFolderId]);
+  const startBatch = useCallback((intent: ShelfMutationIntent, books: Book[], folder?: Folder) => {
+    const keys = books.flatMap(book => [`book:${book.id}`, `folder-book:${book.id}`,
+      ...(book.folderId == null ? [] : [`folder:${book.folderId}`])]);
+    if (folder) keys.push(`folder:${folder.id}`);
+    const projection = beginShelfProjection?.() ?? null;
+    const report = beginMutationFeedback(intent, [...new Set(keys)]);
+    setIsSavingOrder(true);
+    setError('');
+    return { projection, report };
+  }, [beginMutationFeedback, beginShelfProjection, setError, setIsSavingOrder]);
+  const batchMoveToFolder = useCallback(async (books: Book[], folder: Folder, onPublished?: () => void): Promise<MutationOutcome> => {
+    if (!books.length) return 'failed';
+    const { projection, report } = startBatch('absorb', books, folder);
+    const token = getMutationSession();
+    let result: MutationOutcome = 'stale';
+    await mutations.batchMoveToFolder({ books, folder, previousState: batchState, projection,
+      onOutcome(outcome) { result = outcome; report(outcome); if (outcome === 'published') onPublished?.(); },
+    });
+    return token === getMutationSession() ? result : 'stale';
+  }, [getMutationSession, batchState, mutations, startBatch]);
+  const batchMoveToShelf = useCallback(async (selected: Book[], onPublished?: () => void): Promise<MutationOutcome> => {
+    const books = selected.filter(book => book.folderId != null);
+    if (!books.length) return 'failed';
+    const { projection, report } = startBatch('move-out', selected);
+    const token = getMutationSession();
+    let result: MutationOutcome = 'stale';
+    await mutations.batchMoveToShelf({ books, allowUndo: books.length === selected.length,
+      previousState: batchState, projection, onOutcome(outcome) {
+        result = outcome; report(outcome);
+        if (outcome === 'published') {
+          if (books[0]) markLanding(`book:${books[0].id}`);
+          onPublished?.();
+        }
+      },
+    });
+    return token === getMutationSession() ? result : 'stale';
+  }, [getMutationSession, batchState, markLanding, mutations, startBatch]);
+  const batchDelete = useCallback(async (books: Book[], onDeleted?: (id: number) => void, onPublished?: () => void): Promise<MutationOutcome> => {
+    if (!books.length) return 'failed';
+    const { projection, report } = startBatch('delete', books);
+    const token = getMutationSession();
+    let result: MutationOutcome = 'stale';
+    let deletedCount = 0;
+    let failedCount = 0;
+    await mutations.batchDelete({ books, previousState: batchState, projection,
+      onPublished(data) {
+        deletedCount = data.deleted.length; failedCount = data.failed.length;
+        data.deleted.forEach(book => onDeleted?.(book.id));
+      },
+      onOutcome(outcome) {
+        result = outcome === 'published' && deletedCount === 0 ? 'failed' : outcome;
+        report(outcome === 'published' && failedCount > 0 ? 'failed' : outcome);
+        if (result === 'published') onPublished?.();
+      },
+    });
+    return token === getMutationSession() ? result : 'stale';
+  }, [getMutationSession, batchState, mutations, startBatch]);
+
   // Stable identity between feedback changes, so consumers can list it as a dependency.
   return useMemo(
     () => ({
+      batchMoveToFolder, batchMoveToShelf, batchDelete,
       toast, undoEntry, runUndo, dismissToast, getCreatedFolder,
       moveShelfBookToFolder,
       moveFolderBookToShelf,
@@ -241,6 +307,7 @@ export function useShelfOperations({
       releaseShelfProjection,
     }),
     [
+      batchMoveToFolder, batchMoveToShelf, batchDelete,
       toast, undoEntry, runUndo, dismissToast, getCreatedFolder,
       moveShelfBookToFolder,
       moveFolderBookToShelf,
