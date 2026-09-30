@@ -13,6 +13,7 @@ import { DragPreview } from './components/bookshelf/DragPreview.js';
 import { FixedDragPreview } from './components/bookshelf/FixedDragPreview.js';
 import { LibraryHome } from './components/bookshelf/LibraryHome.js';
 import { MainNavigation } from './components/common/MainNavigation.js';
+import { ShelfToast } from './components/common/ShelfToast.js';
 import { FolderOverlay } from './components/folders/FolderOverlay.js';
 import { RecentReadingSheet } from './components/home/RecentReadingSheet.js';
 import { ReadingHome } from './components/home/ReadingHome.js';
@@ -200,6 +201,7 @@ function App() {
     sensors,
     operations,
   } = useLibraryDrag({
+    folderBooksByFolderId,
     beginShelfProjection,
     folderBooks,
     folderCloseVersion,
@@ -366,6 +368,20 @@ function App() {
     shelfItems,
   ]);
 
+  // A shelf notice belongs to the shelf it describes: the reader or another main view ends it.
+  const isShelfNoticeVisible = mainView === MAIN_VIEW.SHELF && !readingBook;
+  const { dismissToast } = operations;
+  useEffect(() => {
+    if (!isShelfNoticeVisible) dismissToast();
+  }, [dismissToast, isShelfNoticeVisible]);
+  // Hidden while dragging; drag start has already dismissed the previous notice.
+  const shelfToast = operations.toast && isShelfNoticeVisible && !activeDragPreview && (
+    <ShelfToast key={operations.toast.token} message={operations.toast.message}
+      light={operations.toast.light} duration={operations.toast.duration}
+      onDismiss={dismissToast}
+      actions={operations.undoEntry ? [{ label: '撤销', onClick: () => { void operations.runUndo(); } }] : []} />
+  );
+
   return (
     <DndContext
       accessibility={accessibility}
@@ -487,6 +503,7 @@ function App() {
           onClose={handleRecentSheetClosed}
           onOpenBook={(book, rect) => { setRecentSheetOpen(false); handleOpenBook(book, rect); }} /> : null}
         <FolderOverlay
+          toast={shelfToast}
           menuOpen={Boolean(itemMenu.menu)}
           onRequestItemMenu={handleRequestCardMenu}
           books={folderBooks}
@@ -547,6 +564,7 @@ function App() {
         motion={dragPreviewMotion}
         width={activeDragWidth}
       />
+      {!openFolder && shelfToast}
     </DndContext>
   );
 }

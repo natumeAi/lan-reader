@@ -34,6 +34,7 @@ interface FolderBookShelfDrag {
 interface LibraryDragOptions {
   /** Takes ownership of the visible shelf while a drag and its mutation are in flight. */
   beginShelfProjection?: () => ShelfProjection;
+  folderBooksByFolderId?: Map<number, FolderBook[]>;
   folderBooks: FolderBook[];
   folderCloseVersion: number;
   getFolderSession?: () => number;
@@ -260,6 +261,7 @@ function bookFromDragData(data: DragData | null) {
 
 export function useLibraryDrag({
   beginShelfProjection,
+  folderBooksByFolderId,
   folderBooks,
   folderCloseVersion,
   getFolderSession,
@@ -318,6 +320,7 @@ export function useLibraryDrag({
   const shelfIntentDwell = useSortDwell(INTENT_DWELL_MS);
   const folderSortDwell = useSortDwell(SORT_DWELL_MS);
   const operations = useShelfOperations({
+    folderBooksByFolderId,
     shelfItems,
     folderBooks,
     openFolder,

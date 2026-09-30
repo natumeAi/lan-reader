@@ -37,6 +37,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .shelf-toast { animation: none; }
   .reader-overlay,
   .reader-overlay *:not(.reader-loading-spinner),
   .folder-overlay,

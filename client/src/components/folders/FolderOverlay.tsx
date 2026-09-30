@@ -1,5 +1,5 @@
 import type { ItemMenuRequest } from '../../hooks/useShelfItemMenu.js';
-import type { FormEventHandler } from 'react';
+import type { FormEventHandler, ReactNode } from 'react';
 import { MAX_FOLDER_NAME_LENGTH } from '@lan-reader/shared';
 import type { Book, Folder, FolderBook } from '../../types/library.js';
 import type { ShelfMutationFeedback } from '../../hooks/useLibraryDrag.js';
@@ -12,6 +12,7 @@ import { folderPanelMotion } from '../../utils/folderMotion.js';
 import { SortableFolderBook } from './SortableFolderBook.js';
 
 interface FolderOverlayProps {
+  toast?: ReactNode;
   menuOpen?: boolean;
   onRequestItemMenu?: (request: ItemMenuRequest) => void;
   books: FolderBook[];
@@ -35,6 +36,7 @@ interface FolderOverlayProps {
 
 
 export function FolderOverlay({
+  toast,
   menuOpen = false,
   onRequestItemMenu,
   books,
@@ -216,6 +218,7 @@ export function FolderOverlay({
           )}
         </div>
       </section>
+      {toast}
     </div>
   );
 }

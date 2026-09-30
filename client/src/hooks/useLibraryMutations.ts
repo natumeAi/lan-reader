@@ -7,10 +7,13 @@ import { errorMessage } from '../api/transport.js';
 /**
  * Persistence and result ownership for the four bookshelf drag mutations.
  *
- * A mutation owns its result only while it is still the newest mutation of its scope, and a
- * Folder mutation additionally only while the Folder opening that started it is still current.
+ * A mutation owns its result only while it is still the newest mutation of its scope, no newer
+ * operation of either scope has begun (`getMutationSession`, the shared operations generation),
+ * and, for a Folder mutation, the Folder opening that started it is still current. Scopes share
+ * state (a failed move-out restores the Folder panel) and an undo spans both, so a newer
+ * operation in one scope supersedes an in-flight result in the other.
  * A stale completion never writes visible state, never reports an error and never clears a
- * newer operation's saving flag; because the server write did commit, it instead schedules an
+ * saving flag; because the server write did commit, a stale success instead schedules an
  * authoritative refresh so the commit stays discoverable.
  */
 /**
@@ -22,6 +25,8 @@ import { errorMessage } from '../api/transport.js';
 export type MutationOutcome = 'published' | 'stale' | 'failed';
 
 export interface LibraryMutationOptions {
+  /** Shared operations generation also invalidates requests across shelf/folder scopes. */
+  getMutationSession?: () => number;
   getFolderSession?: () => number;
   isFolderSessionCurrent?: (session: number) => boolean;
   loadShelf: (options?: LoadShelfOptions) => unknown;
@@ -36,6 +41,7 @@ export interface LibraryMutationOptions {
   setShelfItems: Dispatch<SetStateAction<ShelfItem[]>>;
 }
 export interface MoveFolderBookToShelfInput {
+  onPublished?: (data: Awaited<ReturnType<typeof moveFolderBookToShelf>>) => void;
   /**
    * Whether a failure reopens the Folder with its previous books (the default, for moves started
    * inside that Folder). `false` reports the failure on the shelf instead, for moves started
@@ -53,6 +59,7 @@ export interface MoveFolderBookToShelfInput {
   projection: ShelfProjection | null;
 }
 export interface CreateFolderInput {
+  onPublished?: (data: Awaited<ReturnType<typeof createFolderFromBooks>>) => void;
   onOutcome?: (outcome: MutationOutcome) => void;
   previousShelfItems: ShelfItem[];
   projection: ShelfProjection | null;
@@ -60,6 +67,7 @@ export interface CreateFolderInput {
   targetBookId: number;
 }
 export interface MoveShelfBookToFolderInput {
+  onPublished?: (data: Awaited<ReturnType<typeof moveShelfBookToFolder>>) => void;
   bookId: number;
   folderId: number;
   onOutcome?: (outcome: MutationOutcome) => void;
@@ -67,12 +75,16 @@ export interface MoveShelfBookToFolderInput {
   projection: ShelfProjection | null;
 }
 export interface SaveShelfItemOrderInput {
+  onPublished?: (data: Awaited<ReturnType<typeof updateShelfItemOrder>>) => void;
   onOutcome?: (outcome: MutationOutcome) => void;
   orderedShelfItems: ShelfItem[];
   previousShelfItems: ShelfItem[];
   projection: ShelfProjection | null;
 }
 export interface SaveFolderBookOrderInput {
+  /** Closed-folder undo persists order without writing another Folder panel. */
+  publishToFolder?: boolean;
+  onPublished?: (data: Awaited<ReturnType<typeof updateFolderBookOrder>>) => void;
   folderId: number;
   onOutcome?: (outcome: MutationOutcome) => void;
   previousFolderBooks: FolderBook[];
@@ -113,6 +125,7 @@ import {
 } from '../utils/libraryItems.js';
 
 export function useLibraryMutations({
+  getMutationSession,
   getFolderSession,
   isFolderSessionCurrent,
   loadShelf,
@@ -143,7 +156,9 @@ export function useLibraryMutations({
 
   const runShelfMutation = useCallback(
     async <T>({ onOutcome, onSettled, projection, publish, request, rollback }: ShelfMutationRun<T>) => {
+      const operationSession = getMutationSession?.();
       const token = shelfMutationRef.current + 1;
+      const isCurrent = () => shelfMutationRef.current === token && getMutationSession?.() === operationSession;
       shelfMutationRef.current = token;
       projection?.discardPendingSnapshots();
 
@@ -151,7 +166,7 @@ export function useLibraryMutations({
         const data = await request();
         projection?.discardPendingSnapshots();
 
-        if (shelfMutationRef.current !== token) {
+        if (!isCurrent()) {
           projection?.release();
           onOutcome?.('stale');
           // The write committed even though this result is stale; keep it discoverable.
@@ -164,7 +179,7 @@ export function useLibraryMutations({
         projection?.release();
         await refreshAuthoritatively();
       } catch (error) {
-        const isOwned = shelfMutationRef.current === token;
+        const isOwned = isCurrent();
 
         if (isOwned) {
           rollback(error);
@@ -178,19 +193,20 @@ export function useLibraryMutations({
       } finally {
         onSettled?.();
 
-        if (shelfMutationRef.current === token) {
+        if (isCurrent()) {
           setIsSavingOrder(false);
         }
       }
     },
-    [refreshAuthoritatively, setIsSavingOrder],
+    [getMutationSession, refreshAuthoritatively, setIsSavingOrder],
   );
 
   const runFolderMutation = useCallback(
     async <T>({ onOutcome, onSettled, projection, publish, request, rollback, session }: FolderMutationRun<T>) => {
+      const operationSession = getMutationSession?.();
       const token = folderMutationRef.current + 1;
       folderMutationRef.current = token;
-      const isCurrent = () => folderMutationRef.current === token && isFolderSessionStillCurrent(session);
+      const isCurrent = () => folderMutationRef.current === token && getMutationSession?.() === operationSession && isFolderSessionStillCurrent(session);
       projection?.discardPendingSnapshots();
 
       try {
@@ -226,7 +242,7 @@ export function useLibraryMutations({
         }
       }
     },
-    [isFolderSessionStillCurrent, refreshAuthoritatively, setIsSavingFolderOrder],
+    [getMutationSession, isFolderSessionStillCurrent, refreshAuthoritatively, setIsSavingFolderOrder],
   );
 
   const moveFolderBookToShelfMutation = useCallback(
@@ -234,6 +250,7 @@ export function useLibraryMutations({
       book,
       folder,
       restoreFolderOnFailure = true,
+      onPublished,
       onOutcome,
       onSettled,
       orderItems,
@@ -250,6 +267,7 @@ export function useLibraryMutations({
         request: () => moveFolderBookToShelf(folder.id, book.id, orderItems),
         publish(data) {
           setShelfItems((data.shelfItems || []).map(normalizeShelfItem));
+          onPublished?.(data);
         },
         rollback(error) {
           setShelfItems(previousShelfItems);
@@ -287,13 +305,14 @@ export function useLibraryMutations({
   );
 
   const createFolder = useCallback(
-    async ({ onOutcome, previousShelfItems, projection, sourceBookId, targetBookId }: CreateFolderInput) => {
+    async ({ onPublished, onOutcome, previousShelfItems, projection, sourceBookId, targetBookId }: CreateFolderInput) => {
       await runShelfMutation({
         onOutcome,
         projection,
         request: () => createFolderFromBooks(sourceBookId, targetBookId),
         publish(data) {
           setShelfItems((data.shelfItems || []).map(normalizeShelfItem));
+          onPublished?.(data);
         },
         rollback(error) {
           setShelfItems(previousShelfItems);
@@ -305,13 +324,14 @@ export function useLibraryMutations({
   );
 
   const moveShelfBookToFolderMutation = useCallback(
-    async ({ bookId, folderId, onOutcome, previousShelfItems, projection }: MoveShelfBookToFolderInput) => {
+    async ({ bookId, folderId, onPublished, onOutcome, previousShelfItems, projection }: MoveShelfBookToFolderInput) => {
       await runShelfMutation({
         onOutcome,
         projection,
         request: () => moveShelfBookToFolder(folderId, bookId),
         publish(data) {
           setShelfItems((data.shelfItems || []).map(normalizeShelfItem));
+          onPublished?.(data);
         },
         rollback(error) {
           setShelfItems(previousShelfItems);
@@ -323,13 +343,14 @@ export function useLibraryMutations({
   );
 
   const saveShelfItemOrder = useCallback(
-    async ({ onOutcome, orderedShelfItems, previousShelfItems, projection }: SaveShelfItemOrderInput) => {
+    async ({ onPublished, onOutcome, orderedShelfItems, previousShelfItems, projection }: SaveShelfItemOrderInput) => {
       await runShelfMutation({
         onOutcome,
         projection,
         request: () => updateShelfItemOrder(orderedShelfItems.map(toShelfOrderItem)),
         publish(data) {
           setShelfItems((data.items || orderedShelfItems).map(normalizeShelfItem));
+          onPublished?.(data);
         },
         rollback(error) {
           setShelfItems(previousShelfItems);
@@ -341,18 +362,21 @@ export function useLibraryMutations({
   );
 
   const saveFolderBookOrder = useCallback(
-    async ({ folderId, onOutcome, previousFolderBooks, projection, reorderedFolderBooks }: SaveFolderBookOrderInput) => {
+    async ({ folderId, publishToFolder = true, onPublished, onOutcome, previousFolderBooks, projection, reorderedFolderBooks }: SaveFolderBookOrderInput) => {
       await runFolderMutation({
         onOutcome,
         projection,
         session: readFolderSession(),
         request: () => updateFolderBookOrder(folderId, reorderedFolderBooks.map((book) => book.id)),
         publish(data) {
-          setFolderBooks((data.books || reorderedFolderBooks).map(normalizeFolderBook));
+          if (publishToFolder) setFolderBooks((data.books || reorderedFolderBooks).map(normalizeFolderBook));
+          onPublished?.(data);
         },
         rollback(error) {
-          setFolderBooks(previousFolderBooks);
-          setFolderError(errorMessage(error, '无法保存文件夹顺序'));
+          if (publishToFolder) {
+            setFolderBooks(previousFolderBooks);
+            setFolderError(errorMessage(error, '无法保存文件夹顺序'));
+          }
         },
       });
     },

@@ -4,6 +4,8 @@ import type { Folder, FolderBook, ShelfItem } from '../types/library.js';
 import { toShelfOrderItem } from '../utils/libraryItems.js';
 import type { ShelfProjection } from './useShelfData.js';
 import { LANDING_SETTLE_MS, SAVE_FAILURE_FEEDBACK_MS } from '../utils/dragMotion.js';
+import { useShelfUndo } from './useShelfUndo.js';
+import type { ShelfToastNotice } from './useShelfUndo.js';
 import { useLibraryMutations } from './useLibraryMutations.js';
 
 /** Which bookshelf operation a card is currently carrying persistence feedback for. */
@@ -19,6 +21,7 @@ export type ShelfMutationFeedback =
   | { status: 'pending' | 'failed'; intent: ShelfMutationIntent; keys: readonly string[] };
 
 export interface ShelfOperationsOptions extends LibraryMutationOptions {
+  folderBooksByFolderId?: Map<number, FolderBook[]>;
   shelfItems: ShelfItem[];
   folderBooks: FolderBook[];
   openFolder: Folder | null;
@@ -26,6 +29,10 @@ export interface ShelfOperationsOptions extends LibraryMutationOptions {
 }
 
 export interface ShelfOperations {
+  toast: ShelfToastNotice | null;
+  undoEntry: { token: number } | null;
+  runUndo(): Promise<void>;
+  dismissToast(): void;
   moveShelfBookToFolder(item: Extract<ShelfItem, { type: 'book' }>, folder: Folder): Promise<void>;
   moveFolderBookToShelf(book: FolderBook, folder: Folder): Promise<void>;
   mutations: LibraryMutations;
@@ -43,6 +50,7 @@ const idleMutationFeedback: ShelfMutationFeedback = { status: 'idle' };
 /** One mutation scope and visual lifetime shared by every operation on this shelf. */
 export function useShelfOperations({
   beginShelfProjection,
+  folderBooksByFolderId,
   shelfItems,
   folderBooks,
   openFolder,
@@ -55,7 +63,10 @@ export function useShelfOperations({
   const [mutationFeedback, setMutationFeedback] = useState<ShelfMutationFeedback>(idleMutationFeedback);
   /** Key of a card that has just arrived from a Folder and is settling into the shelf. */
   const [landingKey, setLandingKey] = useState<string | null>(null);
-  const mutations = useLibraryMutations(mutationOptions);
+  const dismissUndoRef = useRef<() => void>(() => {});
+  const getMutationSession = useCallback(() => feedbackTokenRef.current, []);
+  const rawMutations = useLibraryMutations({ ...mutationOptions, getMutationSession });
+  const { setIsSavingOrder, setIsSavingFolderOrder } = mutationOptions;
 
   const clearFailureTimer = useCallback(() => {
     if (failureTimerRef.current !== null) {
@@ -72,8 +83,18 @@ export function useShelfOperations({
   const beginMutationFeedback = useCallback(
     (intent: ShelfMutationIntent, keys: readonly string[]) => {
       clearFailureTimer();
+      dismissUndoRef.current();
       feedbackTokenRef.current += 1;
       const token = feedbackTokenRef.current;
+
+      // The newest operation owns both saving flags: a request it supersedes no longer clears
+      // one in `finally`. Its own scope's flag is left alone because drag callers set it first;
+      // a Folder-panel sort is the only Folder-scope operation.
+      if (intent === 'sort' && keys.length > 0 && keys.every(key => key.startsWith('folder-book:'))) {
+        setIsSavingOrder(false);
+      } else {
+        setIsSavingFolderOrder(false);
+      }
 
       setMutationFeedback({ status: 'pending', intent, keys });
 
@@ -99,8 +120,13 @@ export function useShelfOperations({
         }, SAVE_FAILURE_FEEDBACK_MS);
       };
     },
-    [clearFailureTimer],
+    [clearFailureTimer, setIsSavingFolderOrder, setIsSavingOrder],
   );
+
+  const { mutations, undoEntry, toast, dismissToast, runUndo } = useShelfUndo(rawMutations, {
+    ...mutationOptions, shelfItems, folderBooks, openFolder, folderBooksByFolderId, beginShelfProjection,
+  }, getMutationSession, beginMutationFeedback);
+  dismissUndoRef.current = dismissToast;
 
   /** A card that replaced the temporary Folder item settles in place instead of appearing abruptly. */
   const markLanding = useCallback((key: string) => {
@@ -121,6 +147,7 @@ export function useShelfOperations({
   }, []);
 
   const acquireShelfProjection = useCallback(() => {
+    dismissUndoRef.current();
     releaseShelfProjection();
     shelfProjectionRef.current = beginShelfProjection?.() ?? null;
   }, [beginShelfProjection, releaseShelfProjection]);
@@ -134,6 +161,7 @@ export function useShelfOperations({
 
   useEffect(
     () => () => {
+      feedbackTokenRef.current += 1;
       // Feedback deadlines never outlive the host; a stale failure cannot reappear.
       clearFailureTimer();
 
@@ -148,7 +176,7 @@ export function useShelfOperations({
     [clearFailureTimer, releaseShelfProjection],
   );
 
-  const { setIsSavingOrder, setError, setFolderError } = mutationOptions;
+  const { setError, setFolderError } = mutationOptions;
   const moveShelfBookToFolder = useCallback(async (item: Extract<ShelfItem, { type: 'book' }>, folder: Folder) => {
     const projection = beginShelfProjection?.() ?? null;
     setIsSavingOrder(true);
@@ -187,6 +215,7 @@ export function useShelfOperations({
   // Stable identity between feedback changes, so consumers can list it as a dependency.
   return useMemo(
     () => ({
+      toast, undoEntry, runUndo, dismissToast,
       moveShelfBookToFolder,
       moveFolderBookToShelf,
       mutations,
@@ -199,6 +228,7 @@ export function useShelfOperations({
       releaseShelfProjection,
     }),
     [
+      toast, undoEntry, runUndo, dismissToast,
       moveShelfBookToFolder,
       moveFolderBookToShelf,
       acquireShelfProjection,

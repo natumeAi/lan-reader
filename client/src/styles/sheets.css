@@ -23,3 +23,32 @@
   .action-sheet-panel { position: fixed; left: var(--sheet-left, 12px); top: var(--sheet-top, 12px); width: 280px; max-height: calc(100dvh - 24px); padding: 12px; border-radius: 16px; box-shadow: 0 12px 48px rgba(0, 0, 0, .2); animation: none; }
   .action-sheet-handle { display: none; }
 }
+/* Shelf notice: centred just above the floating main navigation (home.css owns its geometry). */
+.shelf-toast {
+  position: fixed;
+  z-index: 105;
+  bottom: calc(var(--main-navigation-height) + var(--main-navigation-gap) + 12px);
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: max-content;
+  max-width: calc(100vw - 32px);
+  box-sizing: border-box;
+  padding: 6px 12px;
+  border: 1px solid rgba(29, 29, 31, 0.08);
+  border-radius: 16px;
+  background: var(--surface);
+  color: var(--text-primary);
+  box-shadow: 0 12px 32px rgba(29, 29, 31, 0.12);
+  animation: shelf-toast-enter 160ms ease-out;
+}
+.shelf-toast > span { min-width: 0; overflow-wrap: anywhere; }
+.shelf-toast--light { box-shadow: 0 4px 12px rgba(29, 29, 31, 0.08); font-size: 14px; }
+.shelf-toast button { min-width: 44px; min-height: 44px; flex-shrink: 0; border: 0; border-radius: 8px; padding: 8px; background: transparent; color: var(--accent); font: inherit; cursor: pointer; }
+.shelf-toast button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@keyframes shelf-toast-enter {
+  from { opacity: 0; transform: translate(-50%, 8px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
